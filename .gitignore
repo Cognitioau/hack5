@@ -19,6 +19,7 @@ test-results/
 .local/
 
 # Browser and private runtime artifacts
+zombie-hand-gaze-diagnostics-*.json
 browser-profile/
 browser-profiles/
 test-vault/
