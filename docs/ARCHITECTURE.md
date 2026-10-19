@@ -57,9 +57,15 @@ Small ports include CaptureRepository, OperationJournal, VaultRepository, MediaF
 
 The input controller recognizes idle → arming → armed → confirming → confirmed, with explicit cancellation and expiry. The hand renders those states; animation completion cannot mark a note saved.
 
-Pause around 800 ms to arm, lock the target, and allow the initial outward motion before measuring a clockwise or anticlockwise circle. A roughly linear shake cancels an armed operation. During a pending save it records cancellation for that same capture; any completed remote write must reconcile to archived. A shake during the short post-save undo window archives only that latest capture. One gesture affects one operation. Escape and accessible buttons perform the same commands. Ignore synthetic pointer gestures and editable fields; gesture checks supplement the message boundary, not replace it.
+A trusted lone Shift or Control hold starts a bounded lasso; it does not issue a capture capability yet. Fit the circle/oval around its own centre so users can begin on the rim. Show the sentence or selected passage at that centre using its actual text rectangles. Only a sufficiently closed, directional loop issues ARM followed by CAPTURE. Releasing the modifier early, scrolling, dragging, typing, a modifier chord or losing focus cancels the unfinished gesture. One continuous modifier hold can confirm only one capture; releasing after confirmation does not cancel a delayed ARM/save.
 
-Scrolling/navigation that invalidates a target cancels arming. A gaze adapter supplies the same FocusPoint contract, with calibrated conversion into the active content viewport. Its camera, calibration state, and persistence are feature-owned. Gaze arms; the mouse circle confirms for the planned demo.
+A deliberate shake during that same hold cancels the current gesture or pending operation. For six seconds after acknowledgement, a shake during the original uninterrupted hold can archive that capture. A new hold starts a new target, and ordinary mouse movement never archives anything. Escape and secondary accessible actions use the same lifecycle commands. Ignore synthetic input and editable fields; gesture checks supplement the message boundary, not replace it.
+
+Universal activation is a persisted browser-wide choice behind optional HTTP(S) site grants. Active-tab and completed-navigation events wake the content entry only after checking activation intent, live permissions and excluded origins; protected Chrome pages remain unavailable. Pause disables new page commands immediately and removes existing overlays. Original image-download intent is a separate exact-origin allowlist.
+
+The idle UI is a compact pill with secondary controls on demand. The hand emerges from a local dirt aperture only at capture time, grasping a text copy; the original page remains intact. Actual persistence acknowledgements still determine saved/queued/error receipts. Reduced-motion presentation removes movement, and screenshot preparation hides all extension visuals. Explicit Save page stores a page-title/link reference, not an inferred whole-page extraction.
+
+Scrolling/navigation that invalidates a target cancels an unfinished lasso or arming. A gaze adapter supplies the same FocusPoint contract, with calibrated conversion into the active content viewport. Its camera, calibration state, and persistence are feature-owned. Gaze arms; the mouse circle confirms for the planned demo.
 
 ## Durable saving and reconciliation
 

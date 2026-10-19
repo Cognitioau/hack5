@@ -1,8 +1,10 @@
 # Privacy and supported behavior
 
-Zombie Hand activates after its toolbar button is used on a page. It reads the selected/hovered target and, when enabled, sends a bounded passage to its own background context for local related-note search. It does not inject automatically across browsing history.
+Zombie Hand offers one browser-wide activation toggle. After you approve optional HTTP(S) site access, it activates on eligible active tabs, new pages and browser restart; it does not read browsing history. Excluded sites remain off, and Pause everywhere removes the hand from open tabs and rejects new capture requests. A held Shift/Control circle previews visible text and sends the confirmed passage to the extension for capture and optional local related-note search. Ordinary hovering does not capture or search. No content is captured automatically just because global activation is on.
 
 Captured text, URLs, timestamps, optional image bytes and embeddings stay in extension storage and the configured Obsidian vault. There is no cloud AI provider, analytics client or remote inference service. Original image downloads contact an approved hosting origin without cookies or authorization headers; denied downloads fall back to a visible crop or source link.
+
+Page-access permission does not itself authorize downloading original image bytes. Each public HTTPS image origin needs a separate explicit grant in Settings; without it, images use a verified visible crop or source link. Revoking an image grant invalidates in-flight media work.
 
 The plugin key is available only to trusted extension contexts. Session storage is the default; browser restart requires re-entering it. Remembered keys are stored locally in the browser profile, not an encrypted password vault. Forget key stops further credential use without erasing captures. Chrome host permissions cover more than a URL's port; the vault client separately enforces the configured numeric loopback endpoint and port.
 

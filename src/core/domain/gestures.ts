@@ -125,3 +125,135 @@ export class GestureTracker {
     return 'none';
   }
 }
+
+interface CircleBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function circleBounds(points: readonly GesturePoint[]): CircleBounds | null {
+  if (points.length < 8) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const width = Math.max(...xs) - left;
+  const height = Math.max(...ys) - top;
+  if (width < 40 || height < 40 || width > 440 || height > 440) return null;
+  return { x: left + width / 2, y: top + height / 2, width, height };
+}
+
+/** Fit an oval to the path itself, so a deliberate loop can begin on its rim. */
+function isClosedOval(points: readonly GesturePoint[], bounds: CircleBounds): boolean {
+  if (points.length < 16) return false;
+  let xx = 0;
+  let xy = 0;
+  let yy = 0;
+  for (const point of points) {
+    const x = point.x - bounds.x;
+    const y = point.y - bounds.y;
+    xx += x * x;
+    xy += x * y;
+    yy += y * y;
+  }
+  // Rotated ellipses should be as usable as horizontal ones. The center remains
+  // the viewport bounds center used by the caller's target preview.
+  const axis = Math.atan2(2 * xy, xx - yy) / 2;
+  const cos = Math.cos(axis);
+  const sin = Math.sin(axis);
+  const projected = points.map((point) => ({
+    x: (point.x - bounds.x) * cos + (point.y - bounds.y) * sin,
+    y: -(point.x - bounds.x) * sin + (point.y - bounds.y) * cos,
+    at: point.at,
+  }));
+  const radiusX = Math.max(...projected.map((point) => Math.abs(point.x)));
+  const radiusY = Math.max(...projected.map((point) => Math.abs(point.y)));
+  const major = Math.max(radiusX, radiusY);
+  const minor = Math.min(radiusX, radiusY);
+  if (minor < 20 || major > 220 || major / minor > 3) return false;
+  const normalized = projected.map((point) => ({
+    x: point.x / radiusX,
+    y: point.y / radiusY,
+    at: point.at,
+  }));
+  // A short center-to-rim approach is allowed. Interior motion after reaching
+  // the rim is not discarded: it must still pass the oval and direction checks.
+  const firstRim = normalized.findIndex((point) => Math.hypot(point.x, point.y) >= 0.72);
+  const rim = normalized.slice(firstRim);
+  const first = rim[0];
+  const last = rim.at(-1);
+  if (!first || !last || rim.length < 16 || last.at - first.at < 220) return false;
+  let rotation = 0;
+  let travel = 0;
+  let previous = first;
+  let previousAngle = Math.atan2(first.y, first.x);
+  const radii: number[] = [];
+  for (const point of rim) {
+    const radius = Math.hypot(point.x, point.y);
+    if (radius < 0.55 || radius > 1.5) return false;
+    radii.push(radius);
+    const angle = Math.atan2(point.y, point.x);
+    const change = angleDifference(angle, previousAngle);
+    // A missed arc or cursor jump cannot substitute for tracing that arc.
+    if (Math.abs(change) > Math.PI / 3 || distance(point, previous) > 0.95) return false;
+    rotation += change;
+    travel += Math.abs(change);
+    previous = point;
+    previousAngle = angle;
+  }
+  const meanRadius = radii.reduce((sum, radius) => sum + radius, 0) / radii.length;
+  const deviation = Math.sqrt(
+    radii.reduce((sum, radius) => sum + (radius - meanRadius) ** 2, 0) / radii.length,
+  );
+  return (
+    Math.abs(rotation) >= Math.PI * 1.9 &&
+    Math.abs(rotation) / Math.max(travel, 0.001) >= 0.88 &&
+    deviation / meanRadius <= 0.26 &&
+    distance(first, last) <= 0.45
+  );
+}
+
+/**
+ * One bounded modifier-held attempt. Callers own trusted input, held-key state,
+ * expiry UI and document identity. Release the modifier to start a fresh attempt.
+ */
+export class CircleGestureTracker {
+  private points: GesturePoint[] = [];
+  private finished = false;
+
+  add(point: GesturePoint): GestureDecision {
+    if (this.finished || ![point.x, point.y, point.at].every(Number.isFinite)) return 'none';
+    const previous = this.points.at(-1);
+    if (previous && point.at < previous.at) return 'none';
+    const first = this.points[0];
+    if (first && point.at - first.at > 4_000) {
+      this.finished = true;
+      return 'none';
+    }
+    if (previous && distance(previous, point) < 2) return 'none';
+    if (this.points.length >= 256) {
+      // Preserve the entire attempt, rather than accepting a later loop after a
+      // long invalid prefix. Dense pointer devices can otherwise exceed 256.
+      this.points = this.points.filter((_, index) => index % 2 === 0);
+    }
+    this.points.push(point);
+    const bounds = circleBounds(this.points);
+    if (bounds && isClosedOval(this.points, bounds)) {
+      this.finished = true;
+      return 'confirm';
+    }
+    if (isShake(this.points)) {
+      this.finished = true;
+      return 'cancel';
+    }
+    return 'none';
+  }
+
+  /** A provisional preview center; only `confirm` authorizes a completed loop. */
+  getCenter(): { x: number; y: number } | null {
+    const bounds = circleBounds(this.points);
+    return bounds ? { x: bounds.x, y: bounds.y } : null;
+  }
+}

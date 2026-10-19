@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CircleGestureTracker,
   GestureTracker,
   isCircle,
   isShake,
@@ -79,5 +80,114 @@ describe('deliberate gesture recognition', () => {
     expect(tracker.add({ x: Number.NaN, y: 1, at: 0 })).toBe('none');
     expect(tracker.add({ x: 450, y: 300, at: 50 })).toBe('none');
     expect(tracker.add({ x: 390, y: 310, at: 49 })).toBe('none');
+  });
+});
+
+describe('modifier-held circle geometry', () => {
+  function trace(points: GesturePoint[]): {
+    decisions: string[];
+    center: { x: number; y: number } | null;
+  } {
+    const tracker = new CircleGestureTracker();
+    const decisions = points.map((point) => tracker.add(point));
+    return { decisions, center: tracker.getCenter() };
+  }
+
+  it.each([1, -1])('fits a circle beginning on its rim, direction %s', (direction) => {
+    const result = trace(orbit(direction));
+    expect(result.decisions.filter((decision) => decision === 'confirm')).toHaveLength(1);
+    expect(result.center?.x).toBeCloseTo(anchor.x, 0);
+    expect(result.center?.y).toBeCloseTo(anchor.y, 0);
+  });
+
+  it.each([0, Math.PI / 5, Math.PI / 2])(
+    'accepts a moderately elongated oval at angle %s',
+    (tilt) => {
+      const points = orbit().map((point) => {
+        const x = (point.x - anchor.x) * 2.2;
+        const y = point.y - anchor.y;
+        return {
+          ...point,
+          x: anchor.x + x * Math.cos(tilt) - y * Math.sin(tilt),
+          y: anchor.y + x * Math.sin(tilt) + y * Math.cos(tilt),
+        };
+      });
+      expect(trace(points).decisions).toContain('confirm');
+    },
+  );
+
+  it('allows a center-out approach without requiring it', () => {
+    const approach = Array.from({ length: 9 }, (_, index) => ({
+      x: anchor.x + index * 6,
+      y: anchor.y,
+      at: index * 12,
+    }));
+    expect(
+      trace([...approach, ...orbit().map((point) => ({ ...point, at: point.at + 110 }))]).decisions,
+    ).toContain('confirm');
+  });
+
+  it('offers a provisional center only after a meaningful two-dimensional path', () => {
+    const tracker = new CircleGestureTracker();
+    for (const point of orbit().slice(0, 7)) tracker.add(point);
+    expect(tracker.getCenter()).toBeNull();
+    for (const point of orbit().slice(7, 24)) tracker.add(point);
+    expect(tracker.getCenter()).not.toBeNull();
+    expect(trace(shake).decisions).toContain('cancel');
+    expect(trace(shake).center).toBeNull();
+  });
+
+  it('rejects incomplete arcs, jitter, huge swipes, flat loops and missing arcs', () => {
+    const rejected = [
+      orbit(1, 55, 0.9),
+      orbit(1, 18),
+      orbit(1, 260),
+      orbit().map((point) => ({ ...point, y: anchor.y + (point.y - anchor.y) / 4 })),
+      orbit().filter((_, index) => index < 19 || index > 43),
+    ];
+    for (const points of rejected) expect(trace(points).decisions).not.toContain('confirm');
+  });
+
+  it('rejects reversals and an inward spiral even when the endpoints are near each other', () => {
+    const backtracking = orbit().flatMap((point, index) => [
+      { ...(orbit()[Math.max(0, index - 5)] ?? point), at: point.at },
+      { ...point, at: point.at + 1 },
+    ]);
+    const spiral = orbit().map((point, index) => ({
+      ...point,
+      x: anchor.x + (point.x - anchor.x) * (1 - index / 90),
+      y: anchor.y + (point.y - anchor.y) * (1 - index / 90),
+    }));
+    expect(trace(backtracking).decisions).not.toContain('confirm');
+    expect(trace(spiral).decisions).not.toContain('confirm');
+  });
+
+  it('requires an actual tracing duration and does not slide past a timed-out prefix', () => {
+    expect(
+      trace(orbit().map((point) => ({ ...point, at: point.at / 10 }))).decisions,
+    ).not.toContain('confirm');
+    expect(trace(orbit().map((point) => ({ ...point, at: point.at * 8 }))).decisions).not.toContain(
+      'confirm',
+    );
+    expect(
+      trace([
+        { x: 455, y: 300, at: 0 },
+        ...orbit().map((point) => ({ ...point, at: point.at + 4_001 })),
+      ]).decisions,
+    ).not.toContain('confirm');
+  });
+
+  it('ignores malformed and time-reversed input and bounds dense samples', () => {
+    const tracker = new CircleGestureTracker();
+    expect(tracker.add({ x: Number.POSITIVE_INFINITY, y: 0, at: 0 })).toBe('none');
+    expect(tracker.add({ x: 455, y: 300, at: 20 })).toBe('none');
+    expect(tracker.add({ x: 0, y: 0, at: 19 })).toBe('none');
+    expect(tracker.getCenter()).toBeNull();
+    const dense = Array.from({ length: 721 }, (_, index) => ({
+      x: anchor.x + Math.cos((index / 720) * Math.PI * 2) * 200,
+      y: anchor.y + Math.sin((index / 720) * Math.PI * 2) * 200,
+      at: index * 4,
+    }));
+    expect(trace(dense).decisions).toContain('confirm');
   });
 });

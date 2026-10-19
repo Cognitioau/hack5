@@ -232,6 +232,7 @@ export const defaultSettings: Settings = {
 };
 export const contentMessageSchema = z.discriminatedUnion('type', [
   z.object({ v: z.literal(1), type: z.literal('CONTENT_STATUS') }).strict(),
+  z.object({ v: z.literal(1), type: z.literal('PAUSE_HAND') }).strict(),
   z
     .object({
       v: z.literal(1),
@@ -263,6 +264,29 @@ export const contentMessageSchema = z.discriminatedUnion('type', [
 ]);
 export const trustedMessageSchema = z.discriminatedUnion('type', [
   z.object({ v: z.literal(1), type: z.literal('GET_STATE') }).strict(),
+  z.object({ v: z.literal(1), type: z.literal('BEGIN_ACTIVATION') }).strict(),
+  z
+    .object({
+      v: z.literal(1),
+      type: z.literal('SET_ACTIVATION'),
+      enabled: z.boolean(),
+      requestId: idSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(1),
+      type: z.literal('GRANT_MEDIA_ORIGIN'),
+      origin: z.string().max(2000),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(1),
+      type: z.literal('REVOKE_MEDIA_ORIGIN'),
+      origin: z.string().max(2000),
+    })
+    .strict(),
   z.object({ v: z.literal(1), type: z.literal('EXPORT_RECORDS') }).strict(),
   z
     .object({
@@ -312,6 +336,8 @@ export type AppResponse =
       exportRecords?: unknown[];
       message?: string;
       features?: Features;
+      activation?: 'manual' | 'universal' | 'paused';
+      activationRequest?: string;
     }
   | { ok: false; error: string };
 export type FocusPoint = {

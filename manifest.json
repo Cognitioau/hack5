@@ -2,12 +2,17 @@
   "manifest_version": 3,
   "name": "Zombie Hand",
   "description": "Deliberately capture a thought, bury it in Obsidian, and recall it locally.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minimum_chrome_version": "120",
   "permissions": ["activeTab", "scripting", "storage", "alarms"],
-  "optional_host_permissions": ["http://127.0.0.1/*", "https://127.0.0.1/*", "https://*/*"],
-  "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_title": "Wake Zombie Hand on this page" },
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Enable or pause Zombie Hand everywhere"
+  },
   "options_page": "options.html",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'none'"

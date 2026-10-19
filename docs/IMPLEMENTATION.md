@@ -6,6 +6,8 @@ ARCHITECTURE.md remains the target design. This document maps the current code a
 
 | Concern | Current owner | Replacement boundary |
 | --- | --- | --- |
+| Browser-wide activation | `adapters/browser/activation.ts` | Persisted intent, permission checks and revocable per-tab injection |
+| Image download consent | `adapters/browser/media-access.ts` | Exact public-origin allowlist separate from browser page permission |
 | Gesture interpretation | `core/domain/gestures.ts` | Pure points → confirm/cancel decisions |
 | Page extraction and hand | `adapters/browser/extraction.ts`, `bootstrap/content.ts`, `ui/hand.ts` | Bounded candidate and versioned content commands |
 | Identity, lifecycle, save queue, indexing | `application/coordinator.ts` | Repository, embedding and feature ports |
@@ -21,6 +23,8 @@ ARCHITECTURE.md remains the target design. This document maps the current code a
 Bootstrap wires implementations statically. There is no remote module loader or generic plugin framework. Feature checks and cancellation epochs are explicit; a general feature registry and offscreen host manager are deferred until needed.
 
 ## State and failure behavior
+
+The content controller gates a bounded circle/oval recognizer behind trusted Shift or Control input. It previews the sentence at the lasso centre, then sends the existing ARM/CAPTURE commands only when the circle closes. A consumed hold cannot create a second capture, and modifier release after confirmation does not revoke accepted intent. Text extraction spans inline nodes and supplies matching highlight rectangles. The closed-shadow HandView owns only presentation, local grave animation and its cleanup; it never changes source text or decides persistence.
 
 Capture and journal creation is one IndexedDB transaction. Image preparation gates the vault writer, so a note cannot be prematurely committed as link-only while an attachment is still being prepared. A worker restart during preparation recovers the source link with an explanatory status.
 
@@ -41,7 +45,7 @@ Recovery can quarantine positively identified missing/changed evidence and adopt
 5. Retain generic saved data and export. Unknown JSON-compatible optional metadata survives; unsupported future record schemas remain exportable but are not editable or searchable in this version.
 6. Exercise disabling during an outstanding operation and verify final result acceptance, not just request initiation.
 
-The core build removes image, YouTube and gaze executable modules/assets and broad media host declarations. It still recognizes their saved data. Semantic search is replaceable and can be disabled at runtime; its model remains bundled in core.
+The core build removes image, YouTube and gaze executable modules/assets (universal activation remains available through optional HTTP(S) site access). It still recognizes their saved data. Semantic search is replaceable and can be disabled at runtime; its model remains bundled in core.
 
 ## Gaze is a separate experiment
 

@@ -1,4 +1,4 @@
-import { defaultSettings, type Settings } from '../core/contracts';
+import { defaultSettings, type AppResponse, type Settings } from '../core/contracts';
 import { command } from '../adapters/browser/client';
 import { originPattern } from '../adapters/browser/settings';
 import { publicMediaUrl } from '../core/domain/security';
@@ -6,6 +6,17 @@ import { busy, element, notice } from '../ui/common';
 
 const input = (id: string) => element<HTMLInputElement>(id);
 let settings: Settings = structuredClone(defaultSettings);
+let activation: Extract<AppResponse, { ok: true }>['activation'] = 'manual';
+function renderActivation(): void {
+  element('activation-state').textContent =
+    activation === 'universal'
+      ? 'On across your browser. Hold Shift or Ctrl and circle to capture.'
+      : activation === 'paused'
+        ? 'Paused everywhere. Your saved captures are retained.'
+        : 'Not enabled across tabs yet. Enable once to keep the hand with you.';
+  element<HTMLButtonElement>('global-enable').disabled = activation === 'universal';
+  element<HTMLButtonElement>('global-pause').disabled = activation === 'paused';
+}
 function formSettings(): Settings {
   const excluded = element<HTMLTextAreaElement>('excluded')
     .value.split('\n')
@@ -41,6 +52,8 @@ function formSettings(): Settings {
 async function load() {
   const state = await command({ v: 1, type: 'GET_STATE' });
   settings = state.settings ?? structuredClone(defaultSettings);
+  activation = state.activation ?? 'manual';
+  renderActivation();
   input('endpoint').value = settings.endpoint;
   input('folder').value = settings.folder;
   input('remember-key').checked = settings.rememberKey;
@@ -120,21 +133,55 @@ element<HTMLButtonElement>('prepare-model').addEventListener(
       notice(response.message ?? 'Search ready', 'success');
     }),
 );
+element('global-enable').addEventListener('click', () => {
+  // Start the browser prompt directly inside this user gesture.
+  const intent = command({ v: 1, type: 'BEGIN_ACTIVATION' });
+  const permission = chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });
+  void busy(element('global-enable'), async () => {
+    const [request, granted] = await Promise.all([intent, permission]);
+    if (!granted)
+      throw new Error('Site access was not granted. The hand has not been enabled across tabs.');
+    if (!request.activationRequest)
+      throw new Error('Could not start activation. Please try again.');
+    await command({
+      v: 1,
+      type: 'SET_ACTIVATION',
+      enabled: true,
+      requestId: request.activationRequest,
+    });
+    await load();
+    notice(
+      'Zombie Hand is on across your browser. Hold Shift or Ctrl and circle a passage.',
+      'success',
+    );
+  }).then(renderActivation);
+});
+element('global-pause').addEventListener('click', () => {
+  void busy(element('global-pause'), async () => {
+    await command({ v: 1, type: 'SET_ACTIVATION', enabled: false });
+    await load();
+    notice(
+      'Zombie Hand is paused everywhere. Your saved captures remain in the graveyard.',
+      'success',
+    );
+  }).then(renderActivation);
+});
 if (!__CORE_ONLY__) {
   element('media-access').hidden = false;
   const mediaOrigin = () => {
     const url = publicMediaUrl(input('media-origin').value.trim());
     if (url.pathname !== '/' || url.search || url.hash)
       throw new Error('Enter just the media origin, such as https://images.example.com.');
-    return originPattern(url.href);
+    return url.origin;
   };
   element('grant-media').addEventListener(
     'click',
     () =>
       void busy(element('grant-media'), async () => {
         const origin = mediaOrigin();
-        if (!(await chrome.permissions.request({ origins: [origin] })))
+        if (!(await chrome.permissions.request({ origins: [originPattern(origin)] })))
           throw new Error('Image-origin access was not granted.');
+        await command({ v: 1, type: 'GRANT_MEDIA_ORIGIN', origin });
         notice(
           'Image-origin access granted. Capture the image again to try saving its original bytes.',
           'success',
@@ -145,9 +192,13 @@ if (!__CORE_ONLY__) {
     'click',
     () =>
       void busy(element('revoke-media'), async () => {
-        await chrome.permissions.remove({ origins: [mediaOrigin()] });
+        const origin = mediaOrigin();
+        await command({ v: 1, type: 'REVOKE_MEDIA_ORIGIN', origin });
+        const state = await command({ v: 1, type: 'GET_STATE' });
+        if (state.activation !== 'universal')
+          await chrome.permissions.remove({ origins: [originPattern(origin)] });
         notice(
-          'Image-origin access removed. Click the toolbar button to re-enable the hand when ready.',
+          'Original-image access removed. Captures from this host will use a visible crop or source link.',
           'success',
         );
       }),

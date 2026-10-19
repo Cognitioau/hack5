@@ -1,6 +1,6 @@
 import type { CaptureCandidate, CaptureRecord } from '../../core/contracts';
 import { publicMediaUrl } from '../../core/domain/security';
-import { originPattern } from './settings';
+import { mayDownloadMedia } from './media-access';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 export async function downloadImage(
@@ -8,14 +8,16 @@ export async function downloadImage(
   signal: AbortSignal,
 ): Promise<CaptureRecord['asset']> {
   const url = publicMediaUrl(raw);
-  if (!(await chrome.permissions.contains({ origins: [originPattern(url.href)] })))
-    throw new Error('Media origin access has not been granted');
+  if (!(await mayDownloadMedia(url.href)))
+    throw new Error('This image origin has not been explicitly authorized for downloads');
+  signal.throwIfAborted();
   const response = await fetch(url.href, {
     credentials: 'omit',
     redirect: 'error',
     referrerPolicy: 'no-referrer',
     signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
   });
+  signal.throwIfAborted();
   if (!response.ok || Number(response.headers.get('content-length')) > MAX_BYTES)
     throw new Error('Image response unavailable or too large');
   const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
@@ -34,7 +36,9 @@ export async function downloadImage(
   const chunks: Uint8Array[] = [];
   try {
     while (true) {
+      signal.throwIfAborted();
       const { value, done } = await reader.read();
+      signal.throwIfAborted();
       if (done) break;
       size += value.byteLength;
       if (size > MAX_BYTES) throw new Error('Image exceeds size limit');
@@ -50,6 +54,9 @@ export async function downloadImage(
     bytes.set(chunk, offset);
     offset += chunk.length;
   }
+  if (!(await mayDownloadMedia(url.href)))
+    throw new Error('Image-origin download access was revoked');
+  signal.throwIfAborted();
   const bitmap = await createImageBitmap(new Blob([bytes], { type: mimeType }));
   try {
     if (bitmap.width * bitmap.height > 32000000 || !bitmap.width || !bitmap.height)
@@ -57,6 +64,10 @@ export async function downloadImage(
   } finally {
     bitmap.close();
   }
+  signal.throwIfAborted();
+  if (!(await mayDownloadMedia(url.href)))
+    throw new Error('Image-origin download access was revoked');
+  signal.throwIfAborted();
   return { bytes, mimeType, extension };
 }
 export async function cropSnapshot(

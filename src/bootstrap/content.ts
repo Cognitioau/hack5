@@ -1,6 +1,7 @@
 import type { AppResponse, ContentMessage, Features, PublicCapture } from '../core/contracts/index';
-import { GestureTracker, type GesturePoint } from '../core/domain/gestures';
+import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core/domain/gestures';
 import {
+  cleanText,
   extractCandidate,
   isEditable,
   targetRectangle,
@@ -9,7 +10,7 @@ import {
 import { currentVideoSeconds, extractYouTubeCandidate } from '../features/youtube/transcript';
 import { HandView } from '../ui/hand';
 
-type Phase = 'idle' | 'arming' | 'armed' | 'saving' | 'saved' | 'error';
+type Phase = 'idle' | 'aiming' | 'arming' | 'armed' | 'saving' | 'saved' | 'error';
 type SessionWindow = Window & { __zombieHandDispose?: () => void };
 const sessionWindow = window as SessionWindow;
 
@@ -27,12 +28,16 @@ function activate(): () => void {
     gaze: false,
   };
   let point: GesturePoint = { x: innerWidth / 2, y: innerHeight / 2, at: performance.now() };
-  let anchor = point;
+  let pointerKnown = false;
+  let modifier: 'Shift' | 'Control' | null = null;
+  let consumedHold = false;
+  let circle: CircleGestureTracker | null = null;
+  let trail: GesturePoint[] = [];
   let locked: ExtractedCandidate | null = null;
   let token: string | null = null;
   let operationId: string | null = null;
   let tracker: GestureTracker | null = null;
-  let dwellTimer: ReturnType<typeof setTimeout> | undefined;
+  let gestureTimer: ReturnType<typeof setTimeout> | undefined;
   let armExpiry: ReturnType<typeof setTimeout> | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let restoreTimer: ReturnType<typeof setTimeout> | undefined;
@@ -40,7 +45,6 @@ function activate(): () => void {
   let ghostEpoch = 0;
   let lastGhostAt = Number.NEGATIVE_INFINITY;
   let lastUndo: { captureId: string; until: number } | null = null;
-  let rearmAfter = 0;
   const ownedIds = new Set<string>();
   const cancellationRequested = new Set<string>();
   const acknowledgedSaves = new Set<string>();
@@ -58,28 +62,34 @@ function activate(): () => void {
   };
 
   const clearArmTimers = (): void => {
-    clearTimeout(dwellTimer);
+    clearTimeout(gestureTimer);
     clearTimeout(armExpiry);
-    dwellTimer = undefined;
+    gestureTimer = undefined;
     armExpiry = undefined;
   };
 
   const idle = (
-    detail = 'Pause over a phrase to wake the hand. Circle to grab. Shake to let go.',
+    detail = 'Hold Shift or Ctrl and circle a passage. Release early to cancel. Alt+Shift+Z captures a selection.',
   ): void => {
     if (disposed) return;
     phase = 'idle';
+    circle = null;
+    trail = [];
+    view.setTrail([]);
     locked = null;
     token = null;
     operationId = null;
     tracker = lastUndo ? new GestureTracker(point) : null;
     view.setUndoAvailable(lastUndo !== null);
     view.setTarget(null);
-    view.setState('idle', 'A little hungry.', detail);
+    view.setState('idle', 'Ready when you are.', detail);
   };
 
   const showError = (detail: string): void => {
     phase = 'error';
+    circle = null;
+    trail = [];
+    view.setTrail([]);
     view.setTarget(null);
     view.setState('error', 'Still here. Still yours.', detail);
   };
@@ -87,7 +97,7 @@ function activate(): () => void {
   const renderCapture = (capture: PublicCapture): void => {
     if (disposed || !ownedIds.has(capture.id)) return;
     if (cancellationRequested.has(capture.id) && capture.lifecycle !== 'archived') return;
-    if (phase === 'arming' || phase === 'armed') return;
+    if (phase === 'aiming' || phase === 'arming' || phase === 'armed') return;
     // Older completion messages must not replace the next capture's UI.
     if (operationId && capture.id !== operationId) return;
     if (!operationId && lastUndo && capture.id !== lastUndo.captureId) return;
@@ -112,7 +122,6 @@ function activate(): () => void {
     if (capture.persistence === 'saved-vault') {
       if (acknowledgedSaves.has(capture.id)) return;
       acknowledgedSaves.add(capture.id);
-      rearmAfter = performance.now() + 600;
       clearTimeout(pollTimer);
       phase = 'saved';
       locked = null;
@@ -139,7 +148,7 @@ function activate(): () => void {
       view.setState(
         'saved',
         'Buried, safely.',
-        `${preservation}${transcriptDetail} Shake now to spit it back.`,
+        `${preservation}${transcriptDetail} Source title and link included. Spit back undoes this capture.`,
       );
       return;
     }
@@ -149,7 +158,7 @@ function activate(): () => void {
         'saving',
         capture.persistence === 'uncertain' ? 'Waiting for a receipt.' : 'Held in the hand.',
         capture.persistence === 'uncertain'
-          ? 'The vault response was uncertain. Kept locally while the write is reconciled. Shake to cancel.'
+          ? 'The vault response was uncertain. Kept locally while the write is reconciled. Escape cancels.'
           : 'Queued locally. The hand will say saved only after the vault confirms it.',
       );
       return;
@@ -183,7 +192,13 @@ function activate(): () => void {
   const release = async (): Promise<void> => {
     const previousToken = token;
     const previousOperation = operationId;
-    generation += 1;
+    const epoch = ++generation;
+    ghostEpoch += 1;
+    view.setGhost(null);
+    circle = null;
+    trail = [];
+    consumedHold = true;
+    view.setTrail([]);
     clearArmTimers();
     clearTimeout(pollTimer);
     token = null;
@@ -208,7 +223,7 @@ function activate(): () => void {
       token: previousToken,
       ...(previousOperation ? { operationId: previousOperation } : {}),
     });
-    if (disposed) return;
+    if (disposed || epoch !== generation) return;
     if (!response.ok) {
       if (previousOperation) {
         cancellationRequested.delete(previousOperation);
@@ -231,8 +246,9 @@ function activate(): () => void {
   };
 
   const archive = async (): Promise<void> => {
-    if (!lastUndo || disposed || ['arming', 'armed', 'saving'].includes(phase)) return;
+    if (!lastUndo || disposed || ['aiming', 'arming', 'armed', 'saving'].includes(phase)) return;
     const captureId = lastUndo.captureId;
+    const epoch = ++generation;
     cancellationRequested.add(captureId);
     lastUndo = null;
     tracker = null;
@@ -244,7 +260,7 @@ function activate(): () => void {
       'Archiving the latest capture. Its files will be retained.',
     );
     const response = await request({ v: 1, type: 'ARCHIVE', captureId });
-    if (disposed) return;
+    if (disposed || epoch !== generation) return;
     if (!response.ok) {
       cancellationRequested.delete(captureId);
       lastUndo = { captureId, until: performance.now() + 6_000 };
@@ -282,7 +298,7 @@ function activate(): () => void {
     view.setState(
       'saving',
       'Taking hold…',
-      'Preparing a durable local capture. Shake or press Escape to cancel.',
+      'Preparing a durable local capture. Keep the modifier held and shake, or press Escape to cancel.',
     );
     const response = await request({
       v: 1,
@@ -302,8 +318,11 @@ function activate(): () => void {
     if (operationId === captureId) poll(captureId);
   };
 
-  const candidateAt = (preferSelection = false): ExtractedCandidate | null => {
-    const extracted = extractCandidate(document, point, {
+  const candidateAt = (
+    preferSelection = false,
+    position: { x: number; y: number } = point,
+  ): ExtractedCandidate | null => {
+    const extracted = extractCandidate(document, position, {
       preferSelection,
       ...(!__CORE_ONLY__ && features.youtube ? { special: extractYouTubeCandidate } : {}),
     });
@@ -330,11 +349,18 @@ function activate(): () => void {
     phase = 'arming';
     if (lastUndo) lastUndo.until = 0;
     locked = candidate;
-    anchor = { ...point };
     const frozenPage = location.href;
     view.setUndoAvailable(false);
-    view.setTarget(candidate.rectangle, candidate.candidate.text || candidate.candidate.title);
-    view.setState('arming', 'Something caught its eye.', 'Locking this target…');
+    view.setTarget(
+      candidate.rectangle,
+      candidate.candidate.text || candidate.candidate.title,
+      candidate.rectangles,
+    );
+    view.setState(
+      'arming',
+      'Taking this passage…',
+      'Locking the highlighted evidence and its source…',
+    );
     const response = await request({
       v: 1,
       type: 'ARM',
@@ -355,14 +381,14 @@ function activate(): () => void {
     operationId = null;
     pageUrl = frozenPage;
     phase = 'armed';
-    tracker = new GestureTracker(anchor);
+    tracker = new GestureTracker(point);
     view.setState(
       'armed',
-      'Make a little circle.',
+      'Target confirmed.',
       candidate.candidate.kind === 'youtube' &&
         candidate.candidate.video?.transcript.cues.length === 0
-        ? 'Target locked. Open Show transcript before arming to include captions. Circle to capture this moment, or shake to let go.'
-        : 'Target locked. Circle clockwise or anticlockwise to grab it; shake to let go.',
+        ? 'Open Show transcript before your next capture to include available captions.'
+        : 'The highlighted passage and its source are ready to capture.',
     );
     armExpiry = setTimeout(() => {
       void release();
@@ -376,7 +402,12 @@ function activate(): () => void {
       await confirm();
       return;
     }
-    if (phase === 'saving') return;
+    if (phase === 'saving' || phase === 'arming') return;
+    clearArmTimers();
+    circle = null;
+    trail = [];
+    consumedHold = true;
+    view.setTrail([]);
     const candidate = candidateAt(true);
     if (!candidate) {
       showError(
@@ -397,58 +428,143 @@ function activate(): () => void {
     archive: () => {
       void archive();
     },
-    close: () => dispose(),
+    page: () => {
+      if (phase === 'saving' || phase === 'arming') return;
+      clearArmTimers();
+      circle = null;
+      trail = [];
+      consumedHold = true;
+      view.setTrail([]);
+      const title = cleanText(document.title || location.href, 300);
+      void arm(
+        {
+          candidate: { kind: 'link', url: location.href, title, text: title },
+          target: document.documentElement,
+          rectangle: {
+            x: Math.max(0, innerWidth / 2 - 120),
+            y: Math.max(0, innerHeight / 2 - 20),
+            width: Math.min(240, innerWidth),
+            height: 40,
+            viewportWidth: innerWidth,
+            viewportHeight: innerHeight,
+          },
+        },
+        true,
+      );
+    },
+    close: () => {
+      void request({ v: 1, type: 'PAUSE_HAND' });
+      dispose();
+    },
   });
 
-  const pointerMove = (event: PointerEvent): void => {
-    if (
-      !event.isTrusted ||
-      disposed ||
-      hiddenForSnapshot ||
-      view.contains(event) ||
-      event.pointerType === 'touch'
-    )
-      return;
-    point = { x: event.clientX, y: event.clientY, at: performance.now() };
-    view.move(point.x, point.y);
-    if (phase === 'armed' || phase === 'saving') {
-      const decision = tracker?.add(point, phase === 'armed');
-      if (decision === 'confirm') void confirm();
-      else if (decision === 'cancel') void release();
-      return;
-    }
-    if (lastUndo && point.at <= lastUndo.until && tracker?.add(point, false) === 'cancel') {
-      void archive();
-      return;
-    }
-    // The final pointer samples of a successful circle belong to that same
-    // gesture. A fast vault response must not immediately arm another target.
-    if (point.at < rearmAfter) return;
-    if (Math.hypot(point.x - anchor.x, point.y - anchor.y) <= 9 && dwellTimer) return;
-    clearTimeout(dwellTimer);
-    dwellTimer = undefined;
-    if (phase === 'arming') {
-      // A resolved ARM locks the target; only the preceding dwell can drift.
-      if (locked) return;
-      phase = 'idle';
-    }
-    anchor = { ...point };
-    const candidate = candidateAt();
-    if (!candidate) return;
-    phase = 'arming';
-    locked = null;
-    view.setUndoAvailable(false);
-    view.setTarget(candidate.rectangle, candidate.candidate.text || candidate.candidate.title);
-    view.setState('arming', 'Wait for it…', 'Hold still briefly to arm this target.');
-    dwellTimer = setTimeout(() => {
-      dwellTimer = undefined;
-      void arm(candidate);
-    }, 800);
+  // A modifier hold owns exactly one lasso. Its release never cancels a
+  // completed circle that is already crossing the asynchronous message boundary.
+  const endInput = (invalidatePending = false): void => {
+    modifier = null;
+    consumedHold = false;
+    circle = null;
+    trail = [];
+    clearTimeout(gestureTimer);
+    view.setTrail([]);
+    if (phase === 'aiming') idle();
+    else if (invalidatePending && (phase === 'arming' || phase === 'armed')) void release();
   };
 
-  const invalidateTarget = (): void => {
-    if (phase === 'arming' || phase === 'armed') void release();
+  const beginCircle = (): void => {
+    if (phase === 'arming' || phase === 'armed') return;
+    consumedHold = phase === 'saving';
+    tracker = new GestureTracker(point);
+    if (consumedHold) return;
+    circle = new CircleGestureTracker();
+    trail = [];
+    phase = 'aiming';
+    view.setUndoAvailable(false);
+    view.setGhost(null);
+    ghostEpoch += 1;
+    view.setTarget(null);
+    view.setState(
+      'armed',
+      'Circle the words.',
+      'Close a circle around the passage. Release the key or press Escape to cancel.',
+    );
+    if (pointerKnown) {
+      const first = { ...point, at: performance.now() };
+      circle.add(first);
+      trail.push(first);
+    }
+    clearTimeout(gestureTimer);
+    gestureTimer = setTimeout(() => {
+      if (phase !== 'aiming') return;
+      consumedHold = true;
+      idle('Circle expired. Release the key, then hold Shift or Ctrl to try again.');
+    }, 4_500);
   };
+
+  const pointerMove = (event: PointerEvent): void => {
+    if (!event.isTrusted || disposed || hiddenForSnapshot || view.contains(event)) return;
+    if (event.pointerType === 'touch') {
+      endInput();
+      return;
+    }
+    point = { x: event.clientX, y: event.clientY, at: performance.now() };
+    pointerKnown = true;
+    view.move(point.x, point.y);
+    if (!modifier) return;
+    const singleModifier =
+      modifier === 'Shift' ? event.shiftKey && !event.ctrlKey : event.ctrlKey && !event.shiftKey;
+    if (
+      !singleModifier ||
+      event.altKey ||
+      event.metaKey ||
+      event.buttons !== 0 ||
+      isEditable(event.target instanceof Element ? event.target : null) ||
+      isEditable(document.activeElement)
+    ) {
+      endInput();
+      return;
+    }
+    if (consumedHold) {
+      if (tracker?.add(point, false) === 'cancel') {
+        if (phase === 'arming' || phase === 'armed' || (phase === 'saving' && token))
+          void release();
+        else if (lastUndo && point.at <= lastUndo.until && phase === 'saved') void archive();
+      }
+      return;
+    }
+    if (phase !== 'aiming' || !circle) return;
+    trail.push(point);
+    trail = trail.slice(-256);
+    view.setTrail(trail);
+    const decision = circle.add(point);
+    const center = circle.getCenter();
+    const candidate = center ? candidateAt(false, center) : null;
+    view.setTarget(
+      candidate?.rectangle ?? null,
+      candidate?.candidate.text || candidate?.candidate.title || '',
+      candidate?.rectangles,
+    );
+    if (decision === 'cancel') {
+      consumedHold = true;
+      clearArmTimers();
+      idle('Let go. Nothing new was captured.');
+    } else if (decision === 'confirm') {
+      consumedHold = true;
+      circle = null;
+      trail = [];
+      clearArmTimers();
+      view.setTrail([]);
+      if (!candidate) {
+        showError(
+          'No capturable passage at the centre of that circle. Try around text, an image or a video. Form fields are excluded.',
+        );
+        return;
+      }
+      void arm(candidate, true);
+    }
+  };
+
+  const invalidateTarget = (): void => endInput(true);
 
   const refreshFeatures = async (): Promise<void> => {
     const response = await request({ v: 1, type: 'CONTENT_STATUS' });
@@ -536,6 +652,7 @@ function activate(): () => void {
         return false;
       case 'SETTINGS_CHANGED':
         generation += 1;
+        endInput();
         clearArmTimers();
         clearTimeout(pollTimer);
         lastUndo = null;
@@ -545,7 +662,7 @@ function activate(): () => void {
         // Changing settings invalidates background capabilities, including the
         // token for an already armed target. Durable work stays in the journal.
         idle(
-          'Settings changed. Pause to arm a new target; pending captures remain in the graveyard.',
+          'Settings changed. Hold Shift or Ctrl and circle a new target; pending captures remain in the graveyard.',
         );
         void refreshFeatures();
         sendResponse({ ok: true });
@@ -595,23 +712,70 @@ function activate(): () => void {
   });
   window.addEventListener('resize', invalidateTarget, { passive: true, signal: listeners.signal });
   window.addEventListener('pagehide', dispose, { signal: listeners.signal });
+  window.addEventListener('blur', invalidateTarget, { signal: listeners.signal });
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      if (document.hidden) invalidateTarget();
+    },
+    { signal: listeners.signal },
+  );
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.isTrusted && !view.contains(event)) endInput(true);
+    },
+    { passive: true, signal: listeners.signal },
+  );
+  document.addEventListener(
+    'focusin',
+    (event) => {
+      if (isEditable(event.target instanceof Element ? event.target : null)) invalidateTarget();
+    },
+    { signal: listeners.signal },
+  );
+  document.addEventListener(
+    'keyup',
+    (event) => {
+      if (event.isTrusted && event.key === modifier) endInput();
+    },
+    { signal: listeners.signal },
+  );
   document.addEventListener(
     'keydown',
     (event) => {
       if (!event.isTrusted || (view.contains(event) && event.key !== 'Escape')) return;
-      if (event.key === 'Escape' && ['arming', 'armed', 'saving'].includes(phase)) {
+      if (event.key === 'Escape' && ['aiming', 'arming', 'armed', 'saving'].includes(phase)) {
         event.preventDefault();
         void release();
+        return;
       }
+      const editable =
+        isEditable(event.target instanceof Element ? event.target : null) ||
+        isEditable(document.activeElement);
       if (
         event.altKey &&
         event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
         event.code === 'KeyZ' &&
-        !isEditable(event.target instanceof Element ? event.target : null)
+        !editable
       ) {
         event.preventDefault();
-        void captureAccessible();
+        if (!event.repeat) void captureAccessible();
+        return;
       }
+      if (event.repeat) return;
+      const singleModifier =
+        (event.key === 'Shift' && event.shiftKey && !event.ctrlKey) ||
+        (event.key === 'Control' && event.ctrlKey && !event.shiftKey);
+      if (!singleModifier || event.altKey || event.metaKey || editable) {
+        endInput();
+        return;
+      }
+      if (modifier) return;
+      modifier = event.key as 'Shift' | 'Control';
+      beginCircle();
     },
     { signal: listeners.signal },
   );

@@ -242,6 +242,7 @@ function harness() {
       ),
       sendMessage: vi.fn(async () => undefined),
       onUpdated: tabUpdated,
+      onActivated: event<(info: { tabId: number; windowId: number }) => void>(),
       onRemoved: event<(id: number) => void>(),
     },
     scripting: { executeScript: vi.fn(async () => []) },
@@ -477,6 +478,58 @@ describe('production background capability boundary', () => {
     expect(context.local.values.settings).toEqual(before);
     expect(context.session.values.vaultKey).toBe(fixtureKey);
   });
+
+  it.each([
+    { v: 1, type: 'SET_ACTIVATION', enabled: true },
+    { v: 1, type: 'BEGIN_ACTIVATION' },
+    { v: 1, type: 'GRANT_MEDIA_ORIGIN', origin: 'https://images.example.org' },
+    { v: 1, type: 'REVOKE_MEDIA_ORIGIN', origin: 'https://images.example.org' },
+  ])(
+    'does not expose activation or image-download consent to page messages: %j',
+    async (message) => {
+      expect((await context.send(message)).ok).toBe(false);
+      expect(context.local.values.handActivation).toBeUndefined();
+      expect(context.local.values.mediaOriginGrants).toBeUndefined();
+    },
+  );
+
+  it('lets a page pause globally, then rejects stale arming and confirmation', async () => {
+    const token = await arm();
+    expect((await context.send({ v: 1, type: 'PAUSE_HAND' })).ok).toBe(true);
+    expect(context.local.values.handActivation).toBe('paused');
+    expect((await context.send({ v: 1, type: 'ARM', pageUrl, candidate: candidate() })).ok).toBe(
+      false,
+    );
+    expect(
+      (await context.send({ v: 1, type: 'CAPTURE', token, operationId: crypto.randomUUID() })).ok,
+    ).toBe(false);
+    expect(await store.list()).toHaveLength(0);
+    expect(context.api.tabs.sendMessage).toHaveBeenCalledWith(
+      101,
+      { v: 1, type: 'DEACTIVATE' },
+      { frameId: 0 },
+    );
+  });
+
+  it.each(['pause', 'permission-removal'] as const)(
+    'rejects an old activation prompt after %s',
+    async (interruption) => {
+      const started = await context.sendTrusted({ v: 1, type: 'BEGIN_ACTIVATION' });
+      if (!started.ok || !started.activationRequest) throw new Error('Missing activation intent');
+      if (interruption === 'pause')
+        await context.sendTrusted({ v: 1, type: 'SET_ACTIVATION', enabled: false });
+      else context.permissionRemoved.listeners[0]?.({ origins: ['https://*/*'] });
+      const late = await context.sendTrusted({
+        v: 1,
+        type: 'SET_ACTIVATION',
+        enabled: true,
+        requestId: started.activationRequest,
+      });
+      expect(late.ok).toBe(false);
+      expect(context.local.values.handActivation).toBe('paused');
+      expect(context.api.scripting.executeScript).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects oversized data at the real listener before invoking a privileged port', async () => {
     expect(

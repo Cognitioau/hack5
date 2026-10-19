@@ -20,6 +20,7 @@ export interface ExtensionFixture {
 export async function launchExtension(
   profileName: 'full' | 'core',
   pregrantFixtureOrigins = true,
+  universalAccess = false,
 ): Promise<ExtensionFixture> {
   const directory = await mkdtemp(resolve(tmpdir(), 'hack5-capture-browser-'));
   const extension = resolve(directory, 'extension');
@@ -32,7 +33,9 @@ export async function launchExtension(
     const manifest = JSON.parse(await readFile(resolve(extension, 'manifest.json'), 'utf8')) as {
       host_permissions?: string[];
     };
-    manifest.host_permissions = ['http://127.0.0.1/*', 'https://www.youtube.com/*'];
+    manifest.host_permissions = universalAccess
+      ? ['http://*/*', 'https://*/*']
+      : ['http://127.0.0.1/*', 'https://www.youtube.com/*'];
     await writeFile(resolve(extension, 'manifest.json'), JSON.stringify(manifest));
   }
   const launch = async () => {
@@ -154,12 +157,26 @@ export async function captureAt(
     await page.keyboard.press('Alt+Shift+Z');
     return;
   }
-  await page.waitForTimeout(950);
-  await page.mouse.move(x + 52, y, { steps: 8 });
-  for (let step = 1; step <= 64; step++) {
-    const angle = (step / 64) * Math.PI * 2;
-    await page.mouse.move(x + Math.cos(angle) * 52, y + Math.sin(angle) * 52);
-    await page.waitForTimeout(5);
+  await drawCircle(page, { x, y }, 'Shift');
+}
+
+/** Trusted hardware-style input. Start on the rim, with no dwell or mouse drag. */
+export async function drawCircle(
+  page: Page,
+  center: { x: number; y: number },
+  modifier: 'Shift' | 'Control' | null,
+  portion = 1,
+): Promise<void> {
+  await page.mouse.move(center.x + 52, center.y);
+  if (modifier) await page.keyboard.down(modifier);
+  try {
+    for (let step = 1; step <= 64 * portion; step++) {
+      const angle = (step / 64) * Math.PI * 2;
+      await page.mouse.move(center.x + Math.cos(angle) * 52, center.y + Math.sin(angle) * 52);
+      await page.waitForTimeout(6);
+    }
+  } finally {
+    if (modifier) await page.keyboard.up(modifier);
   }
 }
 

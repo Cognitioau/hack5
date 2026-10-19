@@ -18,6 +18,19 @@ beforeEach(() => {
   document.title = 'Synthetic public article';
   document.getSelection()?.removeAllRanges();
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rectangle);
+  Object.defineProperty(document, 'caretPositionFromPoint', {
+    configurable: true,
+    value: undefined,
+  });
+  Object.defineProperty(document, 'caretRangeFromPoint', { configurable: true, value: undefined });
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => rectangle,
+  });
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [rectangle],
+  });
 });
 
 describe('bounded untrusted page extraction', () => {
@@ -54,6 +67,65 @@ describe('bounded untrusted page extraction', () => {
     });
   });
 
+  it('captures a whole sentence across inline nodes and highlights the returned evidence', () => {
+    fixture(
+      '<p id="paragraph">First sentence. The <strong id="word">pointed</strong> sentence <em>matters!</em> Last sentence.</p>',
+      '#word',
+    );
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: target.firstChild, offset: 3 }),
+    });
+    const evidence: string[] = [];
+    const firstLine = new DOMRect(42, 48, 210, 18);
+    const secondLine = new DOMRect(42, 68, 85, 18);
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      evidence.push(this.toString());
+      return [firstLine, secondLine, secondLine] as unknown as DOMRectList;
+    });
+    vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(42, 48, 210, 38),
+    );
+    const capture = extractCandidate(document, { x: 80, y: 60 });
+    expect(capture?.candidate.text).toBe('The pointed sentence matters!');
+    expect(capture?.target.id).toBe('paragraph');
+    expect(evidence).toEqual(['The pointed sentence matters!']);
+    expect(capture?.rectangle).toMatchObject({ x: 42, y: 48, width: 210, height: 38 });
+    expect(capture?.rectangles).toHaveLength(2);
+    expect(capture?.rectangles?.[1]).toMatchObject({ x: 42, y: 68, width: 85, height: 18 });
+  });
+
+  it('respects visible line boundaries around inline formatting', () => {
+    fixture(
+      '<p>Earlier line<br>Focus <strong id="word">across</strong> formatting, please.<br>Later line</p>',
+      '#word',
+    );
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: target.firstChild, offset: 2 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Focus across formatting, please.',
+    );
+  });
+
+  it('truncates both captured text and its DOM highlight at the same bounded endpoint', () => {
+    fixture(`<p id="text">${'Alpha   '.repeat(700)}</p>`, '#text');
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: target.firstChild, offset: 4 }),
+    });
+    let highlighted = '';
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      highlighted = this.toString().replace(/\s+/gu, ' ').trim();
+      return [rectangle] as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 });
+    expect(capture?.candidate.text).toBe(highlighted);
+    expect(capture?.candidate.text.length).toBeLessThanOrEqual(1_600);
+    expect(highlighted.length).toBeGreaterThan(1_590);
+  });
+
   it.each([
     ['<input id="field" value="secret">', '#field'],
     ['<textarea id="field">Private</textarea>', '#field'],
@@ -61,6 +133,43 @@ describe('bounded untrusted page extraction', () => {
     ['<div role="textbox"><span id="field">Private</span></div>', '#field'],
   ])('does not arm editable fields: %s', (html, selector) => {
     fixture(html, selector);
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+
+  it.each([
+    '<div id="control">A generic container is not a text target.</div>',
+    '<div><span id="control">Neither is an unscoped inline fragment.</span></div>',
+    '<button><span id="control">Submit something</span></button>',
+    '<a id="control" href="/action" role="button">Run an action</a>',
+    '<details><summary id="control">Open a panel</summary></details>',
+    '<nav><p id="control">Navigation controls</p></nav>',
+    '<div role="slider"><p id="control">Change something</p></div>',
+  ])('rejects generic page areas and active controls: %s', (html) => {
+    fixture(html, '#control');
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+
+  it('does not include hidden or editable descendants in paragraph evidence', () => {
+    fixture(
+      '<p id="text">Visible words <span hidden>Hidden secret</span><span style="display:none">CSS secret</span><span style="opacity:0">Transparent secret</span><input value="Private value"> finish here.</p>',
+      '#text',
+    );
+    const capture = extractCandidate(document, { x: 80, y: 60 });
+    expect(capture?.candidate.text).toBe('Visible words finish here.');
+  });
+
+  it('rejects a caret in a different block and an oversized source block', () => {
+    fixture('<p id="text">Visible paragraph.</p><p id="other">Different paragraph.</p>', '#text');
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#other')?.firstChild, offset: 4 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: undefined,
+    });
+    target.textContent = 'x'.repeat(64_001);
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
   });
 
@@ -72,6 +181,47 @@ describe('bounded untrusted page extraction', () => {
     const range = document.createRange();
     range.selectNodeContents(document.querySelector('#private') as Node);
     document.getSelection()?.addRange(range);
+    expect(
+      extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true })?.candidate.text,
+    ).toBe('Public paragraph');
+  });
+
+  it('does not collect a private field between two public selection endpoints', () => {
+    fixture(
+      '<p id="public">Public paragraph</p><div contenteditable="true">Secret text</div><p id="end">Public ending</p>',
+      '#public',
+    );
+    const range = document.createRange();
+    range.setStart(target.firstChild as Node, 0);
+    range.setEnd(document.querySelector('#end')?.firstChild as Node, 6);
+    document.getSelection()?.addRange(range);
+    expect(
+      extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true })?.candidate.text,
+    ).toBe('Public paragraph');
+  });
+
+  it.each(['display:none', 'visibility:hidden', 'opacity:0'])(
+    'ignores a selection hidden by an ancestor with %s',
+    (style) => {
+      fixture(
+        `<p id="public">Public paragraph</p><div style="${style}"><p id="hidden">Hidden synthetic text</p></div>`,
+        '#public',
+      );
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('#hidden') as Node);
+      document.getSelection()?.addRange(range);
+      expect(
+        extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true })?.candidate.text,
+      ).toBe('Public paragraph');
+    },
+  );
+
+  it('ignores a programmatic selection when the native range has no rendered rectangles', () => {
+    fixture('<p id="public">Public paragraph</p><p id="other">Unrendered selection</p>', '#public');
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector('#other') as Node);
+    document.getSelection()?.addRange(range);
+    vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([] as unknown as DOMRectList);
     expect(
       extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true })?.candidate.text,
     ).toBe('Public paragraph');
@@ -93,6 +243,23 @@ describe('bounded untrusted page extraction', () => {
     expect(
       extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true })?.candidate.text,
     ).toHaveLength(12_000);
+  });
+
+  it('keeps a selected inline phrase and its highlight aligned', () => {
+    fixture('<p id="text">Keep <strong>this phrase</strong> and this tail.</p>', '#text');
+    const range = document.createRange();
+    range.setStart(target.querySelector('strong')?.firstChild as Node, 0);
+    range.setEnd(target.lastChild as Node, 9);
+    document.getSelection()?.addRange(range);
+    const highlighted: string[] = [];
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      highlighted.push(this.toString());
+      return [rectangle] as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true });
+    expect(capture?.candidate.text).toBe('this phrase and this');
+    expect(highlighted.at(-1)).toBe(capture?.candidate.text);
+    expect(capture?.rectangles).toHaveLength(1);
   });
 
   it('captures the actual loaded image URL, context and viewport rectangle', () => {

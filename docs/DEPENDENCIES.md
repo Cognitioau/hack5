@@ -39,6 +39,6 @@ Human calibration quality and transfer into another page's viewport remain unver
 
 ## Reproduce
 
-Use Node from .nvmrc, then run `npm ci`, `npm run model:fetch`, `npm run check`, `npx playwright install chromium`, and `npm run test:browser`. `npm run build:core` must omit image/YouTube/gaze feature code and broad media-origin permissions; `node scripts/check-package.mjs --core` verifies the resulting package. Check implementations intentionally fail if tests, entrypoints or required artifacts are absent.
+Use Node from .nvmrc, then run `npm ci`, `npm run model:fetch`, `npm run check`, `npx playwright install chromium`, and `npm run test:browser`. `npm run build:core` must omit image/YouTube/gaze feature code while retaining optional HTTP(S) permissions for universal activation; `node scripts/check-package.mjs --core` verifies the resulting package. Check implementations intentionally fail if tests, entrypoints or required artifacts are absent.
 
 `npm run package` builds and validates both profiles, then uses standard `zip`/`unzip` tools to create `.cache/packages/zombie-hand-0.1.0-full.zip` and `-core.zip`. It packages only regular files from verified build directories, adds a public source/content inventory, tests each archive and writes SHA256SUMS plus packages.json. The metadata identifies the source commit, dirty state and source snapshot digest; regenerate after the final commit for a clean distribution. Browser profiles, caches and source machine paths are not archive inputs.

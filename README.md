@@ -1,6 +1,6 @@
 # Zombie Hand
 
-A Chrome extension for Hackyard Yard 5. Pause over a phrase, circle to capture it into Obsidian, and shake to cancel or archive it. Search saved evidence locally and let related thoughts return as ghosts.
+A Chrome extension for Hackyard Yard 5. Hold Shift or Ctrl and circle a passage to capture it into Obsidian with its page title and source link. Search saved evidence locally and let related thoughts return as ghosts.
 
 **Status: working development build, with automated browser tests and a separate live Obsidian integration check.** See [current evidence](docs/STATUS.md). Broad website coverage, human gaze accuracy, and an installed Chrome-to-Obsidian rehearsal are still unverified.
 
@@ -21,9 +21,9 @@ Model downloads happen during development, use pinned files and SHA-256 verifica
 3. Open the extension's **Wake the hand** settings. Set the numeric loopback endpoint, application folder and plugin key. Keys use session storage by default; remembering a key is optional.
 4. Set up the plugin's HTTPS certificate using its documented procedure. The extension does not bypass TLS checks. For a deliberate local demo, the plugin's HTTP listener and the extension's loopback HTTP option can both be enabled explicitly instead.
 5. Choose **Test vault & sync queued captures**. The probe verifies conditional writes and attachment bytes, leaving small synthetic `_health` files under the selected application folder. A changed destination or key stays paused until this succeeds.
-6. Pin Zombie Hand, open an ordinary web page and click its toolbar button. Pause for roughly 800 ms over content, then draw a circle in either direction. **Alt+Shift+Z** or the hand's button provides an accessible capture action; **Escape** cancels an armed or pending capture.
+6. Pin Zombie Hand and click its toolbar button, or choose **Enable across tabs** in Settings. Approve Chrome's one-time HTTP(S) site-access request. While the hand is active, **hold Shift or Ctrl and circle the passage** in either direction, without holding a mouse button. The highlighted sentence at the centre is captured when the circle closes; release the key early to cancel. Ordinary hovering does nothing. A compact pill replaces the persistent panel; expand it for **Grab selection**, **Save page** (a title and link), and help. **Alt+Shift+Z** captures selected text or the pointed target; **Escape** cancels an unfinished or pending capture. **Spit back** archives the latest capture without deleting it.
 
-Only the explicit toolbar action activates a page. Restricted Chrome pages and editable fields are unsupported. For the first demo, use public text and a test vault.
+Activation persists across existing/new tabs, navigation and browser restart. Use the toolbar button, the pill's ×, or **Pause everywhere** in Settings to stop it globally. Excluded sites remain off. Chrome settings/store pages and editable fields are unsupported. For the first demo, use public text and a test vault.
 
 ## What works in this build
 

@@ -4,10 +4,12 @@ Updated 20 October 2026 AEDT. This is a working development build, not a complet
 
 ## Implemented
 
-- Manifest V3 extension with explicit page activation, dwell/locked target, circle confirmation, shake/Escape cancellation, accessible capture, recoverable spit-back and Rebury.
+- Version 0.2.0: universal browser activation with a one-time optional HTTP(S) site grant, persistent tab/navigation/restart behavior, excluded sites and Pause everywhere. Chrome-protected pages remain unavailable.
+- Trusted Shift/Control circle/oval capture, sentence/selection preview with exact text highlights, source title/URL, early-release/typing/drag/focus cancellation, accessible selection/page actions and recoverable Spit back. Hovering alone never captures.
+- Compact idle pill and a local grave/hand animation that grasps a safe text copy. Reduced motion is supported; delayed saves clear the decoration within 2.2 seconds while preserving a truthful queued receipt.
 - Atomic local capture/journal, serialized vault writes, create-only files, ETag metadata updates, attachment acknowledgements, lost-response reconciliation, visible failure states and bounded retries.
 - Packaged local MiniLM inference, persisted vectors, semantic/keyword retrieval and related-note ghosts. No AI provider key is required.
-- Image bytes → verified visible crop → labelled link; exact media-origin grant/removal UI, no credential forwarding, size/type/redirect restrictions.
+- Image bytes → verified visible crop → labelled link; explicit exact-origin download consent separate from universal page access, immediate revocation, no credential forwarding, size/type/redirect restrictions.
 - YouTube confirmation-time moments, ad-clock rejection, partial native transcript reader, manual WebVTT/SRT/timestamped import, provenance and cue-specific search links.
 - Recovery preserves pending local lifecycle changes, quarantines positively observed missing/edited evidence, and adopts verified newer remote lifecycle only when the local saved snapshot has not changed.
 - Isolated local gaze calibration lab with explicit camera control, held-out diagnostics, no sample persistence and blocked external connections. Gaze does not yet arm page captures.
@@ -15,25 +17,25 @@ Updated 20 October 2026 AEDT. This is a working development build, not a complet
 
 ## Verified evidence
 
-Final local checks ran on Node 24.22.0/npm 11.19.1 and Playwright 1.64.1 Chromium 156.0.8078.4. The manifest declares Chrome 120 as a minimum; that older version was not separately exercised.
+All **328 automated tests** passed for the 0.2.0 update. The first universal browser run exposed a test locator mismatch with the decorative Save settings arrow; correcting the locator yielded a complete seven-test browser pass. Final local checks ran on Node 24.22.0/npm 11.19.1 and Playwright 1.64.1 Chromium 156.0.8078.4. The manifest declares Chrome 120 as a minimum; that older version was not separately exercised.
 
 | Check | Result |
 | --- | --- |
 | TypeScript, Biome formatting/lint, import/capability boundaries | Passed; a deliberately forbidden core → adapter import was also rejected |
-| Unit | 97 passed |
+| Unit | 173 passed |
 | Vault contracts | 47 passed |
-| Security/background regressions | 65 passed |
-| Final combined browser suite | 5 passed: default permissions, full flow, core flow, gaze runtime, offline inference |
-| Earlier capture-browser repetition | 9/9 passes across three runs |
-| Real Obsidian Local REST API 5.5.2 probe | 13 assertions passed over verified HTTPS in the separate test vault |
-| Full/core build and artifact checks | Passed; core contains no image/YouTube/gaze runtime or broad media host declaration |
-| Dependency audit | Zero known advisories at this check |
+| Security/background regressions | 101 passed |
+| Final combined browser suite | 7 passed: default permissions, full/core capture, modifier false-activation guards/source accuracy, universal tab/restart/pause, gaze runtime, offline inference |
+| Earlier 0.1.0 capture-browser repetition | 9/9 passes across three runs |
+| Real Obsidian Local REST API 5.5.2 probe (previous adapter revision, unchanged by 0.2.0) | 13 assertions passed over verified HTTPS in the separate test vault |
+| Full/core build and artifact checks | Passed; core contains no image/YouTube/gaze runtime ; optional HTTP(S) grants support universal activation in both profiles |
+| Dependency audit | Previous audit reported zero known advisories; dependencies are unchanged in 0.2.0 |
 | Public-source scan | No test-vault key, private-key headers, common token patterns, private runtime directories or local machine paths found |
-| Visual inspection | Synthetic hand, settings and graveyard screenshots inspected; no clipping found |
+| Visual inspection | Compact idle/saved pills, local grave/reach/grasp, reduced-motion presentation, and synthetic page captures inspected |
 
 The real-plugin probe verified note/attachment writes, conditional archive, raw-note preservation, lost-response reconciliation, recovery and conflicting-edit preservation. It trusts only the test vault's CA in a dedicated Node child process. It does not configure or prove Chrome's certificate trust.
 
-Browser tests use the real built extension and trusted inputs against synthetic sites and a protocol fixture. They verify an exact 240×120 crop with zero overlay/altered pixels, semantic retrieval of imported captions linked to t=30, archive persistence after restart and credential isolation. Test-only copied manifests pregrant exact fixture origins; the unmodified production manifest's initial denial is separately verified. Native optional-permission UI remains a manual gate.
+Browser tests use the real built extension and trusted inputs against synthetic sites and a protocol fixture. They verify an exact 240×120 crop with zero overlay/altered pixels, semantic retrieval of imported captions linked to t=30, archive persistence after restart and credential isolation. Most test-only copied manifests pregrant exact fixture origins; the universal-activation fixture uses a separate disposable broad HTTP(S) grant. The unmodified production manifest's initial denial is separately verified. Native optional-permission UI remains a manual gate.
 
 Offline inference uses real packaged weights/WASM and verifies meaningful similarity ordering and cold restart. Gaze tests use a fake camera and separately observed public portrait landmarks; they do not measure a person's gaze accuracy. The gaze page blocks the upstream runtime's attempted telemetry with connect-src 'self'.
 
@@ -41,11 +43,11 @@ Live inspection of one public YouTube watch page found its native transcript pan
 
 ## Review and fixes
 
-Three explicitly authorized subagents owned capture/UI, vault/security, and toolchain/inference work. Independent review produced executable regressions for old probe authorization, settings-read races, late arming after revocation, media/vector acceptance inside IndexedDB callbacks, stale semantic search, interrupted import, missing alarms, future journal isolation and failed-index retry. Those confirmed failures were fixed before this handoff. No Jev review or advisory service was used.
+Three explicitly authorized subagents owned capture/UI, vault/security, and toolchain/inference work. Independent review produced executable regressions for old probe authorization, settings-read races, late arming after revocation, media/vector acceptance inside IndexedDB callbacks, stale semantic search, interrupted import, missing alarms, future journal isolation and failed-index retry. Those confirmed failures were fixed before this handoff. The 0.2.0 review additionally exercised modifier/lasso false activation, hidden DOM selection, late ARM/archive replies, delayed activation prompts after pause, injection/revocation races, separate image consent and stale media results. Confirmed issues were fixed with executable regressions. No Jev review or advisory service was used.
 
 ## Remaining gates and next action
 
-1. Load the full unpacked build in Chrome, approve its exact vault endpoint and complete certificate setup through the plugin's documented procedure. Perform the installed extension → actual Obsidian → restart → retrieval loop. The adapter and browser halves are tested separately; this combined manual run remains open.
+1. Reload the existing unpacked extension and verify version 0.2.0; refresh already-open pages. Enable across tabs once and approve Chrome site access. Approve the exact vault endpoint and complete certificate setup through the plugin's documented procedure. Perform the installed extension → actual Obsidian → restart → retrieval loop. The adapter and browser halves are tested separately; this combined manual run remains open.
 2. Rehearse on three real public text targets, ten varied images and five YouTube caption categories. Record actual file/crop/link and transcript outcomes; no web-wide success percentage is claimed.
 3. Run human gaze calibration and held-out targets. Prove cross-window viewport mapping before connecting gaze to capture. Keep mouse confirmation usable independently.
 4. Record the real 60–90 second demo, screenshot and final ≤500-character submission description after the remaining checks pass. Target Friday 23 October, before the 24 October 05:00 AEDT deadline.
@@ -54,7 +56,7 @@ Direct PDF/media file downloading, full transcript companions/cache, OCR, cloud 
 
 ## Revision and reproducibility
 
-The runtime implementation is commit 4a78b082cd8dfc6e0877ea002cf3f949c99cfd62, built on planning baseline 0e18f6c96b79468452ef9c946525a8bb3af40b35. Its [GitHub CI run](https://github.com/Cognitioau/hack5/actions/runs/39323224203) passed every check and uploaded both archives. A follow-up pins Ubuntu 24.04 and current Node-24-based official Actions to remove runner migration/deprecation warnings; it does not change application code.
+The current runtime revision is development version **0.2.0**, following baseline `1e3b9abfad7081061fb3c27a9ea088fefa2d384a`. The previous 0.1.0 [GitHub CI run](https://github.com/Cognitioau/hack5/actions/runs/39323549629) passed all checks. Current build provenance records the exact new commit in each archive's BUILD_INFO.json; see the repository Actions page for the matching 0.2.0 run.
 
 Each generated archive includes BUILD_INFO.json with its exact source commit, dirty flag, source snapshot digest and per-file SHA-256 inventory; .cache/packages/SHA256SUMS identifies the archives. Regenerate with npm run package after committing for clean provenance. Latest CI status remains visible on the repository's Actions page.
 

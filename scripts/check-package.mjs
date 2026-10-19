@@ -51,15 +51,17 @@ for (const filename of [
   );
 }
 const core = process.argv.includes('--core');
-if (core) {
-  const origins = manifest.optional_host_permissions ?? [];
-  assert(
-    origins.length === 2 &&
-      origins.includes('http://127.0.0.1/*') &&
-      origins.includes('https://127.0.0.1/*'),
-    'Core optional host access must be loopback-only',
-  );
-}
+const origins = manifest.optional_host_permissions ?? [];
+assert(
+  origins.length === 2 && origins.includes('http://*/*') && origins.includes('https://*/*'),
+  'Both profiles must declare only optional HTTP(S) access for universal activation',
+);
+assert(!manifest.host_permissions?.length, 'No site access may be granted at install time');
+assert(
+  !manifest.content_scripts?.length,
+  'Universal activation must remain an explicit runtime choice',
+);
+
 for (const filename of ['options.html', 'graveyard.html', ...(!core ? ['gaze.html'] : [])]) {
   const html = await readFile(resolve(destination, filename), 'utf8');
   if (filename === 'gaze.html')

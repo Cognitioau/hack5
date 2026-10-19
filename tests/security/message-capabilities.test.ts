@@ -16,6 +16,10 @@ describe('untrusted message capability boundary', () => {
     'SET_LIFECYCLE',
     'PREPARE_MODEL',
     'GET_STATE',
+    'SET_ACTIVATION',
+    'BEGIN_ACTIVATION',
+    'GRANT_MEDIA_ORIGIN',
+    'REVOKE_MEDIA_ORIGIN',
   ])('does not expose %s to content scripts', (type) => {
     expect(contentMessageSchema.safeParse({ v: 1, type }).success).toBe(false);
   });
@@ -97,6 +101,9 @@ describe('public media origin boundary', () => {
     'https://0x7f000001/a.png',
     'https://[::1]/a.png',
     'https://localhost/a.png',
+    'https://localhost./a.png',
+    'https://camera.local./a.png',
+    'https://*.example.com/a.png',
     'https://api.local/a.png',
     'https://api.internal/a.png',
     'https://user:pass@example.com/a.png',

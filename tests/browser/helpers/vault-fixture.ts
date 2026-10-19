@@ -54,7 +54,9 @@ body{margin:0;padding:70px 80px;background:#f3efe5;color:#233b31;font-family:Geo
 
 export const youtubeHtml = `<!doctype html><html><head><title>Synthetic caption lesson - YouTube</title><style>body{margin:60px;font:18px system-ui;background:#fafafa}video{width:640px;height:280px;background:#364949}ytd-transcript-segment-renderer{display:block;margin:8px}.segment-timestamp{display:inline-block;width:80px}.segment-text{display:inline}</style></head><body><ytd-watch-metadata><h1>Synthetic caption lesson</h1></ytd-watch-metadata><div id="movie_player"><video class="html5-main-video"></video></div><ytd-engagement-panel-section-list-renderer target-id="engagement-panel-searchable-transcript" visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"><ytd-transcript-segment-renderer><span class="segment-timestamp">0:30</span><span class="segment-text">The octopus changes colour to blend into the coral reef.</span></ytd-transcript-segment-renderer><ytd-transcript-segment-renderer><span class="segment-timestamp">0:45</span><span class="segment-text">Its camouflage hides it from passing predators.</span></ytd-transcript-segment-renderer><ytd-transcript-segment-renderer><span class="segment-timestamp">1:00</span><span class="segment-text">Each arm can explore its surroundings independently.</span></ytd-transcript-segment-renderer></ytd-engagement-panel-section-list-renderer></body></html>`;
 
-export async function startVaultFixture(): Promise<VaultFixture> {
+export async function startVaultFixture(
+  options: { writeDelayMs?: number } = {},
+): Promise<VaultFixture> {
   const files = new Map<string, Buffer>();
   const key = 'synthetic-browser-test-key-not-a-secret';
   const requests: VaultFixture['requests'] = [];
@@ -140,6 +142,8 @@ export async function startVaultFixture(): Promise<VaultFixture> {
       return;
     }
     if (request.method === 'PUT') {
+      if (options.writeDelayMs)
+        await new Promise((resolve) => setTimeout(resolve, options.writeDelayMs));
       const existing = files.get(file);
       if (
         (request.headers['if-none-match'] === '*' && existing) ||

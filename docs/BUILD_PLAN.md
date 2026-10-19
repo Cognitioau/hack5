@@ -29,7 +29,7 @@ Cut optional breadth in this order if time compresses: short clips/additional si
 
 ## M1 Prove the full text loop
 
-- Build a plain capture control first, then the arm/circle/shake input state machine over the same command path. Lock targets; include Escape and accessible actions. A simple hand is sufficient initially.
+- Use a held Shift/Control lasso as the primary capture path, with exact snippet preview, source provenance and one confirmation per hold. Retain Escape, shake cancellation and secondary accessible selection/page actions over the same command path. Keep the idle controls compact and localize the grave/hand animation to capture time.
 - Add durable capture records and an operation journal. Implement generated vault paths, create-only saves, conditional metadata updates, bounded retries and uncertain-write reconciliation.
 - Implement archived lifecycle and explicit Rebury. Cancel pending jobs and suppress stale enrichment. Expose queued/uncertain/conflict/archive-sync states honestly.
 - Persist local vectors and search results linked to source evidence. Show one real related-note ghost on an enabled page, with a cooldown and dismissal. The no-LLM-key path must work.

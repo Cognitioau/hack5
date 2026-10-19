@@ -8,13 +8,19 @@ type RuntimeListener = (
   sender: chrome.runtime.MessageSender,
   respond: (reply: unknown) => void,
 ) => boolean;
+type Modifier = 'Shift' | 'Control';
 const armToken = '9a049891-c825-405c-9c4d-61df4d2ec0ca';
+const passage = 'A deliberately captured sentence.';
 let runtimeListener: RuntimeListener | undefined;
 let shadow: ShadowRoot | undefined;
 let target: Element;
 let capturedOperation = '';
+let deferredArm: ((value: AppResponse) => void) | undefined;
 let deferredCapture: ((value: AppResponse) => void) | undefined;
+let deferredArchive: ((value: AppResponse) => void) | undefined;
+let delayArm = false;
 let delayCapture = false;
+let delayArchive = false;
 let currentRect = new DOMRect(40, 50, 240, 80);
 
 function record(
@@ -31,7 +37,7 @@ function record(
     candidate: {
       kind: 'text',
       title: 'Fixture',
-      text: 'A deliberately captured sentence.',
+      text: passage,
       url: 'https://example.org/article',
     },
     lifecycle,
@@ -43,7 +49,7 @@ function record(
   };
 }
 
-const send = vi.fn(async (message: ContentMessage): Promise<AppResponse> => {
+async function handleMessage(message: ContentMessage): Promise<AppResponse> {
   switch (message.type) {
     case 'CONTENT_STATUS':
       return {
@@ -51,6 +57,10 @@ const send = vi.fn(async (message: ContentMessage): Promise<AppResponse> => {
         features: { images: true, youtube: true, haunting: false, semantic: false, gaze: false },
       };
     case 'ARM':
+      if (delayArm)
+        return new Promise((resolve) => {
+          deferredArm = resolve;
+        });
       return { ok: true, token: armToken };
     case 'CAPTURE':
       capturedOperation = message.operationId;
@@ -64,14 +74,18 @@ const send = vi.fn(async (message: ContentMessage): Promise<AppResponse> => {
         ? { ok: true, capture: record(message.operationId, 'archived', 'queued-local') }
         : { ok: true };
     case 'ARCHIVE':
+      if (delayArchive)
+        return new Promise((resolve) => {
+          deferredArchive = resolve;
+        });
       return { ok: true, capture: record(message.captureId, 'archived', 'queued-local') };
     default:
       return { ok: true };
   }
-});
-
+}
+const send = vi.fn(handleMessage);
 const documentListeners = new Map<string, EventListener>();
-function dispatch(type: string, fields: Record<string, unknown>): void {
+function dispatch(type: string, fields: Record<string, unknown> = {}): void {
   const listener = documentListeners.get(type);
   if (!listener) throw new Error(`Missing ${type} listener`);
   listener({
@@ -79,13 +93,57 @@ function dispatch(type: string, fields: Record<string, unknown>): void {
     target,
     composedPath: () => [target, document],
     preventDefault: vi.fn(),
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    repeat: false,
+    pointerType: 'mouse',
+    buttons: 0,
     ...fields,
   } as unknown as Event);
+}
+function held(modifier: Modifier): { shiftKey: boolean; ctrlKey: boolean } {
+  return { shiftKey: modifier === 'Shift', ctrlKey: modifier === 'Control' };
+}
+function move(x: number, y: number, fields: Record<string, unknown> = {}): void {
+  dispatch('pointermove', { clientX: x, clientY: y, ...fields });
+}
+function beginCircle(modifier: Modifier = 'Shift', fields: Record<string, unknown> = {}): void {
+  move(225, 90);
+  dispatch('keydown', { key: modifier, ...held(modifier), ...fields });
+}
+async function traceCircle(
+  modifier: Modifier = 'Shift',
+  first = 1,
+  last = 40,
+  fields: Record<string, unknown> = {},
+): Promise<void> {
+  for (let step = first; step <= last; step += 1) {
+    await vi.advanceTimersByTimeAsync(20);
+    const angle = (step / 40) * Math.PI * 2;
+    move(160 + Math.cos(angle) * 65, 90 + Math.sin(angle) * 65, {
+      ...held(modifier),
+      ...fields,
+    });
+  }
+  await flush();
+}
+async function shake(modifier?: Modifier): Promise<void> {
+  for (const x of [160, 225, 95, 220, 90, 215, 95, 220]) {
+    await vi.advanceTimersByTimeAsync(60);
+    move(x, 90, modifier ? held(modifier) : {});
+  }
+  await flush();
+}
+function messages(type: ContentMessage['type']): ContentMessage[] {
+  return send.mock.calls.map(([message]) => message).filter((message) => message.type === type);
 }
 async function flush(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 async function accessibleCapture(): Promise<void> {
+  move(160, 90);
   dispatch('keydown', { key: 'z', code: 'KeyZ', altKey: true, shiftKey: true });
   await flush();
 }
@@ -99,15 +157,36 @@ beforeEach(async () => {
   vi.resetModules();
   vi.useFakeTimers();
   vi.stubGlobal('__CORE_ONLY__', false);
-  document.body.innerHTML = '<p id="public">A deliberately captured sentence.</p>';
+  document.title = 'Public fixture';
+  document.body.innerHTML =
+    '<p id="public">A deliberately captured sentence. A different sentence stays on the page.</p>';
   target = document.querySelector('#public') as Element;
   currentRect = new DOMRect(40, 50, 240, 80);
+  shadow = undefined;
+  delayArm = false;
   delayCapture = false;
+  delayArchive = false;
   capturedOperation = '';
+  deferredArm = undefined;
   deferredCapture = undefined;
-  send.mockClear();
+  deferredArchive = undefined;
+  send.mockReset();
+  send.mockImplementation(handleMessage);
   documentListeners.clear();
+  document.getSelection()?.removeAllRanges();
   Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => target });
+  Object.defineProperty(document, 'caretPositionFromPoint', {
+    configurable: true,
+    value: () => ({ offsetNode: target.firstChild, offset: 12 }),
+  });
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => currentRect,
+  });
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [currentRect],
+  });
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => currentRect);
   const originalAttach = Element.prototype.attachShadow;
   vi.spyOn(Element.prototype, 'attachShadow').mockImplementation(function (
@@ -149,17 +228,174 @@ afterEach(() => {
 });
 
 describe('content interaction lifecycle (mocked browser boundary)', () => {
-  it('ignores synthetic pointer input, and arms only after the trusted dwell', async () => {
-    dispatch('pointermove', { isTrusted: false, pointerType: 'mouse', clientX: 80, clientY: 70 });
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(send.mock.calls.some(([message]) => message.type === 'ARM')).toBe(false);
-    dispatch('pointermove', { pointerType: 'mouse', clientX: 80, clientY: 70 });
-    await vi.advanceTimersByTimeAsync(799);
-    expect(send.mock.calls.some(([message]) => message.type === 'ARM')).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(send.mock.calls.filter(([message]) => message.type === 'ARM')).toHaveLength(1);
-    expect(shadow?.textContent).toContain('Make a little circle.');
+  it('does not arm or capture while dwelling, circling, or shaking without a modifier', async () => {
+    move(225, 90);
+    await vi.advanceTimersByTimeAsync(1_200);
+    await traceCircle('Shift', 1, 40, { shiftKey: false });
+    await shake();
+    expect(messages('ARM')).toHaveLength(0);
+    expect(messages('CAPTURE')).toHaveLength(0);
   });
+
+  it.each(['Shift', 'Control'] as const)(
+    'captures one precise sentence with its source only after a full held-%s circle',
+    async (modifier) => {
+      beginCircle(modifier);
+      await traceCircle(modifier, 1, 25);
+      expect(messages('ARM')).toHaveLength(0);
+      expect(messages('CAPTURE')).toHaveLength(0);
+      await traceCircle(modifier, 26);
+      expect(messages('ARM')).toEqual([
+        expect.objectContaining({
+          candidate: expect.objectContaining({
+            kind: 'text',
+            text: passage,
+            url: document.URL,
+            title: 'Public fixture',
+          }),
+          pageUrl: document.URL,
+        }),
+      ]);
+      expect(messages('CAPTURE')).toHaveLength(1);
+      expect(target.textContent).toContain('A different sentence stays on the page.');
+    },
+  );
+
+  it.each(['key', 'pointer'] as const)('ignores synthetic %s input', async (synthetic) => {
+    beginCircle('Shift', synthetic === 'key' ? { isTrusted: false } : {});
+    await traceCircle('Shift', 1, 40, synthetic === 'pointer' ? { isTrusted: false } : {});
+    expect(messages('ARM')).toHaveLength(0);
+    expect(messages('CAPTURE')).toHaveLength(0);
+  });
+
+  it.each(['release', 'chord', 'drag', 'scroll', 'blur', 'editable'] as const)(
+    'cancels an incomplete circle on %s and requires a fresh modifier press',
+    async (reason) => {
+      beginCircle();
+      await traceCircle('Shift', 1, 12);
+      switch (reason) {
+        case 'release':
+          dispatch('keyup', { key: 'Shift' });
+          break;
+        case 'chord':
+          dispatch('keydown', { key: 'Control', shiftKey: true, ctrlKey: true });
+          break;
+        case 'drag':
+          move(160, 155, { shiftKey: true, buttons: 1 });
+          break;
+        case 'scroll':
+          dispatch('scroll');
+          break;
+        case 'blur':
+          window.dispatchEvent(new Event('blur'));
+          break;
+        case 'editable': {
+          const input = document.createElement('input');
+          document.body.append(input);
+          dispatch('focusin', { target: input });
+          break;
+        }
+      }
+      await traceCircle('Shift', 13);
+      dispatch('keydown', { key: 'Shift', shiftKey: true, repeat: true });
+      await traceCircle();
+      expect(messages('ARM')).toHaveLength(0);
+      expect(messages('CAPTURE')).toHaveLength(0);
+      dispatch('keyup', { key: 'Shift' });
+      beginCircle();
+      await traceCircle();
+      expect(messages('CAPTURE')).toHaveLength(1);
+    },
+  );
+
+  it('never begins a gesture or accessible capture from an editable field', async () => {
+    const input = document.createElement('textarea');
+    document.body.append(input);
+    input.focus();
+    beginCircle('Shift', { target: input });
+    await traceCircle();
+    dispatch('keydown', {
+      key: 'z',
+      code: 'KeyZ',
+      altKey: true,
+      shiftKey: true,
+      target: input,
+    });
+    await flush();
+    expect(messages('ARM')).toHaveLength(0);
+    expect(messages('CAPTURE')).toHaveLength(0);
+  });
+
+  it('consumes repeat keys and trailing circles until the held modifier is released', async () => {
+    beginCircle();
+    await traceCircle();
+    expect(messages('CAPTURE')).toHaveLength(1);
+    dispatch('keydown', { key: 'Shift', shiftKey: true, repeat: true });
+    await traceCircle();
+    expect(messages('ARM')).toHaveLength(1);
+    expect(messages('CAPTURE')).toHaveLength(1);
+    dispatch('keyup', { key: 'Shift' });
+    beginCircle();
+    await traceCircle();
+    expect(messages('CAPTURE')).toHaveLength(2);
+  });
+
+  it('expires a long modifier hold without accepting a later loop in that hold', async () => {
+    beginCircle();
+    await vi.advanceTimersByTimeAsync(4_600);
+    await traceCircle();
+    expect(messages('ARM')).toHaveLength(0);
+    expect(messages('CAPTURE')).toHaveLength(0);
+    dispatch('keyup', { key: 'Shift' });
+    beginCircle();
+    await traceCircle();
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it('lets a completed circle finish after key release while ARM is still pending', async () => {
+    delayArm = true;
+    beginCircle();
+    await traceCircle();
+    expect(messages('ARM')).toHaveLength(1);
+    expect(messages('CAPTURE')).toHaveLength(0);
+    dispatch('keyup', { key: 'Shift' });
+    deferredArm?.({ ok: true, token: armToken });
+    await flush();
+    expect(messages('CAPTURE')).toHaveLength(1);
+    expect(messages('CANCEL')).toHaveLength(0);
+    expect(shadow?.textContent).toContain('Buried, safely.');
+  });
+
+  it('lets an accepted capture finish after the modifier is released', async () => {
+    delayCapture = true;
+    beginCircle();
+    await traceCircle();
+    expect(messages('CAPTURE')).toHaveLength(1);
+    dispatch('keyup', { key: 'Shift' });
+    await shake();
+    expect(messages('CANCEL')).toHaveLength(0);
+    deferredCapture?.({ ok: true, capture: record(capturedOperation) });
+    await flush();
+    expect(shadow?.textContent).toContain('Buried, safely.');
+  });
+
+  it.each(['Escape', 'shake'] as const)(
+    'cancels with %s while ARM is pending and revokes a late token',
+    async (method) => {
+      delayArm = true;
+      beginCircle();
+      await traceCircle();
+      if (method === 'Escape') dispatch('keydown', { key: 'Escape' });
+      else await shake('Shift');
+      deferredArm?.({ ok: true, token: armToken });
+      await flush();
+      expect(messages('CAPTURE')).toHaveLength(0);
+      expect(messages('CANCEL')).toEqual([
+        expect.objectContaining({ token: armToken, type: 'CANCEL' }),
+      ]);
+      expect(messages('ARCHIVE')).toHaveLength(0);
+    },
+  );
 
   it('provides an accessible capture path and waits for a real save acknowledgement', async () => {
     delayCapture = true;
@@ -172,20 +408,20 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(shadow?.textContent).toContain('Buried, safely.');
   });
 
-  it('allows the first eligible ghost search immediately, before the cooldown begins', async () => {
+  it('allows the first eligible ghost search immediately after deliberate confirmation', async () => {
     send.mockImplementationOnce(async () => ({
       ok: true,
       features: { images: true, youtube: true, haunting: true, semantic: false, gaze: false },
     }));
     fromBackground({ v: 1, type: 'SETTINGS_CHANGED' });
     await flush();
-    dispatch('pointermove', { pointerType: 'mouse', clientX: 80, clientY: 70 });
-    await vi.advanceTimersByTimeAsync(800);
-    expect(
-      send.mock.calls.some(
-        ([message]) => message.type === 'SEARCH' && message.query.includes('deliberately captured'),
-      ),
-    ).toBe(true);
+    beginCircle();
+    await traceCircle('Shift', 1, 25);
+    expect(messages('SEARCH')).toHaveLength(0);
+    await traceCircle('Shift', 26);
+    expect(messages('SEARCH')).toEqual([
+      expect.objectContaining({ query: passage, type: 'SEARCH' }),
+    ]);
   });
 
   it('keeps a pending cancellation archived despite a late active response or update', async () => {
@@ -193,11 +429,9 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     await accessibleCapture();
     dispatch('keydown', { key: 'Escape' });
     await flush();
-    expect(
-      send.mock.calls.some(
-        ([message]) => message.type === 'CANCEL' && message.operationId === capturedOperation,
-      ),
-    ).toBe(true);
+    expect(messages('CANCEL')).toEqual([
+      expect.objectContaining({ operationId: capturedOperation }),
+    ]);
     expect(shadow?.textContent).toContain('Back from the grave.');
     deferredCapture?.({ ok: true, capture: record(capturedOperation) });
     fromBackground({ v: 1, type: 'CAPTURE_UPDATE', capture: record(capturedOperation) });
@@ -205,44 +439,60 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(shadow?.textContent).not.toContain('Buried, safely.');
   });
 
-  it('does not let a previous save/index update overwrite a newly armed target', async () => {
+  it('does not let a previous save/index update overwrite a new gesture', async () => {
     await accessibleCapture();
     const previous = capturedOperation;
-    await vi.advanceTimersByTimeAsync(650);
-    dispatch('pointermove', { pointerType: 'mouse', clientX: 80, clientY: 70 });
-    await vi.advanceTimersByTimeAsync(800);
-    fromBackground({ v: 1, type: 'CAPTURE_UPDATE', capture: record(previous) });
-    expect(shadow?.textContent).toContain('Make a little circle.');
+    beginCircle();
+    await traceCircle('Shift', 1, 25);
+    fromBackground({
+      v: 1,
+      type: 'CAPTURE_UPDATE',
+      capture: record(previous, 'active', 'queued-local'),
+    });
+    await traceCircle('Shift', 26);
+    expect(messages('CAPTURE')).toHaveLength(2);
+    expect(capturedOperation).not.toBe(previous);
   });
 
-  it('consumes trailing circle movement after a fast save without starting another arm', async () => {
+  it('invalidates a pending token and old Undo capability when settings change', async () => {
     await accessibleCapture();
-    send.mockClear();
-    for (const x of [100, 105, 110, 115]) {
-      dispatch('pointermove', { pointerType: 'mouse', clientX: x, clientY: 70 });
-      await vi.advanceTimersByTimeAsync(15);
-    }
-    await vi.advanceTimersByTimeAsync(900);
-    expect(send.mock.calls.some(([message]) => message.type === 'ARM')).toBe(false);
-    expect(shadow?.textContent).toContain('Buried, safely.');
-  });
-
-  it('invalidates the local token and Undo capability when settings change', async () => {
-    await accessibleCapture();
+    delayArm = true;
+    beginCircle();
+    await traceCircle();
     fromBackground({ v: 1, type: 'SETTINGS_CHANGED' });
     await flush();
+    deferredArm?.({ ok: true, token: armToken });
+    await flush();
+    expect(messages('CAPTURE')).toHaveLength(1);
+    expect(messages('CANCEL')).toEqual([expect.objectContaining({ token: armToken })]);
     expect(shadow?.textContent).toContain('Settings changed.');
-    expect(shadow?.querySelector<HTMLButtonElement>('.controls .button:last-child')?.hidden).toBe(
-      true,
-    );
+    await shake('Shift');
+    expect(messages('ARCHIVE')).toHaveLength(0);
+  });
+
+  it('ignores an old archive failure after settings change and a new gesture begins', async () => {
+    beginCircle();
+    await traceCircle();
+    delayArchive = true;
+    await shake('Shift');
+    expect(messages('ARCHIVE')).toHaveLength(1);
+    fromBackground({ v: 1, type: 'SETTINGS_CHANGED' });
+    await flush();
+    beginCircle();
+    await traceCircle('Shift', 1, 25);
+    deferredArchive?.({ ok: false, error: 'An old archive request failed.' });
+    await flush();
+    expect(shadow?.textContent).not.toContain('An old archive request failed.');
+    await traceCircle('Shift', 26);
+    expect(messages('CAPTURE')).toHaveLength(2);
   });
 
   it('refuses a screenshot when the target moved or its source changed', async () => {
     document.body.innerHTML =
       '<img id="image" src="https://images.example.org/fern.png" alt="Fern">';
     target = document.querySelector('#image') as Element;
-    dispatch('pointermove', { pointerType: 'mouse', clientX: 80, clientY: 70 });
-    await vi.advanceTimersByTimeAsync(800);
+    delayCapture = true;
+    await accessibleCapture();
     currentRect = new DOMRect(40, 70, 240, 80);
     expect(fromBackground({ v: 1, type: 'HIDE_OVERLAY' })).toEqual({ ok: false, valid: false });
     currentRect = new DOMRect(40, 50, 240, 80);
@@ -254,8 +504,8 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     document.body.innerHTML =
       '<img id="image" src="https://images.example.org/fern.png" alt="Fern">';
     target = document.querySelector('#image') as Element;
-    dispatch('pointermove', { pointerType: 'mouse', clientX: 80, clientY: 70 });
-    await vi.advanceTimersByTimeAsync(800);
+    delayCapture = true;
+    await accessibleCapture();
     const respond = vi.fn();
     expect(
       runtimeListener?.({ v: 1, type: 'HIDE_OVERLAY' }, { id: 'test-extension' }, respond),
@@ -279,17 +529,26 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     );
   });
 
-  it('uses a shake to cancel the armed target without archiving an earlier capture', async () => {
+  it('does not archive a saved capture from ordinary pointer shaking or a new gesture', async () => {
     await accessibleCapture();
-    await vi.advanceTimersByTimeAsync(650);
-    dispatch('pointermove', { pointerType: 'mouse', clientX: 80, clientY: 70 });
-    await vi.advanceTimersByTimeAsync(800);
-    for (const x of [80, 135, 40, 130, 30, 120, 35, 130, 30, 120]) {
-      dispatch('pointermove', { pointerType: 'mouse', clientX: x, clientY: 70 });
-      await vi.advanceTimersByTimeAsync(70);
-    }
-    expect(send.mock.calls.some(([message]) => message.type === 'CANCEL')).toBe(true);
-    expect(send.mock.calls.some(([message]) => message.type === 'ARCHIVE')).toBe(false);
+    await shake();
+    beginCircle();
+    await shake('Shift');
+    expect(messages('ARCHIVE')).toHaveLength(0);
+    expect(messages('CANCEL')).toHaveLength(0);
+  });
+
+  it('uses a held-modifier shake to cancel the pending operation, not an earlier capture', async () => {
+    await accessibleCapture();
+    const previous = capturedOperation;
+    delayCapture = true;
+    await accessibleCapture();
+    const pending = capturedOperation;
+    beginCircle();
+    await shake('Shift');
+    expect(pending).not.toBe(previous);
+    expect(messages('CANCEL')).toEqual([expect.objectContaining({ operationId: pending })]);
+    expect(messages('ARCHIVE')).toHaveLength(0);
   });
 
   it('disposes listeners and timers on deactivation, and ignores foreign runtime messages', async () => {

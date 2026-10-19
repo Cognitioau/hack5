@@ -6,6 +6,8 @@ export function publicMediaUrl(raw: string): URL {
   const host = url.hostname.toLowerCase();
   if (
     !host.includes('.') ||
+    host.endsWith('.') ||
+    host.includes('*') ||
     host.endsWith('.localhost') ||
     host.endsWith('.local') ||
     host.endsWith('.internal') ||

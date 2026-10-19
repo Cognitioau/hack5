@@ -20,6 +20,12 @@ import {
   secureStorage,
   writeSettings,
 } from '../adapters/browser/settings';
+import { createHandActivation } from '../adapters/browser/activation';
+import {
+  authorizeMediaOrigin,
+  reconcileMediaOrigins,
+  revokeMediaOrigin,
+} from '../adapters/browser/media-access';
 import { cropSnapshot, downloadImage } from '../adapters/browser/media';
 import { preserveImage } from '../features/image/preserve';
 import { createCoordinator } from '../application/coordinator';
@@ -104,7 +110,17 @@ const coordinator = createCoordinator({
   },
   changed,
 });
-const ready = secureStorage().then(async () => {
+const handActivation = createHandActivation({
+  allowedOrigin,
+  onPause: () => {
+    clearCapabilities();
+    void embedder.dispose();
+  },
+});
+let activationIntent = 0;
+let activationRequest: { id: string; intent: number } | null = null;
+const ready = Promise.all([secureStorage(), handActivation.ready]).then(async () => {
+  if (!__CORE_ONLY__) await reconcileMediaOrigins();
   await coordinator.recoverPreparation();
   if (!(await chrome.alarms.get('resume-captures')))
     await chrome.alarms.create('resume-captures', { periodInMinutes: 1 });
@@ -122,6 +138,7 @@ function clearCapabilities() {
   coordinator.disableJobs();
 }
 async function currentDocument(sender: chrome.runtime.MessageSender, pageUrl?: string) {
+  if (handActivation.getMode() === 'paused') throw new Error('Zombie Hand is paused everywhere');
   if (
     sender.id !== chrome.runtime.id ||
     !sender.tab?.id ||
@@ -220,12 +237,16 @@ async function contentRequest(
   const message = contentMessageSchema.parse(raw);
   const context = await currentDocument(sender);
   switch (message.type) {
+    case 'PAUSE_HAND':
+      activationIntent += 1;
+      await handActivation.pause();
+      return { ok: true, activation: handActivation.getMode() };
     case 'CONTENT_STATUS': {
       const settings = await readSettings();
       const features = __CORE_ONLY__
         ? { ...settings.features, images: false, youtube: false, gaze: false }
         : settings.features;
-      return { ok: true, features };
+      return { ok: true, features, activation: handActivation.getMode() };
     }
     case 'ARM': {
       await currentDocument(sender, message.pageUrl);
@@ -360,10 +381,41 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
     case 'GET_STATE':
       return {
         ok: true,
+        activation: handActivation.getMode(),
         settings: await readSettings(),
         hasKey: !!(await readVaultConfig()),
         captures: (await store.list()).map(publicCapture),
       };
+    case 'BEGIN_ACTIVATION':
+      activationRequest = { id: crypto.randomUUID(), intent: ++activationIntent };
+      return { ok: true, activationRequest: activationRequest.id };
+    case 'SET_ACTIVATION':
+      if (message.enabled) {
+        if (
+          !activationRequest ||
+          message.requestId !== activationRequest.id ||
+          activationRequest.intent !== activationIntent
+        )
+          throw new Error('Activation request was superseded. Enable the hand again.');
+        activationRequest = null;
+        await handActivation.enable();
+      } else {
+        activationIntent += 1;
+        activationRequest = null;
+        await handActivation.pause();
+      }
+      return { ok: true, activation: handActivation.getMode() };
+    case 'GRANT_MEDIA_ORIGIN':
+      if (__CORE_ONLY__) throw new Error('Original image downloads are absent from this build');
+      await authorizeMediaOrigin(message.origin);
+      return { ok: true };
+    case 'REVOKE_MEDIA_ORIGIN': {
+      if (__CORE_ONLY__) throw new Error('Original image downloads are absent from this build');
+      const revoked = revokeMediaOrigin(message.origin);
+      clearCapabilities();
+      await revoked;
+      return { ok: true };
+    }
     case 'EXPORT_RECORDS':
       return { ok: true, exportRecords: await store.exportRecords() };
     case 'SAVE_SETTINGS': {
@@ -389,7 +441,10 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
             void chrome.tabs
               .sendMessage(tab.id, {
                 v: 1,
-                type: 'SETTINGS_CHANGED',
+                type:
+                  tab.url && message.settings.excludedOrigins.includes(new URL(tab.url).origin)
+                    ? 'DEACTIVATE'
+                    : 'SETTINGS_CHANGED',
                 features: message.settings.features,
               })
               .catch(() => undefined);
@@ -552,14 +607,27 @@ chrome.runtime.onMessage.addListener(
     return true;
   },
 );
+// A browser action is the user gesture for Chrome's one-time optional-site grant.
 chrome.action.onClicked.addListener((tab) => {
-  if (!tab.id) return;
-  const tabId = tab.id;
+  const intent = ++activationIntent;
+  if (handActivation.getMode() === 'universal') {
+    void handActivation.pause().catch(() => chrome.runtime.openOptionsPage());
+    return;
+  }
+  const permission = chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });
   void (async () => {
+    const granted = await permission;
     await ready;
-    if (!tab.url || !(await allowedOrigin(tab.url))) throw new Error('Unsupported page');
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    if (intent !== activationIntent) return;
+    // The worker may have been cold when this click began.
+    if (handActivation.getMode() === 'universal') await handActivation.pause();
+    else if (granted) await handActivation.enable();
+    else if (tab.id) await handActivation.wake(tab.id, true);
   })().catch(() => chrome.runtime.openOptionsPage());
+});
+void ready.then(() => handActivation.refresh()).catch(() => undefined);
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  void ready.then(() => handActivation.wake(tabId)).catch(() => undefined);
 });
 chrome.runtime.onInstalled.addListener(() => {
   void ready.then(() => chrome.alarms.create('resume-captures', { periodInMinutes: 1 }));
@@ -572,13 +640,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void ready.then(() => coordinator.drain()).catch(() => undefined);
 });
 chrome.permissions.onRemoved.addListener(() => {
-  clearCapabilities();
-  void embedder.dispose();
-  void chrome.tabs.query({}).then((tabs) => {
-    for (const tab of tabs)
-      if (tab.id)
-        void chrome.tabs.sendMessage(tab.id, { v: 1, type: 'DEACTIVATE' }).catch(() => undefined);
-  });
+  if (!__CORE_ONLY__) void reconcileMediaOrigins().catch(() => undefined);
+  activationIntent += 1;
+  void handActivation.pause().catch(() => undefined);
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const [token, arm] of arms)
@@ -588,6 +652,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     }
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === 'complete')
+    void ready.then(() => handActivation.wake(tabId)).catch(() => undefined);
   if (change.url || change.status === 'loading')
     for (const [token, arm] of arms)
       if (arm.tabId === tabId && (change.status === 'loading' || arm.pageUrl !== change.url)) {

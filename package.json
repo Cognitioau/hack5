@@ -1,6 +1,6 @@
 {
   "name": "hack5-zombie-hand",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Deliberate browser capture into an Obsidian graveyard, with local semantic retrieval.",
   "license": "GPL-3.0-only",
