@@ -26,7 +26,9 @@ TypeScript is strict. Biome checks formatting/lint. AST checks enforce layer and
 | Inference browser | Real packaged model/WASM, semantic ordering, normalization, determinism and cold restart | Isolated model host |
 | Gaze browser | Explicit startup, local model, no outgoing requests/persisted samples, actual camera track stop | Chromium fake camera; no human accuracy claim |
 
-The capture harness separately tests denied host access with the unmodified production manifest. Most flows use a copied manifest with exact fixture/loopback grants. The universal-activation test uses a separate disposable copy with broad HTTP(S) grants because a headless browser cannot complete the native optional-permission dialog. Chromium's extension action debugging API grants activeTab, then the harness injects the production content entrypoint. Shipped code contains no testing backdoor. Native toolbar/permission approval remains a manual check.
+The capture harness separately tests denied host access with the unmodified production manifest. Most flows use a copied manifest with exact fixture/loopback grants. Chromium's extension action debugging API grants activeTab for those flows, then the harness injects the production content entrypoint. The universal-activation test instead uses a separate disposable full-profile copy with an all-sites grant, enables through Settings, and exercises automatic injection and visible image crops in a new tab without a toolbar action. Headless tests cannot complete the native optional-permission dialog; native toolbar/permission approval remains a manual check. Shipped code contains no testing backdoor.
+
+Background regressions hold image/arming operations open while switching tabs or window focus away and back. They verify stale bytes are discarded, delayed arms are rejected, and already recorded source-link captures remain active and sync.
 
 ## Live Obsidian probe
 

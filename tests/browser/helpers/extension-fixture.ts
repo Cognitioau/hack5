@@ -34,7 +34,9 @@ export async function launchExtension(
       host_permissions?: string[];
     };
     manifest.host_permissions = universalAccess
-      ? ['http://*/*', 'https://*/*']
+      ? profileName === 'full'
+        ? ['<all_urls>']
+        : ['http://*/*', 'https://*/*']
       : ['http://127.0.0.1/*', 'https://www.youtube.com/*'];
     await writeFile(resolve(extension, 'manifest.json'), JSON.stringify(manifest));
   }

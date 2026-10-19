@@ -1,7 +1,11 @@
 import { secureStorage } from './settings';
 
 export type HandActivationMode = 'manual' | 'universal' | 'paused';
-export const universalPageOrigins = ['http://*/*', 'https://*/*'] as const;
+// Chrome requires <all_urls> for visible crops on tabs that never received an
+// activeTab toolbar gesture. Injection itself remains restricted to HTTP(S).
+export const universalPageOrigins: readonly string[] = __CORE_ONLY__
+  ? ['http://*/*', 'https://*/*']
+  : ['<all_urls>'];
 
 export interface HandActivation {
   readonly ready: Promise<void>;
@@ -192,7 +196,7 @@ export function createHandActivation(options: ActivationOptions): HandActivation
     if (epoch !== intent) return;
     const permissionBefore = await granted();
     if (epoch !== intent) return;
-    if (!permissionBefore) throw new Error('Allow Zombie Hand on HTTP and HTTPS pages first.');
+    if (!permissionBefore) throw new Error('Allow the requested browser site access first.');
     await persist('universal', intent);
     if (epoch !== intent) return;
     // The permission may have been revoked while the preference was being saved.

@@ -1,5 +1,6 @@
 import { defaultSettings, type AppResponse, type Settings } from '../core/contracts';
 import { command } from '../adapters/browser/client';
+import { universalPageOrigins } from '../adapters/browser/activation';
 import { originPattern } from '../adapters/browser/settings';
 import { publicMediaUrl } from '../core/domain/security';
 import { busy, element, notice } from '../ui/common';
@@ -136,7 +137,7 @@ element<HTMLButtonElement>('prepare-model').addEventListener(
 element('global-enable').addEventListener('click', () => {
   // Start the browser prompt directly inside this user gesture.
   const intent = command({ v: 1, type: 'BEGIN_ACTIVATION' });
-  const permission = chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });
+  const permission = chrome.permissions.request({ origins: [...universalPageOrigins] });
   void busy(element('global-enable'), async () => {
     const [request, granted] = await Promise.all([intent, permission]);
     if (!granted)

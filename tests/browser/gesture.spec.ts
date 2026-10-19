@@ -89,7 +89,7 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
 test('universal activation follows tabs, navigation and restart, respects exclusions, and pauses everywhere', async () => {
   test.setTimeout(120_000);
   const vault = await startVaultFixture();
-  const fixture = await launchExtension('core', true, true);
+  const fixture = await launchExtension('full', true, true);
   try {
     await configureVault(fixture, vault, false);
     const first = await fixture.context.newPage();
@@ -105,12 +105,27 @@ test('universal activation follows tabs, navigation and restart, respects exclus
     const second = await fixture.context.newPage();
     await second.goto(`${vault.origin}/article?second`);
     await expect(second.locator('[data-zombie-hand-ui]')).toHaveCount(1);
+    await captureAt(second, '#fern', 'circle');
+    await expect
+      .poll(
+        async () =>
+          (await state(fixture)).find((capture) => capture.candidate.kind === 'image')?.persistence,
+      )
+      .toBe('saved-vault');
+    expect(
+      (await state(fixture)).find((capture) => capture.candidate.kind === 'image')?.preservation,
+    ).toBe('screenshot');
     await first.bringToFront();
     await expect(first.locator('[data-zombie-hand-ui]')).toHaveCount(1);
     await first.reload();
     await expect(first.locator('[data-zombie-hand-ui]')).toHaveCount(1);
     await captureAt(first, '#dog', 'circle');
-    await expect.poll(async () => (await state(fixture))[0]?.persistence).toBe('saved-vault');
+    await expect
+      .poll(
+        async () =>
+          (await state(fixture)).find((capture) => capture.candidate.kind === 'text')?.persistence,
+      )
+      .toBe('saved-vault');
 
     await fixture.options.bringToFront();
     await fixture.options.locator('#excluded').fill('https://blocked.example.org');
@@ -142,7 +157,7 @@ test('universal activation follows tabs, navigation and restart, respects exclus
     await reopened.reload();
     await reopened.waitForTimeout(300);
     expect(await reopened.locator('[data-zombie-hand-ui]').count()).toBe(0);
-    expect(await state(fixture)).toHaveLength(1);
+    expect(await state(fixture)).toHaveLength(2);
   } finally {
     await fixture.close();
     await vault.close();

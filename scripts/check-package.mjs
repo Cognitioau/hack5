@@ -53,8 +53,10 @@ for (const filename of [
 const core = process.argv.includes('--core');
 const origins = manifest.optional_host_permissions ?? [];
 assert(
-  origins.length === 2 && origins.includes('http://*/*') && origins.includes('https://*/*'),
-  'Both profiles must declare only optional HTTP(S) access for universal activation',
+  core
+    ? origins.length === 2 && origins.includes('http://*/*') && origins.includes('https://*/*')
+    : origins.length === 1 && origins[0] === '<all_urls>',
+  'Full uses optional all-sites for cross-tab crops; core uses optional HTTP(S) only',
 );
 assert(!manifest.host_permissions?.length, 'No site access may be granted at install time');
 assert(

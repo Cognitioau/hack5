@@ -20,7 +20,7 @@ import {
   secureStorage,
   writeSettings,
 } from '../adapters/browser/settings';
-import { createHandActivation } from '../adapters/browser/activation';
+import { createHandActivation, universalPageOrigins } from '../adapters/browser/activation';
 import {
   authorizeMediaOrigin,
   reconcileMediaOrigins,
@@ -119,6 +119,7 @@ const handActivation = createHandActivation({
 });
 let activationIntent = 0;
 let activationRequest: { id: string; intent: number } | null = null;
+let captureViewEpoch = 0;
 const ready = Promise.all([secureStorage(), handActivation.ready]).then(async () => {
   if (!__CORE_ONLY__) await reconcileMediaOrigins();
   await coordinator.recoverPreparation();
@@ -136,6 +137,15 @@ function clearCapabilities() {
   networkController = new AbortController();
   vaultCache = undefined;
   coordinator.disableJobs();
+}
+function invalidateCaptureView() {
+  // A window-scoped screenshot can resolve after switching away and back.
+  // Revoke pending view work synchronously; already recorded evidence still syncs.
+  captureViewEpoch += 1;
+  for (const [token, arm] of arms) {
+    arm.controller.abort();
+    if (!arm.captureId) arms.delete(token);
+  }
 }
 async function currentDocument(sender: chrome.runtime.MessageSender, pageUrl?: string) {
   if (handActivation.getMode() === 'paused') throw new Error('Zombie Hand is paused everywhere');
@@ -234,6 +244,7 @@ async function contentRequest(
 ): Promise<AppResponse> {
   if (changingSettings) throw new Error('Settings are changing; enable the hand again shortly.');
   const controller = networkController;
+  const viewEpoch = captureViewEpoch;
   const message = contentMessageSchema.parse(raw);
   const context = await currentDocument(sender);
   switch (message.type) {
@@ -255,7 +266,7 @@ async function contentRequest(
         throw new Error('Image capture is disabled');
       if (message.candidate.kind === 'youtube' && (__CORE_ONLY__ || !settings.features.youtube))
         throw new Error('YouTube capture is disabled');
-      if (changingSettings || controller.signal.aborted)
+      if (changingSettings || controller.signal.aborted || viewEpoch !== captureViewEpoch)
         throw new Error('Page capability changed while arming.');
       for (const [token, arm] of arms)
         if (arm.tabId === context.tabId && !arm.captureId) {
@@ -614,7 +625,7 @@ chrome.action.onClicked.addListener((tab) => {
     void handActivation.pause().catch(() => chrome.runtime.openOptionsPage());
     return;
   }
-  const permission = chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });
+  const permission = chrome.permissions.request({ origins: [...universalPageOrigins] });
   void (async () => {
     const granted = await permission;
     await ready;
@@ -627,8 +638,10 @@ chrome.action.onClicked.addListener((tab) => {
 });
 void ready.then(() => handActivation.refresh()).catch(() => undefined);
 chrome.tabs.onActivated.addListener(({ tabId }) => {
+  invalidateCaptureView();
   void ready.then(() => handActivation.wake(tabId)).catch(() => undefined);
 });
+chrome.windows.onFocusChanged.addListener(() => invalidateCaptureView());
 chrome.runtime.onInstalled.addListener(() => {
   void ready.then(() => chrome.alarms.create('resume-captures', { periodInMinutes: 1 }));
 });

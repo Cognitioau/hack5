@@ -94,6 +94,7 @@ export async function cropSnapshot(
       { documentId },
     );
     if (!ack?.ok) throw new Error('Target document unavailable');
+    signal.throwIfAborted();
     return tab;
   }
   try {
@@ -102,6 +103,7 @@ export async function cropSnapshot(
     await check();
     const bitmap = await createImageBitmap(await (await fetch(data)).blob());
     try {
+      signal.throwIfAborted();
       const scaleX = bitmap.width / rect.viewportWidth,
         scaleY = bitmap.height / rect.viewportHeight;
       const x = Math.max(0, Math.floor(rect.x * scaleX)),
@@ -123,8 +125,10 @@ export async function cropSnapshot(
       context.drawImage(bitmap, x, y, right - x, bottom - y, 0, 0, right - x, bottom - y);
       const blob = await canvas.convertToBlob({ type: 'image/png' });
       if (blob.size > MAX_BYTES || signal.aborted) throw new Error('Crop too large or cancelled');
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      signal.throwIfAborted();
       return {
-        bytes: new Uint8Array(await blob.arrayBuffer()),
+        bytes,
         mimeType: 'image/png',
         extension: 'png',
       };

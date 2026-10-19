@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "minimum_chrome_version": "120",
   "permissions": ["activeTab", "scripting", "storage", "alarms"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "optional_host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

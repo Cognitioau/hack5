@@ -62,6 +62,7 @@ async function start(preference?: unknown): Promise<void> {
 
 beforeEach(async () => {
   vi.resetModules();
+  vi.stubGlobal('__CORE_ONLY__', false);
   stored = {};
   permissionGranted = true;
   tabs = new Map([[1, tab(1)]]);
@@ -116,13 +117,24 @@ describe('browser-wide activation intent', () => {
     expect(contains).not.toHaveBeenCalled();
   });
 
-  it('requires both broad host grants before persisting universal activation', async () => {
+  it('requires the all-sites crop grant before persisting full universal activation', async () => {
     await start();
     permissionGranted = false;
-    await expect(activation.enable()).rejects.toThrow('HTTP and HTTPS');
-    expect(contains).toHaveBeenCalledWith({ origins: ['http://*/*', 'https://*/*'] });
+    await expect(activation.enable()).rejects.toThrow('site access');
+    expect(contains).toHaveBeenCalledWith({ origins: ['<all_urls>'] });
     expect(activation.getMode()).toBe('manual');
     expect(stored.handActivation).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('keeps the core profile limited to HTTP(S) without a screenshot capability', async () => {
+    vi.resetModules();
+    vi.stubGlobal('__CORE_ONLY__', true);
+    create = (await import('../../src/adapters/browser/activation')).createHandActivation;
+    await start();
+    permissionGranted = false;
+    await expect(activation.enable()).rejects.toThrow('site access');
+    expect(contains).toHaveBeenCalledWith({ origins: ['http://*/*', 'https://*/*'] });
     expect(execute).not.toHaveBeenCalled();
   });
 

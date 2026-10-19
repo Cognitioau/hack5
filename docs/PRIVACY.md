@@ -1,8 +1,10 @@
 # Privacy and supported behavior
 
-Zombie Hand offers one browser-wide activation toggle. After you approve optional HTTP(S) site access, it activates on eligible active tabs, new pages and browser restart; it does not read browsing history. Excluded sites remain off, and Pause everywhere removes the hand from open tabs and rejects new capture requests. A held Shift/Control circle previews visible text and sends the confirmed passage to the extension for capture and optional local related-note search. Ordinary hovering does not capture or search. No content is captured automatically just because global activation is on.
+Zombie Hand offers one browser-wide activation toggle. After you approve optional site access, it activates on eligible active tabs, new pages and browser restart; it does not read browsing history. Excluded sites remain off, and Pause everywhere removes the hand from open tabs and rejects new capture requests. A held Shift/Control circle previews visible text and sends the confirmed passage to the extension for capture and optional local related-note search. Ordinary hovering does not capture or search. No content is captured automatically just because global activation is on.
 
 Captured text, URLs, timestamps, optional image bytes and embeddings stay in extension storage and the configured Obsidian vault. There is no cloud AI provider, analytics client or remote inference service. Original image downloads contact an approved hosting origin without cookies or authorization headers; denied downloads fall back to a visible crop or source link.
+
+The full build requests all-sites access so Chrome permits visible image crops in newly activated tabs; the core build requests HTTP(S) only. Both builds inject and capture only on allowed HTTP(S) pages, excluding file URLs and Chrome-protected pages. [Chrome crop permission requirements](https://developer.chrome.com/docs/extensions/reference/api/tabs#method-captureVisibleTab)
 
 Page-access permission does not itself authorize downloading original image bytes. Each public HTTPS image origin needs a separate explicit grant in Settings; without it, images use a verified visible crop or source link. Revoking an image grant invalidates in-flight media work.
 

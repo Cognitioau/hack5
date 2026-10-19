@@ -76,6 +76,7 @@ const bundles = await Promise.all([
     : []),
 ]);
 const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
+if (core) manifest.optional_host_permissions = ['http://*/*', 'https://*/*'];
 await writeFile(resolve(destination, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 for (const name of [
   'options.html',

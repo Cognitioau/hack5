@@ -245,6 +245,10 @@ function harness() {
       onActivated: event<(info: { tabId: number; windowId: number }) => void>(),
       onRemoved: event<(id: number) => void>(),
     },
+    windows: {
+      WINDOW_ID_NONE: -1,
+      onFocusChanged: event<(windowId: number) => void>(),
+    },
     scripting: { executeScript: vi.fn(async () => []) },
     action: { onClicked: event<(value: chrome.tabs.Tab) => void>() },
     alarms: {
@@ -318,6 +322,20 @@ async function settled(id: string): Promise<CaptureRecord> {
   const value = await store.get(id);
   if (!value) throw new Error('Synthetic capture disappeared');
   return value;
+}
+
+function switchViewAwayAndBack(kind: 'tab' | 'focus'): void {
+  if (kind === 'focus') {
+    context.api.windows.onFocusChanged.listeners[0]?.(-1);
+    context.api.windows.onFocusChanged.listeners[0]?.(1);
+    return;
+  }
+  context.tabs.set(101, { ...tab(), active: false });
+  context.tabs.set(202, { ...tab(), id: 202, url: 'https://other.example/private', active: true });
+  context.api.tabs.onActivated.listeners[0]?.({ tabId: 202, windowId: 1 });
+  context.tabs.set(202, { ...tab(), id: 202, url: 'https://other.example/private', active: false });
+  context.tabs.set(101, tab());
+  context.api.tabs.onActivated.listeners[0]?.({ tabId: 101, windowId: 1 });
 }
 
 beforeEach(async () => {
@@ -558,6 +576,76 @@ describe('production background capability boundary', () => {
 });
 
 describe('background settings and asynchronous revocation', () => {
+  it.each(['tab', 'focus'] as const)(
+    'discards an in-flight crop after %s switches away and back while retaining the active capture',
+    async (change) => {
+      ports.download.mockRejectedValue(new Error('Original image origin was not authorized'));
+      const snapshot = deferred<CaptureRecord['asset']>();
+      ports.snapshot.mockReturnValueOnce(snapshot.promise);
+      const token = await arm(context.sender(), imageCandidate());
+      const id = crypto.randomUUID();
+      expect((await context.send({ v: 1, type: 'CAPTURE', token, operationId: id })).ok).toBe(true);
+      await vi.waitFor(() => expect(ports.snapshot).toHaveBeenCalledOnce());
+      const signal = ports.snapshot.mock.calls[0]?.[4] as AbortSignal;
+      expect(signal.aborted).toBe(false);
+
+      // Both active-tab snapshots would see the original page. The transition
+      // itself must invalidate any screenshot acquired during the gap.
+      switchViewAwayAndBack(change);
+      expect(signal.aborted).toBe(true);
+      snapshot.resolve({
+        bytes: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+        mimeType: 'image/png',
+        extension: 'png',
+      });
+      const saved = await settled(id);
+      expect(saved.preparation).toBe('ready');
+      expect(saved.lifecycle).toBe('active');
+      expect(saved.asset).toBeUndefined();
+      expect(saved.preservation).toBe('link');
+      expect(saved.candidate).toEqual(imageCandidate());
+      expect(context.vault.ensureCapture).toHaveBeenCalled();
+      expect(
+        vi.mocked(context.vault.ensureCapture).mock.calls.every(([capture]) => !capture.asset),
+      ).toBe(true);
+      expect((await context.send({ v: 1, type: 'GET_CAPTURE', captureId: id })).ok).toBe(true);
+    },
+  );
+
+  it.each([
+    { change: 'tab', settingsRead: 1 },
+    { change: 'focus', settingsRead: 1 },
+    { change: 'tab', settingsRead: 3 },
+    { change: 'focus', settingsRead: 3 },
+  ] as const)(
+    'rejects delayed ARM across a $change switch during settings read $settingsRead',
+    async ({ change, settingsRead }) => {
+      const entered = deferred<void>();
+      const resume = deferred<void>();
+      const get = context.local.get.getMockImplementation();
+      if (!get) throw new Error('Synthetic storage implementation is missing');
+      let reads = 0;
+      context.local.get.mockImplementation(async (key) => {
+        const snapshot = await get(key);
+        if (key === 'settings' && ++reads === settingsRead) {
+          entered.resolve();
+          await resume.promise;
+        }
+        return snapshot;
+      });
+      const pending = context.send({ v: 1, type: 'ARM', pageUrl, candidate: imageCandidate() });
+      await entered.promise;
+      switchViewAwayAndBack(change);
+      resume.resolve();
+      expect((await pending).ok).toBe(false);
+      expect(await store.list()).toEqual([]);
+      expect(ports.download).not.toHaveBeenCalled();
+      expect(ports.snapshot).not.toHaveBeenCalled();
+      // Returning to the same page permits a fresh, deliberate arm.
+      expect(await arm()).toEqual(expect.any(String));
+    },
+  );
+
   it.each(['settings', 'permission'] as const)(
     'rejects an ARM whose final settings read resumes after %s revocation',
     async (revocation) => {
