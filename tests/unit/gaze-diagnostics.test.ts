@@ -12,6 +12,7 @@ import {
 } from '../../src/features/gaze/diagnostics';
 import { evaluateSession } from '../../src/features/gaze/evaluate';
 import { headDeviation, headReference } from '../../src/features/gaze/movement';
+import { GAZE_TUNING } from '../../src/features/gaze/tuning';
 import { pixelError, selectGazeModel } from '../../src/features/gaze/selection';
 import {
   calibrationTargets,
@@ -82,7 +83,80 @@ function inspect(value: unknown, found = { keys: new Set<string>(), suspicious: 
   return found;
 }
 
+/** Every leaf path in a value, with array positions collapsed to []. */
+function leafPaths(value: unknown, path = '', found = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) for (const item of value) leafPaths(item, `${path}[]`, found);
+  else if (value && typeof value === 'object')
+    for (const [key, item] of Object.entries(value))
+      leafPaths(item, path ? `${path}.${key}` : key, found);
+  else found.add(path);
+  return found;
+}
+
 describe('explicit session diagnostics export and offline evaluation', () => {
+  it('holds exactly the documented fields', () => {
+    // A new field must be added here and described in GAZE_DIAGNOSTICS_CONTENTS, the gaze.html
+    // hint and docs/PRIVACY.md in the same change.
+    const { file } = exportSession();
+    const target = [
+      'captured.capturedAt',
+      'captured.departure',
+      'captured.features[]',
+      'captured.rows[][]',
+      'captured.spread',
+      'captured.stable',
+      'captured.usedTimes[]',
+      'index',
+      'samples[].features', // null: no face or open eyes measurable in that frame
+      'samples[].features[]',
+      'samples[].t',
+      'target.x',
+      'target.y',
+    ];
+    const check = [
+      'errorPixels',
+      'movement.centreShift',
+      'movement.distanceRatio',
+      'prediction.x',
+      'prediction.y',
+    ];
+    const tuning = Object.entries(GAZE_TUNING).flatMap(([group, values]) =>
+      Object.entries(values).map(([key, value]) =>
+        Array.isArray(value) ? `tuning.${group}.${key}[]` : `tuning.${group}.${key}`,
+      ),
+    );
+    const steps = ['medianStepPixels', 'p90StepPixels', 'steps'];
+    const documented = [
+      'schema',
+      'version',
+      'createdAt',
+      'extensionVersion',
+      'contents',
+      'featureNames[]',
+      ...['width', 'height', 'screenX', 'screenY', 'outerWidth', 'outerHeight', 'pixelRatio'].map(
+        (key) => `viewport.${key}`,
+      ),
+      ...tuning,
+      ...target.map((path) => `calibration[].${path}`),
+      ...[...target, ...check].map((path) => `validation[].${path}`),
+      'model.variant',
+      'model.lambda',
+      ...['variant', 'lambda', 'medianPixels', 'meanPixels', 'maximumPixels'].map(
+        (key) => `model.crossValidation[].${key}`,
+      ),
+      'holdout.medianPixels',
+      'holdout.maximumPixels',
+      'holdout.points',
+      'live.durationMs',
+      ...['updates', 'predicted', 'lostFace', 'moved', 'outsideViewport'].map(
+        (key) => `live.counts.${key}`,
+      ),
+      ...steps.map((key) => `live.raw.${key}`),
+      ...steps.map((key) => `live.smoothed.${key}`),
+    ];
+    expect([...leafPaths(JSON.parse(JSON.stringify(file)))].sort()).toEqual(documented.sort());
+  });
+
   it('contains only documented derived values, never images or landmark arrays', () => {
     const { file } = exportSession();
     const json = JSON.parse(JSON.stringify(file)) as Record<string, unknown>;
@@ -159,9 +233,19 @@ describe('explicit session diagnostics export and offline evaluation', () => {
     ).toBeCloseTo(file.holdout.medianPixels, 6);
     const sweep = new Map(report.settleSweep.map((row) => [row.settleMs, row]));
     expect(sweep.get(350)?.validation?.medianPixels).toBeCloseTo(file.holdout.medianPixels, 6);
-    // Without settling, the reaction period leaks into some captures and the checks get worse.
-    expect(sweep.get(0)?.validation?.medianPixels ?? 0).toBeGreaterThan(
-      sweep.get(350)?.validation?.medianPixels ?? Infinity,
+    // The steadiness range keeps reaction-period frames out on its own: with no settling at all
+    // the checks stay close (under a median absolute deviation they rose past 100 px).
+    expect(sweep.get(0)?.validation?.medianPixels ?? Infinity).toBeLessThan(
+      2 * (sweep.get(350)?.validation?.medianPixels ?? 0),
     );
+    expect(report.rangeSweep.map((row) => row.stabilityRange)).toEqual([
+      0.015, 0.02, 0.03, 0.045, 0.06,
+    ]);
+    expect(
+      report.rangeSweep.find((row) => row.stabilityRange === 0.03)?.validation?.medianPixels,
+    ).toBeCloseTo(file.holdout.medianPixels, 6);
+    expect(report.captures.targets).toBe(14);
+    expect(report.captures.timedOut).toBe(0);
+    expect(report.captures.departure?.belowLimit).toBe(0);
   });
 });

@@ -11,8 +11,21 @@ export const GAZE_TUNING = {
     settleMs: 350,
     /** Post-settle frames that must agree before a target is captured (~640 ms at 80 ms/frame). */
     stableSamples: 8,
-    /** Largest per-feature median absolute deviation (eye-width units) across the iris features. */
-    stabilityMad: 0.03,
+    /**
+     * Largest range (max − min, eye widths) of the binocular iris position across the window, on
+     * each axis. A range, not a robust spread, so a window that still holds frames from the
+     * previous fixation can never pass. 0.03 is under the smallest step between consecutive
+     * targets on the synthetic eye (~0.04) and about three standard deviations of 0.01 noise.
+     */
+    stabilityRange: 0.03,
+    /** Frames before this are where the eyes were when the target appeared (saccades start later). */
+    onsetMs: 150,
+    /**
+     * A steady window must lie at least this far (eye widths) from that onset position, so a
+     * person still looking at the previous point is not captured there. About half the smallest
+     * consecutive-target step on the synthetic eye.
+     */
+    departureMin: 0.02,
     /** After settling, capture anyway once this long has passed, flagged as unstable. */
     stabilityTimeoutMs: 2500,
     /** A face/eye loss longer than this restarts the stable window (blinks are shorter). */
@@ -58,6 +71,12 @@ export const GAZE_TUNING = {
 } as const;
 
 export type GazeTuning = typeof GAZE_TUNING;
-export type CollectionTuning = { -readonly [K in keyof GazeTuning['collection']]: number };
-export type SmoothingTuning = { -readonly [K in keyof GazeTuning['smoothing']]: number };
-export type MovementTuning = { -readonly [K in keyof GazeTuning['movement']]: number };
+export type CollectionTuning = {
+  -readonly [K in keyof GazeTuning['collection']]: number;
+};
+export type SmoothingTuning = {
+  -readonly [K in keyof GazeTuning['smoothing']]: number;
+};
+export type MovementTuning = {
+  -readonly [K in keyof GazeTuning['movement']]: number;
+};

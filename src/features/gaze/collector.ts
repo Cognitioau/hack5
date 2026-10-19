@@ -15,9 +15,17 @@ export type CapturedTarget = {
   rows: number[][];
   /** Times of the inlier frames, relative to the target appearing. */
   usedTimes: number[];
-  /** Largest iris-feature median absolute deviation in the captured window. */
+  /** Largest range of the binocular iris position across the captured window (eye widths). */
   spread: number;
-  /** False when the window was captured by timeout rather than by meeting the stability limit. */
+  /**
+   * Distance (eye widths) from the binocular iris position when the target appeared to the
+   * captured window's median; null when no face was seen in that onset period.
+   */
+  departure: number | null;
+  /**
+   * False when captured by timeout: the window never became steady, or never left where the eyes
+   * were when the target appeared.
+   */
   stable: boolean;
   capturedAt: number;
 };
@@ -38,16 +46,25 @@ const deviation = (values: readonly number[]) => {
   const centre = median(values);
   return median(values.map((value) => Math.abs(value - centre)));
 };
-const stabilityIndices = (dimensions: number) =>
-  dimensions >= IRIS_FEATURES.length
-    ? [...IRIS_FEATURES]
-    : Array.from({ length: dimensions }, (_, index) => index);
 
-/** Largest median absolute deviation across the iris features of a window of frames. */
+/** Binocular iris position: both eyes' horizontal and vertical iris offsets, averaged. */
+export const irisPosition = (row: readonly number[]): [number, number] => [
+  ((row[0] ?? Number.NaN) + (row[2] ?? Number.NaN)) / 2,
+  ((row[1] ?? Number.NaN) + (row[3] ?? Number.NaN)) / 2,
+];
+
+/**
+ * Largest range (max − min) of the binocular iris position across a window, on either axis.
+ * Deliberately not robust: any frame still on the previous fixation widens it.
+ */
 export function windowSpread(rows: readonly (readonly number[])[]): number {
   if (!rows.length) return Number.POSITIVE_INFINITY;
+  const positions = rows.map(irisPosition);
   return Math.max(
-    ...stabilityIndices(rows[0]?.length ?? 0).map((index) => deviation(column(rows, index))),
+    ...[0, 1].map((axis) => {
+      const values = positions.map((position) => position[axis] ?? Number.NaN);
+      return Math.max(...values) - Math.min(...values);
+    }),
   );
 }
 
@@ -56,7 +73,7 @@ export function rejectOutliers(
   rows: readonly (readonly number[])[],
   tuning: Pick<CollectionTuning, 'outlierZ' | 'madFloor'> = GAZE_TUNING.collection,
 ): number[] {
-  const indices = stabilityIndices(rows[0]?.length ?? 0);
+  const indices = [...IRIS_FEATURES];
   const centres = indices.map((index) => median(column(rows, index)));
   const scales = indices.map(
     (index) => 1.4826 * Math.max(tuning.madFloor, deviation(column(rows, index))),
@@ -74,12 +91,14 @@ export function rejectOutliers(
 }
 
 /**
- * Collects one target's frames: drops the settling period, waits for a stable window, then
- * captures it and stops changing, so later reading or cursor movement cannot contaminate it.
+ * Collects one target's frames: drops the settling period, waits for a steady window that has
+ * left where the eyes were when the target appeared, then captures it and stops changing, so
+ * later reading or cursor movement cannot contaminate it.
  */
 export class TargetCollector {
   private readonly recorded: FeatureSample[] = [];
   private window: { t: number; features: number[] }[] = [];
+  private readonly onset: [number, number][] = [];
   private lastSeen: number | undefined;
   private captured: CapturedTarget | undefined;
 
@@ -104,13 +123,17 @@ export class TargetCollector {
       return this.state(t);
     }
     this.lastSeen = t;
+    if (t < this.tuning.onsetMs) this.onset.push(irisPosition(features));
     if (t < this.tuning.settleMs) return this.state(t);
     this.window.push({ t, features: [...features] });
     this.window = this.window.slice(-this.tuning.stableSamples);
     if (this.window.length < this.tuning.stableSamples) return this.state(t);
     const rows = this.window.map((sample) => sample.features);
     const spread = windowSpread(rows);
-    const stable = spread <= this.tuning.stabilityMad;
+    const departure = this.departure(rows);
+    const stable =
+      spread <= this.tuning.stabilityRange &&
+      (departure === null || departure >= this.tuning.departureMin);
     if (!stable && t - this.tuning.settleMs < this.tuning.stabilityTimeoutMs) return this.state(t);
     const kept = rejectOutliers(rows, this.tuning);
     const inliers = kept.map((index) => rows[index] ?? []);
@@ -123,16 +146,32 @@ export class TargetCollector {
       rows: inliers,
       usedTimes: kept.map((index) => this.window[index]?.t ?? Number.NaN),
       spread,
+      departure,
       stable,
       capturedAt: t,
     };
     return { phase: 'captured', progress: 1, captured: this.captured };
   }
 
+  private departure(rows: readonly (readonly number[])[]): number | null {
+    if (!this.onset.length) return null;
+    const positions = rows.map(irisPosition);
+    return Math.hypot(
+      ...[0, 1].map(
+        (axis) =>
+          median(positions.map((position) => position[axis] ?? Number.NaN)) -
+          median(this.onset.map((position) => position[axis] ?? Number.NaN)),
+      ),
+    );
+  }
+
   private state(t: number): CollectionState {
     return t < this.tuning.settleMs
       ? { phase: 'settling', progress: 0 }
-      : { phase: 'collecting', progress: this.window.length / this.tuning.stableSamples };
+      : {
+          phase: 'collecting',
+          progress: this.window.length / this.tuning.stableSamples,
+        };
   }
 }
 

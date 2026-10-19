@@ -4,7 +4,8 @@
 //
 // Re-runs the lab's own TypeScript (bundled in memory with esbuild, nothing written to disk) on
 // each file: per model variant, the leave-one-target-out error on the nine calibration targets and
-// the error on the five separate checks, plus a settling-time sweep replayed from recorded frames.
+// the error on the five separate checks, a summary of how the live captures went, and settling,
+// window-length and steadiness-range sweeps replayed from recorded frames.
 // The files hold derived eye measurements only; this script reads them locally and sends nothing.
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
@@ -42,6 +43,7 @@ const { evaluateSession, parseDiagnostics, VARIANT_LABELS } = await import(
 );
 
 const px = (value) => (Number.isFinite(value) ? String(Math.round(value)) : '—');
+const num = (value) => (Number.isFinite(value) ? value.toFixed(3) : '—');
 const pair = (summary) =>
   summary ? `${px(summary.medianPixels)} / ${px(summary.maximumPixels)}` : '—';
 const label = (variant) =>
@@ -53,14 +55,15 @@ const pad = (text, width) => String(text).padEnd(width);
 const reports = [];
 for (const file of files) {
   let session;
+  let report;
   try {
     session = parseDiagnostics(JSON.parse(await readFile(resolve(file), 'utf8')));
+    report = evaluateSession(session);
   } catch (error) {
     console.error(`${file}: ${error instanceof Error ? error.message : error}`);
     process.exitCode = 1;
     continue;
   }
-  const report = evaluateSession(session);
   reports.push({ file: basename(file), report });
   if (json) continue;
   const { viewport, holdout } = session;
@@ -81,13 +84,23 @@ for (const file of files) {
       `${pad(label(row.variant), 50)}${pad(Number.isFinite(row.lambda) ? row.lambda : '—', 7)}${pad(pair(row.crossValidation), 26)}${pair(row.validation)}`,
     );
   console.log(`\nCurrent code would select: ${report.selected.variant} λ${report.selected.lambda}`);
+  const { captures } = report;
+  const limits = session.tuning.collection;
+  console.log(
+    `\nCaptures: ${captures.targets - captures.timedOut}/${captures.targets} steady; ${captures.timedOut} by timeout. Steadiness range median ${num(captures.spread.median)}, 90th percentile ${num(captures.spread.p90)} (limit ${limits.stabilityRange}).`,
+  );
+  console.log(
+    captures.departure
+      ? `Departure from the onset position: median ${num(captures.departure.median)}, smallest ${num(captures.departure.minimum)}; ${captures.departure.belowLimit} below the limit ${limits.departureMin}.`
+      : 'Departure: no target had a face visible as it appeared.',
+  );
   const sweepTable = (title, rows) => {
     console.log(
-      `\n${title}\n${pad('settle ms', 11)}${pad('window', 8)}${pad('captured', 10)}${pad('unstable', 10)}${pad('selected', 22)}checks median / max px`,
+      `\n${title}\n${pad('settle ms', 11)}${pad('window', 8)}${pad('range', 8)}${pad('captured', 10)}${pad('unstable', 10)}${pad('selected', 22)}checks median / max px`,
     );
     for (const row of rows)
       console.log(
-        `${pad(row.settleMs, 11)}${pad(row.stableSamples, 8)}${pad(row.capturedTargets, 10)}${pad(row.unstableTargets, 10)}${pad(row.selected ? `${row.selected.variant} λ${row.selected.lambda}` : '—', 22)}${pair(row.validation)}`,
+        `${pad(row.settleMs, 11)}${pad(row.stableSamples, 8)}${pad(row.stabilityRange, 8)}${pad(row.capturedTargets, 10)}${pad(row.unstableTargets, 10)}${pad(row.selected ? `${row.selected.variant} λ${row.selected.lambda}` : '—', 22)}${pair(row.validation)}`,
       );
   };
   sweepTable(
@@ -95,6 +108,7 @@ for (const file of files) {
     report.settleSweep,
   );
   sweepTable('Stable-window sweep (frames per target):', report.windowSweep);
+  sweepTable('Steadiness-range sweep (eye widths):', report.rangeSweep);
 }
 
 if (json) console.log(JSON.stringify(reports, null, 2));

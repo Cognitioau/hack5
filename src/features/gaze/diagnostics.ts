@@ -16,8 +16,9 @@ import {
 
 export const GAZE_DIAGNOSTICS_SCHEMA = 'zombie-hand.gaze-diagnostics';
 export const GAZE_DIAGNOSTICS_VERSION = 1;
+/** Must list every field the file can hold; tests pin the key set (update gaze.html and PRIVACY too). */
 export const GAZE_DIAGNOSTICS_CONTENTS =
-  'Viewport geometry, target positions, the ten derived geometric eye measurements for each processed camera frame during calibration and checks, the model choice and its cross-validation table, check errors and live-dot movement statistics. No camera images, video frames or face-mesh landmark arrays.';
+  "File format name and version, creation time and extension version; the gaze-lab tuning constants; viewport geometry (page size, window position and size, pixel ratio); target positions; for each processed camera frame during calibration and checks, its time since the target appeared and the ten derived geometric eye measurements, or an empty marker when no face or open eyes were measurable; the frames each target was captured from, with their times, steadiness range, departure distance and steady flag; the chosen model and its cross-validation table; each check's predicted point, pixel error and head-movement measure, and the check summary; live-dot duration, update counts by outcome and frame-to-frame movement statistics. No camera images, video frames or face-mesh landmark arrays.";
 
 type Point = { x: number; y: number };
 export type TargetRecord = {
@@ -158,6 +159,12 @@ export function buildDiagnostics(input: {
   live: LiveStatistics | null;
 }): GazeDiagnostics {
   // Copy field by field so nothing beyond the documented contents can reach the file.
+  const steps = (statistics: StepStatistics): StepStatistics => ({
+    steps: statistics.steps,
+    medianStepPixels: statistics.medianStepPixels,
+    p90StepPixels: statistics.p90StepPixels,
+  });
+  const { viewport, holdout, live } = input;
   const target = (record: TargetRecord): TargetRecord => ({
     index: record.index,
     target: { x: record.target.x, y: record.target.y },
@@ -170,6 +177,7 @@ export function buildDiagnostics(input: {
       rows: record.captured.rows.map((row) => [...row]),
       usedTimes: [...record.captured.usedTimes],
       spread: record.captured.spread,
+      departure: record.captured.departure,
       stable: record.captured.stable,
       capturedAt: record.captured.capturedAt,
     },
@@ -180,7 +188,15 @@ export function buildDiagnostics(input: {
     createdAt: input.createdAt,
     extensionVersion: input.extensionVersion,
     contents: GAZE_DIAGNOSTICS_CONTENTS,
-    viewport: { ...input.viewport },
+    viewport: {
+      width: viewport.width,
+      height: viewport.height,
+      screenX: viewport.screenX,
+      screenY: viewport.screenY,
+      outerWidth: viewport.outerWidth,
+      outerHeight: viewport.outerHeight,
+      pixelRatio: viewport.pixelRatio,
+    },
     tuning: currentTuning(),
     featureNames: [...FEATURE_NAMES],
     calibration: input.calibration.map(target),
@@ -198,10 +214,33 @@ export function buildDiagnostics(input: {
     model: {
       variant: input.selection.chosen.variant,
       lambda: input.selection.chosen.lambda,
-      crossValidation: input.selection.table.map((score) => ({ ...score })),
+      crossValidation: input.selection.table.map((score) => ({
+        variant: score.variant,
+        lambda: score.lambda,
+        medianPixels: score.medianPixels,
+        meanPixels: score.meanPixels,
+        maximumPixels: score.maximumPixels,
+      })),
     },
-    holdout: { ...input.holdout },
-    live: input.live,
+    holdout: {
+      medianPixels: holdout.medianPixels,
+      maximumPixels: holdout.maximumPixels,
+      points: holdout.points,
+    },
+    live: live
+      ? {
+          durationMs: live.durationMs,
+          counts: {
+            updates: live.counts.updates,
+            predicted: live.counts.predicted,
+            lostFace: live.counts.lostFace,
+            moved: live.counts.moved,
+            outsideViewport: live.counts.outsideViewport,
+          },
+          raw: steps(live.raw),
+          smoothed: steps(live.smoothed),
+        }
+      : null,
   };
 }
 
@@ -251,7 +290,12 @@ function parseTarget(value: unknown, path: string): TargetRecord {
         finite(time, `${path}.captured.usedTimes[${index}]`),
       ),
       spread: finite(captured.spread, `${path}.captured.spread`),
-      stable: typeof captured.stable === 'boolean' ? captured.stable : fail(`${path}.stable`),
+      departure:
+        captured.departure === null
+          ? null
+          : finite(captured.departure, `${path}.captured.departure`),
+      stable:
+        typeof captured.stable === 'boolean' ? captured.stable : fail(`${path}.captured.stable`),
       capturedAt: finite(captured.capturedAt, `${path}.captured.capturedAt`),
     },
   };

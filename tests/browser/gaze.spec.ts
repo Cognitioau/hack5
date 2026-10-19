@@ -87,7 +87,7 @@ type Diagnostics = {
     samples: { t: number; features: number[] | null }[];
     captured: { usedTimes: number[]; stable: boolean };
   }[];
-  validation: { errorPixels: number }[];
+  validation: { errorPixels: number; captured: { usedTimes: number[]; stable: boolean } }[];
   model: { variant: string; lambda: number; crossValidation: unknown[] };
   holdout: { medianPixels: number; points: number };
   live: {
@@ -97,6 +97,8 @@ type Diagnostics = {
   };
 };
 const SETTLE_MS = 350;
+/** During the checks the synthetic eyes stay on the previous point this long (> settle + window). */
+const SLOW_REACTION_MS = 1000;
 
 /** Every key, and numeric arrays longer than one feature vector or x/y/z points (landmarks). */
 function inspect(value: unknown, found = { keys: new Set<string>(), suspicious: 0 }) {
@@ -188,9 +190,16 @@ test('synthetic eyes: settled capture, smoothing, movement guard, export and off
       await expect(target).toHaveAttribute('data-state', 'captured');
       if (index < 9) {
         await expect(target).toBeFocused();
+        if (index === 8)
+          await page.evaluate((ms) => {
+            window.gazeHarness.reactionMs = ms;
+          }, SLOW_REACTION_MS);
         await page.keyboard.press('Space');
       } else await target.click();
     }
+    await page.evaluate(() => {
+      window.gazeHarness.reactionMs = 220;
+    });
     await expect(status).toContainText('Live gaze estimate');
     await expect(page.locator('#gaze-diagnostics')).toContainText('leave-one-out cross-validation');
     await expect(page.locator('#gaze-diagnostics')).toContainText('5 separate checks');
@@ -202,6 +211,11 @@ test('synthetic eyes: settled capture, smoothing, movement guard, export and off
     expect(log).toHaveLength(14);
     for (const entry of log)
       expect((entry.enabled ?? 0) - entry.shown).toBeGreaterThanOrEqual(SETTLE_MS + 7 * 80 - 10);
+    // A slow person: Click waited for the eyes to arrive, not just for settling and a window.
+    for (const entry of log.slice(9))
+      expect((entry.enabled ?? 0) - entry.shown).toBeGreaterThanOrEqual(
+        SLOW_REACTION_MS + 7 * 80 - 10,
+      );
 
     // Live phase: hold the synthetic gaze still and watch the purple dot.
     await page.evaluate(() => {
@@ -284,6 +298,11 @@ test('synthetic eyes: settled capture, smoothing, movement guard, export and off
     expect(smoothed.medianStepPixels).toBeLessThan(0.6 * raw.medianStepPixels);
     expect(medianStep).toBeLessThan(0.6 * raw.medianStepPixels);
     expect(exported.live.counts.moved).toBeGreaterThan(0);
+    // The slow checks were captured after the eyes arrived, not on the previous point.
+    for (const record of exported.validation) {
+      expect(Math.min(...record.captured.usedTimes)).toBeGreaterThanOrEqual(SLOW_REACTION_MS - 20);
+      expect(record.captured.stable).toBe(true);
+    }
     // Synthetic eyes with a linear map: a sanity bound, not a human accuracy claim.
     expect(exported.holdout.medianPixels).toBeLessThan(60);
 

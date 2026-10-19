@@ -198,7 +198,7 @@ export function mountGazeLab(environment?: CameraEnvironment): void {
     const unstable = [...calibration, ...validation].filter(
       (record) => !record.captured.stable,
     ).length;
-    diagnostics.textContent = `Model chosen by leave-one-out cross-validation: ${VARIANT_LABELS[chosen.variant]}, λ ${chosen.lambda} (median ${rounded(chosen.medianPixels)} px, largest ${rounded(chosen.maximumPixels)} px across ${calibration.length} calibration points). ${holdout.points} separate checks: median deviation ${rounded(holdout.medianPixels)} px; largest deviation ${rounded(holdout.maximumPixels)} px. These are measured against the points you looked at in this session.${unstable ? ` ${unstable} point${unstable === 1 ? ' was' : 's were'} captured without meeting the steadiness limit.` : ''}`;
+    diagnostics.textContent = `Model chosen by leave-one-out cross-validation: ${VARIANT_LABELS[chosen.variant]}, λ ${chosen.lambda} (median ${rounded(chosen.medianPixels)} px, largest ${rounded(chosen.maximumPixels)} px across ${calibration.length} calibration points). ${holdout.points} separate checks: median deviation ${rounded(holdout.medianPixels)} px; largest deviation ${rounded(holdout.maximumPixels)} px. These are measured against the points you looked at in this session.${unstable ? ` ${unstable} point${unstable === 1 ? ' was' : 's were'} captured by timeout: the eyes were not steady, or had not moved from where they were when the point appeared.` : ''}`;
     jitter = new JitterTracker();
     smoother.reset();
     setPhase('ready');

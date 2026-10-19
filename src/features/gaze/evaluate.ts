@@ -41,10 +41,23 @@ export type SessionReport = {
   settleSweep: SweepRow[];
   /** Stable-window length varied with the current settling time. */
   windowSweep: SweepRow[];
+  /** Steadiness range varied with the other current settings. */
+  rangeSweep: SweepRow[];
+  /** How the live captures went, to place the steadiness and departure limits. */
+  captures: CaptureSummary;
+};
+export type CaptureSummary = {
+  targets: number;
+  /** Captured by timeout rather than by a steady window that had left the onset position. */
+  timedOut: number;
+  spread: { median: number; p90: number };
+  /** Null when no target had a face visible as it appeared. */
+  departure: { median: number; minimum: number; belowLimit: number } | null;
 };
 export type SweepRow = {
   settleMs: number;
   stableSamples: number;
+  stabilityRange: number;
   capturedTargets: number;
   unstableTargets: number;
   /** Null unless every calibration target was captured, so rows stay comparable. */
@@ -159,6 +172,32 @@ function legacyReport(session: GazeDiagnostics, viewport: Viewport): VariantRepo
 
 export const SETTLE_SWEEP_MS = [0, 200, 350, 500, 700, 1000] as const;
 export const WINDOW_SWEEP_SAMPLES = [5, 8, 10, 12, 15] as const;
+export const RANGE_SWEEP = [0.015, 0.02, 0.03, 0.045, 0.06] as const;
+
+const at = (values: readonly number[], fraction: number) => {
+  const ordered = [...values].sort((a, b) => a - b);
+  return ordered[Math.min(ordered.length - 1, Math.floor(fraction * ordered.length))] ?? Number.NaN;
+};
+function captureSummary(session: GazeDiagnostics): CaptureSummary {
+  const captured = [...session.calibration, ...session.validation].map((record) => record.captured);
+  const departures = captured.flatMap((capture) =>
+    capture.departure === null ? [] : [capture.departure],
+  );
+  const spreads = captured.map((capture) => capture.spread);
+  return {
+    targets: captured.length,
+    timedOut: captured.filter((capture) => !capture.stable).length,
+    spread: { median: median(spreads), p90: at(spreads, 0.9) },
+    departure: departures.length
+      ? {
+          median: median(departures),
+          minimum: Math.min(...departures),
+          belowLimit: departures.filter((value) => value < session.tuning.collection.departureMin)
+            .length,
+        }
+      : null,
+  };
+}
 
 function sweep(
   session: GazeDiagnostics,
@@ -183,6 +222,7 @@ function sweep(
   return {
     settleMs: tuning.settleMs,
     stableSamples: tuning.stableSamples,
+    stabilityRange: tuning.stabilityRange,
     capturedTargets: captures.filter(Boolean).length,
     unstableTargets: captures.filter((captured) => captured && !captured.stable).length,
     selected: result ? { variant: result.choice.variant, lambda: result.choice.lambda } : null,
@@ -235,6 +275,9 @@ export function evaluateSession(
   const windowSweep = WINDOW_SWEEP_SAMPLES.map((stableSamples) =>
     sweep(session, { ...current, stableSamples }, viewport, lambdas),
   );
+  const rangeSweep = RANGE_SWEEP.map((stabilityRange) =>
+    sweep(session, { ...current, stabilityRange }, viewport, lambdas),
+  );
   return {
     recorded: {
       variant: session.model.variant,
@@ -246,5 +289,7 @@ export function evaluateSession(
     variants,
     settleSweep,
     windowSweep,
+    rangeSweep,
+    captures: captureSummary(session),
   };
 }
