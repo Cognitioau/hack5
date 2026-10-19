@@ -54,6 +54,8 @@ Direct PDF/media file downloading, full transcript companions/cache, OCR, cloud 
 
 ## Revision and reproducibility
 
-The planning baseline is 0e18f6c96b79468452ef9c946525a8bb3af40b35. This status accompanies the first runtime implementation. Each generated archive includes BUILD_INFO.json with its exact source commit, dirty flag, source snapshot digest and per-file SHA-256 inventory; .cache/packages/SHA256SUMS identifies the archives. Regenerate with npm run package after committing for clean provenance. GitHub CI status is reported separately from these local results.
+The runtime implementation is commit 4a78b082cd8dfc6e0877ea002cf3f949c99cfd62, built on planning baseline 0e18f6c96b79468452ef9c946525a8bb3af40b35. Its [GitHub CI run](https://github.com/Cognitioau/hack5/actions/runs/39323224203) passed every check and uploaded both archives. A follow-up pins Ubuntu 24.04 and current Node-24-based official Actions to remove runner migration/deprecation warnings; it does not change application code.
+
+Each generated archive includes BUILD_INFO.json with its exact source commit, dirty flag, source snapshot digest and per-file SHA-256 inventory; .cache/packages/SHA256SUMS identifies the archives. Regenerate with npm run package after committing for clean provenance. Latest CI status remains visible on the repository's Actions page.
 
 See [README](../README.md), [TESTING](TESTING.md), [IMPLEMENTATION](IMPLEMENTATION.md) and [PRIVACY](PRIVACY.md) for runnable instructions and evidence boundaries. Development used Codex and authorized Codex subagents; the exact session model identifier was not exposed. Runtime models and licenses are pinned in [DEPENDENCIES](DEPENDENCIES.md) and [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md).
