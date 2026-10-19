@@ -12,7 +12,7 @@ Updated 20 October 2026 AEDT. This is a working development build, not a complet
 - Image bytes → verified visible crop → labelled link; explicit exact-origin download consent separate from universal page access, immediate revocation, no credential forwarding, size/type/redirect restrictions.
 - YouTube confirmation-time moments, ad-clock rejection, partial native transcript reader, manual WebVTT/SRT/timestamped import, provenance and cue-specific search links.
 - Recovery preserves pending local lifecycle changes, quarantines positively observed missing/edited evidence, and adopts verified newer remote lifecycle only when the local saved snapshot has not changed.
-- Isolated local gaze calibration lab with explicit camera control, held-out diagnostics, no sample persistence and blocked external connections. Gaze does not yet arm page captures.
+- Isolated local gaze calibration lab with explicit camera control, settled and steadiness-checked capture per point, per-session model choice by leave-one-target-out cross-validation, held-out diagnostics, a One Euro–smoothed live dot with a head-movement warning, a click-only diagnostics download with an offline evaluator, no automatic persistence and blocked external connections. Gaze does not yet arm page captures. Its tuning constants are unfitted starting points; see Gaze tuning below.
 - Full and core build profiles, strict contracts, AST boundaries, pinned dependencies, public-source exclusions, license notices, CI and validated archive generation.
 
 ## Verified evidence
@@ -37,7 +37,19 @@ The real-plugin probe verified note/attachment writes, conditional archive, raw-
 
 Browser tests use the real built extension and trusted inputs against synthetic sites and a protocol fixture. They verify an exact 240×120 crop with zero overlay/altered pixels, semantic retrieval of imported captions linked to t=30, archive persistence after restart and credential isolation. Most test-only copied manifests pregrant exact fixture origins; the universal-activation fixture uses a separate disposable all-sites grant, proving image crops in a new tab without a per-tab toolbar action. The unmodified production manifest's initial denial is separately verified. Native optional-permission UI remains a manual gate.
 
-Offline inference uses real packaged weights/WASM and verifies meaningful similarity ordering and cold restart. Gaze tests use a fake camera and separately observed public portrait landmarks; they do not measure a person's gaze accuracy. The gaze page blocks the upstream runtime's attempted telemetry with connect-src 'self'.
+Offline inference uses real packaged weights/WASM and verifies meaningful similarity ordering and cold restart. Gaze tests use a fake camera and separately observed public portrait landmarks; they do not measure a person's gaze accuracy. A test-only harness also drives the real lab controller with synthetic eye landmarks; that checks mechanisms, not accuracy. The gaze page blocks the upstream runtime's attempted telemetry with connect-src 'self'.
+
+## Gaze tuning (branch `claude/gaze-tuning`)
+
+**No human gaze accuracy has been measured.** This branch makes the lab better founded and makes one live session produce the data to tune it. All constants live in `src/features/gaze/tuning.ts`:
+
+- Collection: drop the first 350 ms after a target appears; capture once 8 frames agree (iris median absolute deviation ≤ 0.03 eye widths), reject frames beyond 3.5 robust deviations and average the rest; after 2.5 s unsteady points are captured and flagged rather than blocking. A shrinking centre dot is the fixation point; Click (or Space, since the captured target takes focus) enables only after capture. Optional auto-advance (default off) moves on 300 ms after capture.
+- Model: leave-one-target-out cross-validation over variants iris-only, iris + quadratic, iris + head-rotation and all ten features, each with λ ∈ {0.01, 0.1, 0.3, 1, 3, 10} (targets weighted equally), choosing the simplest candidate within 10% of the best mean error; standardised inputs clipped to ±4.
+- Live dot: One Euro filter in CSS pixels, min cutoff 0.6 Hz, β 0.0005, derivative cutoff 1 Hz, restart after a 500 ms gap. On synthetic white noise this leaves 0.40–0.48 of 40–120 px jitter and reaches 90% of a 600 px jump in ~320 ms.
+- Movement warning: inter-eye distance ±12% or eye-centre shift > 0.5 inter-eye distances, cleared below 80% of each limit.
+- Export and evaluation: **Download session diagnostics** (contents listed in [PRIVACY](PRIVACY.md)); `node scripts/gaze-eval.mjs <file…>` reprints per-variant cross-validation and check errors, an approximate pre-tuning reference, and settling/window sweeps.
+
+Synthetic evidence only: unit tests show the selection picks the quadratic variant for a quadratic map, iris-only when head features are noise, and iris + head when head turns explain the gaze; with the eye arriving 250 ms after each target appears, dropping settling raises the synthetic check median from 7–9 px to 119–132 px across three seeds. On synthetic eyes, which never glance away after capture, the approximate pre-tuning reference with 12 averaged frames can match or beat the 8-frame window; the window sweep on real data should decide that.
 
 Live inspection of one public YouTube watch page found its native transcript panel stuck on a spinner with no exposed cues. That is an extraction/availability limitation, not a claim that captions are absent. No broad native-transcript success rate is established; manual import is implemented and browser-tested.
 
@@ -49,7 +61,7 @@ Three explicitly authorized subagents owned capture/UI, vault/security, and tool
 
 1. Reload the existing unpacked extension and verify version 0.2.0; refresh already-open pages. Enable across tabs once and approve Chrome site access. Approve the exact vault endpoint and complete certificate setup through the plugin's documented procedure. Perform the installed extension → actual Obsidian → restart → retrieval loop. The adapter and browser halves are tested separately; this combined manual run remains open.
 2. Rehearse on three real public text targets, ten varied images and five YouTube caption categories. Record actual file/crop/link and transcript outcomes; no web-wide success percentage is claimed.
-3. Run human gaze calibration and held-out targets. Prove cross-window viewport mapping before connecting gaze to capture. Keep mouse confirmation usable independently.
+3. Run one live gaze session (about three minutes), download its diagnostics and run `node scripts/gaze-eval.mjs` on the file; tune settling, window length, λ grid and filter from that output. Then prove cross-window viewport mapping before connecting gaze to capture. Keep mouse confirmation usable independently.
 4. Record the real 60–90 second demo, screenshot and final ≤500-character submission description after the remaining checks pass. Target Friday 23 October, before the 24 October 05:00 AEDT deadline.
 
 Direct PDF/media file downloading, full transcript companions/cache, OCR, cloud summaries, Jev, chat, daily Resurrection, graph links and recording remain unimplemented. Recovery is bounded and does not continuously watch the vault; absent metadata listings remain unknown. Unsupported future records are exportable but not shown as editable cards. These gaps keep the broader M1/M2/gaze/M5 acceptance gates open despite the implemented paths passing their automated checks.

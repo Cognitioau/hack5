@@ -32,7 +32,7 @@ Activation persists across existing/new tabs, navigation and browser restart. Us
 - **YouTube moments:** confirmation-time video identity and timestamp, accessible native transcript cues, and search links back to cue times. Open YouTube's **Show transcript** panel before arming. Ads are rejected as video-clock sources. Successful native reads are labelled partial.
 - **Transcript fallback:** the graveyard accepts WebVTT, SRT and timestamped lines, with explicit import provenance. Untimed text cannot create invented cue times. Retained transcript text is bounded; this is not full-video archiving.
 - **Local recall:** packaged MiniLM embeddings, semantic or explicitly labelled keyword search, and related-note ghosts on pages where the hand is enabled.
-- **Gaze lab:** a separate experimental page with explicit camera Start/Stop, nine calibration points, five held-out targets and local diagnostics. Camera frames and calibration are not persisted. Gaze is not yet connected to page capture.
+- **Gaze lab:** a separate experimental page with explicit camera Start/Stop, nine calibration points with a settled, steadiness-checked capture per point, per-session model choice by leave-one-target-out cross-validation, five held-out targets, a smoothed live dot with a head-movement warning, and an explicit diagnostics download for offline tuning (`node scripts/gaze-eval.mjs`). Camera frames and calibration are not persisted. Gaze is not yet connected to page capture.
 
 Video moments save references and transcript evidence, not downloaded streaming video. Direct PDF/file links are currently references. OCR, cloud providers, Jev, chat, recording, daily Resurrection and graph linking are not implemented.
 
