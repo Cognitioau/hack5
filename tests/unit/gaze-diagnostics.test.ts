@@ -83,6 +83,10 @@ function inspect(value: unknown, found = { keys: new Set<string>(), suspicious: 
   return found;
 }
 
+const fail = (): never => {
+  throw new Error('Expected a value');
+};
+
 /** Every leaf path in a value, with array positions collapsed to []. */
 function leafPaths(value: unknown, path = '', found = new Set<string>()): Set<string> {
   if (Array.isArray(value)) for (const item of value) leafPaths(item, `${path}[]`, found);
@@ -94,6 +98,43 @@ function leafPaths(value: unknown, path = '', found = new Set<string>()): Set<st
 }
 
 describe('explicit session diagnostics export and offline evaluation', () => {
+  it('copies only documented fields even when its inputs carry extra ones', () => {
+    // Stand-in for any future field on these objects (a landmark array, say): it must not leak.
+    const leak = <T extends object>(value: T): T => Object.assign({ leak: [0.5, 0.5, 0] }, value);
+    const { file, selection } = exportSession();
+    const live = file.live ?? fail();
+    const leaky = buildDiagnostics({
+      createdAt: file.createdAt,
+      extensionVersion: file.extensionVersion,
+      viewport: leak(file.viewport),
+      calibration: file.calibration.map((record) =>
+        leak({
+          ...record,
+          target: leak(record.target),
+          samples: record.samples.map(leak),
+          captured: leak(record.captured),
+        }),
+      ),
+      validation: file.validation.map((record) =>
+        leak({
+          ...record,
+          prediction: leak(record.prediction),
+          movement: record.movement && leak(record.movement),
+        }),
+      ),
+      selection: { chosen: leak(selection.chosen), table: selection.table.map(leak) },
+      holdout: leak(file.holdout),
+      live: leak({
+        ...live,
+        counts: leak(live.counts),
+        raw: leak(live.raw),
+        smoothed: leak(live.smoothed),
+      }),
+    });
+    expect(JSON.stringify(leaky)).not.toContain('leak');
+    expect(JSON.parse(JSON.stringify(leaky))).toEqual(JSON.parse(JSON.stringify(file)));
+  });
+
   it('holds exactly the documented fields', () => {
     // A new field must be added here and described in GAZE_DIAGNOSTICS_CONTENTS, the gaze.html
     // hint and docs/PRIVACY.md in the same change.
