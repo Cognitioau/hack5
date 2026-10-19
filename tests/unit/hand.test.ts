@@ -2,6 +2,7 @@
 // @vitest-environment-options {"url":"https://example.org/article","pretendToBeVisual":true}
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '../../src/core/contracts/index';
+import { GRAVE_SPRITE } from '../../src/ui/grave-sprite';
 import { HandView } from '../../src/ui/hand';
 
 let shadow: ShadowRoot;
@@ -106,6 +107,61 @@ describe('target-local hand presentation', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(element('.effect').hidden).toBe(true);
     expect(element('.title').textContent).toBe('Still local.');
+  });
+
+  it('decodes the hand atlas once per page and draws the rendered frame for each pose', async () => {
+    const atlas = { width: 1090, height: 1784 } as unknown as CanvasImageSource;
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      () => ({ clearRect: vi.fn(), drawImage }) as unknown as CanvasRenderingContext2D,
+    );
+    const sprite = vi
+      .fn<() => Promise<CanvasImageSource | null>>()
+      .mockRejectedValueOnce(new Error('Synthetic interrupted read'))
+      .mockResolvedValue(atlas);
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'A failed read is retried');
+    await vi.advanceTimersByTimeAsync(0);
+    view.setTarget(rectangle, 'Decoded while the user confirms');
+    await vi.advanceTimersByTimeAsync(0);
+    view.setTarget(rectangle, 'Never decoded twice');
+    expect(sprite).toHaveBeenCalledTimes(2);
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    const { frame, columns } = GRAVE_SPRITE;
+    // The first frame of the rise: fingers bunched to punch through.
+    expect(drawImage).toHaveBeenLastCalledWith(
+      atlas,
+      0,
+      0,
+      frame.width,
+      frame.height,
+      0,
+      0,
+      frame.width,
+      frame.height,
+    );
+    const fist = GRAVE_SPRITE.rise + GRAVE_SPRITE.grab - 1;
+    // jsdom has no matchMedia; this view prefers reduced motion.
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({ matches: true }),
+    });
+    view.setState('armed', 'Circle the words.', 'Only highlighted text will be captured.');
+    view.setTarget(rectangle, 'Reduced motion holds the closed fist');
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    expect(drawImage).toHaveBeenLastCalledWith(
+      atlas,
+      (fist % columns) * frame.width,
+      Math.floor(fist / columns) * frame.height,
+      frame.width,
+      frame.height,
+      0,
+      0,
+      frame.width,
+      frame.height,
+    );
+    Reflect.deleteProperty(window, 'matchMedia');
   });
 
   it('keeps undo accessible while collapsed and suppresses it during a different pending capture', () => {

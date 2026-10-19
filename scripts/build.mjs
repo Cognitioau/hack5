@@ -95,6 +95,8 @@ for (const model of [metadata, ...(gazeMetadata ? [gazeMetadata] : [])])
     await mkdir(dirname(target), { recursive: true });
     await cp(resolve(root, '.cache/models', model.model, file.path), target);
   }
+await mkdir(resolve(destination, 'assets'), { recursive: true });
+await cp(resolve(root, 'assets/grave-hand.webp'), resolve(destination, 'assets/grave-hand.webp'));
 await mkdir(resolve(destination, 'runtime'), { recursive: true });
 await cp(
   resolve(root, 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm'),

@@ -3,7 +3,12 @@
  * hand bursts up, snatches a paper copy of the words and drags it under.
  * It never decides persistence: the view starts, buries or releases it only in
  * response to real capture state, and the source page DOM is never touched.
+ *
+ * The hand is a pre-rendered frame atlas (scripts/hand) drawn on a canvas. The
+ * atlas arrives as an already-decoded bitmap, so the page's CSP never sees a URL.
  */
+
+import { GRAVE_SPRITE } from './grave-sprite';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const XHTML = 'http://www.w3.org/1999/xhtml';
@@ -111,8 +116,10 @@ export interface GravePose {
   debris: number;
   puff: number;
   rig: Point & { rotation: number };
+  /** Rise progress: fingers bunched, flared, then hooked into a claw. */
+  reach: number;
+  /** Claw to fist. */
   curl: number;
-  wiggle: number;
   time: number;
   scrap: { mode: 'page' | 'held'; world: Transform; opacity: number; crumple: number };
   mound: number;
@@ -174,13 +181,15 @@ export function graveLayout(scene: GraveScene): GraveLayout {
     ry: 20 * scale,
   };
   const scrapSize = page ? { width: 224, height: 128 } : { width: 184, height: 70 };
+  const grip = GRAVE_SPRITE.grip[GRAVE_SPRITE.grip.length - 1] ?? { x: 0, y: -50 };
   return {
     kind: scene.kind,
     scale,
     hand: scale * HAND_SCALE,
     timing: page ? PAGE_TIMING : TEXT_TIMING,
     hole,
-    risen: { x: hole.x, y: hole.y - 14 * scale },
+    // The wrist clears the lip so a length of forearm thrusts up out of the grave.
+    risen: { x: hole.x, y: hole.y - 40 * scale },
     buried: { x: hole.x, y: hole.y + 200 * scale },
     scrapSize,
     scrapStart: page
@@ -192,9 +201,10 @@ export function graveLayout(scene: GraveScene): GraveLayout {
         }
       : { ...sourceCenter, sx: 1, sy: 1 },
     scrapRest: page ? { x: width / 2, y: height / 2 - 30 * scale } : sourceCenter,
+    // The copy is gripped in the closed fist and sticks out either side of it.
     held: page
-      ? { x: 0, y: -90, rotation: -5, scale: 0.56 }
-      : { x: 2, y: -77, rotation: -6, scale: 0.66 },
+      ? { x: grip.x, y: grip.y, rotation: -5, scale: 0.42 }
+      : { x: grip.x, y: grip.y, rotation: -6, scale: 0.48 },
     debris: particles(12, 7, scale, false),
     puff: particles(7, 19, scale, true),
   };
@@ -232,7 +242,7 @@ function grabPose(layout: GraveLayout, t: number): GravePose {
   const { timing } = layout;
   const shakeAmount = t >= 60 && t <= 280 ? 3 * layout.scale * (1 - (t - 60) / 220) : 0;
   const rig = rigAt(layout, t);
-  const curl = 0.12 + 0.88 * inOutCubic(progress(t, timing.curlStart, timing.curlEnd));
+  const curl = inOutCubic(progress(t, timing.curlStart, timing.curlEnd));
   let scrap: GravePose['scrap'];
   if (t < timing.swap) {
     const target = heldWorld(layout, rigAt(layout, timing.swap));
@@ -289,8 +299,8 @@ function grabPose(layout: GraveLayout, t: number): GravePose {
     debris: t - 80,
     puff: -1,
     rig,
+    reach: progress(t, timing.riseStart, timing.curlStart),
     curl,
-    wiggle: 1 - progress(t, timing.curlStart - 60, timing.curlStart + 30),
     time: t,
     scrap,
     mound: 0,
@@ -323,7 +333,6 @@ function buryPose(layout: GraveLayout, u: number, from: GravePose): GravePose {
     debris: -1,
     puff: u - 380,
     rig,
-    wiggle: 0,
     time: from.time + u,
     scrap,
     mound: rest,
@@ -367,7 +376,6 @@ function releasePose(layout: GraveLayout, u: number, from: GravePose): GravePose
     puff: -1,
     rig,
     curl: from.curl * (1 - opening),
-    wiggle: 0,
     time: from.time + u,
     scrap,
   };
@@ -381,40 +389,30 @@ export function poseAt(layout: GraveLayout, state: GraveState): GravePose {
   return { ...state.from, opacity: state.from.opacity * (1 - progress(u, 0, GRAVE_DURATION.fade)) };
 }
 
+/**
+ * The visible region for anything climbing out of the grave, as an SVG clip
+ * path. Both shapes wind clockwise, so where they overlap the nonzero rule
+ * keeps the arm instead of cancelling it out.
+ */
+export function graveClip(x: number, y: number, rx: number, ry: number): string {
+  const fixed = (value: number) => value.toFixed(2);
+  const above = `M-99999 -99999H99999V${fixed(y)}H-99999Z`;
+  if (rx <= 0.5) return above;
+  return `${above}M${fixed(x - rx)} ${fixed(y)}a${fixed(rx)} ${fixed(ry)} 0 1 1 ${fixed(2 * rx)} 0a${fixed(rx)} ${fixed(ry)} 0 1 1 ${fixed(-2 * rx)} 0Z`;
+}
+
+/** The atlas frame for a pose: the rise until the fingers start to close, then the grab. */
+export function spriteFrame(pose: Pick<GravePose, 'reach' | 'curl'>): number {
+  const { rise, grab } = GRAVE_SPRITE;
+  if (pose.curl > 0) return rise + Math.round(clamp(pose.curl, 0, 1) * (grab - 1));
+  return Math.round(clamp(pose.reach, 0, 1) * (rise - 1));
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 
-interface FingerSpec {
-  x: number;
-  y: number;
-  splay: number;
-  /** A crooked fingertip angle in the open claw. */
-  crook: number;
-  lengths: [number, number];
-  width: number;
-  phase: number;
-}
-// Left hand, palm toward the viewer: thumb on the viewer's left.
-const FINGERS: FingerSpec[] = [
-  { x: 20, y: -57, splay: 19, crook: 9, lengths: [23, 22], width: 9.5, phase: 2.4 },
-  { x: 7, y: -61, splay: 7, crook: -6, lengths: [29, 28], width: 10.8, phase: 1.1 },
-  { x: -7, y: -63, splay: -3, crook: 5, lengths: [31, 30], width: 11.2, phase: 0.2 },
-  { x: -21, y: -59, splay: -15, crook: -8, lengths: [28, 27], width: 10.8, phase: 3.3 },
-];
-const THUMB = { x: -27, y: -17, lengths: [22, 21] as [number, number], width: 12.5 };
-const SKIN_STROKE = '#232b1d';
 /** The rig is drawn this much larger than the hole and debris. */
-const HAND_SCALE = 1.3;
-
-/** A bony phalanx: narrow waist, knobbly joint, rounded end. */
-function capsule(width: number, length: number, taper = 0.86): string {
-  const bottom = width / 2;
-  const top = (width * taper) / 2;
-  const waist = top * 0.88;
-  const knob = Math.max(top, bottom) * 1.06;
-  const joint = -length + top * 1.6;
-  return `M${-bottom} 4C${-bottom} ${-length * 0.25} ${-waist} ${-length * 0.45} ${-waist} ${-length * 0.6}C${-waist} ${joint + 4} ${-knob} ${joint + 2} ${-knob} ${joint}A${top * 1.04} ${top * 1.2} 0 0 1 ${knob} ${joint}C${knob} ${joint + 2} ${waist} ${joint + 4} ${waist} ${-length * 0.6}C${waist} ${-length * 0.45} ${bottom} ${-length * 0.25} ${bottom} 4Z`;
-}
+const HAND_SCALE = 1.6;
 
 function parseColor(value: string | undefined): [number, number, number] | null {
   const match = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)/u.exec(
@@ -437,12 +435,11 @@ export class GraveEffect {
   private readonly crackGroup: SVGGElement;
   private readonly holeBack: SVGGElement;
   private readonly holeFront: SVGGElement;
+  private readonly pitShade: SVGEllipseElement;
   private readonly rig: SVGGElement;
-  private readonly proximal: SVGGElement[] = [];
-  private readonly distal: SVGGElement[] = [];
-  private readonly pads: SVGGElement[] = [];
-  private readonly backs: SVGGElement[] = [];
-  private readonly thumb: [SVGGElement, SVGGElement];
+  private readonly canvas: HTMLCanvasElement;
+  private sprite: CanvasImageSource | null = null;
+  private drawnFrame = -1;
   private readonly pageScrap: SVGGElement;
   private readonly heldScrap: SVGGElement;
   private readonly scrapObjects: SVGForeignObjectElement[] = [];
@@ -471,42 +468,14 @@ export class GraveEffect {
     const defs = svg('defs', {}, this.element);
     const gradient = (
       id: string,
-      stops: [number, string][],
+      stops: [number, string, number?][],
       attributes: Record<string, string | number> = {},
       tag: 'linearGradient' | 'radialGradient' = 'linearGradient',
     ): void => {
       const element = svg(tag, { id, ...attributes }, defs);
-      for (const [offset, color] of stops) svg('stop', { offset, 'stop-color': color }, element);
+      for (const [offset, color, opacity = 1] of stops)
+        svg('stop', { offset, 'stop-color': color, 'stop-opacity': opacity }, element);
     };
-    gradient('zh-skin', [
-      [0, '#5f6f4a'],
-      [0.32, '#a3b085'],
-      [0.62, '#b8c39a'],
-      [1, '#6b7a54'],
-    ]);
-    gradient(
-      'zh-palm',
-      [
-        [0, '#bcc79d'],
-        [0.7, '#97a67c'],
-        [1, '#6f7e57'],
-      ],
-      { cx: 0.45, cy: 0.42, r: 0.65 },
-      'radialGradient',
-    );
-    gradient(
-      'zh-nail',
-      [
-        [0, '#e3d8a8'],
-        [1, '#8d7c48'],
-      ],
-      { x1: 0, y1: 0, x2: 0, y2: 1 },
-    );
-    gradient('zh-cloth', [
-      [0, '#4b423b'],
-      [0.5, '#3a322d'],
-      [1, '#221d19'],
-    ]);
     gradient(
       'zh-pit',
       [
@@ -516,6 +485,16 @@ export class GraveEffect {
       ],
       { cx: 0.5, cy: 0.38, r: 0.62 },
       'radialGradient',
+    );
+    // The arm darkens as it sinks into the pit, deepest under the front lip.
+    gradient(
+      'zh-depth',
+      [
+        [0, '#0b0704', 0.25],
+        [0.5, '#0b0704', 0.62],
+        [1, '#0b0704', 0.94],
+      ],
+      { x1: 0, y1: 0, x2: 0, y2: 1 },
     );
     gradient(
       'zh-soil',
@@ -562,182 +541,29 @@ export class GraveEffect {
     this.pageScrap = svg('g', { class: 'grave-scrap' }, this.scene);
     const clipped = svg('g', { 'clip-path': 'url(#zh-grave-clip)' }, this.scene);
     this.rig = svg('g', { class: 'grave-rig' }, clipped);
+    this.pitShade = svg('ellipse', { fill: 'url(#zh-depth)' }, this.scene);
     this.holeFront = svg('g', { class: 'grave-lip' }, this.scene);
     const debrisGroup = svg('g', { class: 'grave-debris' }, this.scene);
     const restGroup = svg('g', { class: 'grave-rest' }, this.scene);
 
-    // Forearm and ragged sleeve, then the held scrap, then palm, fingers and
-    // thumb: the curled fingers close over the paper's lower half.
-    svg(
-      'path',
-      {
-        d: 'M-23 -6C-26 40-29 120-31 210L31 210C29 120 26 40 23 -6Z',
-        fill: 'url(#zh-skin)',
-        stroke: SKIN_STROKE,
-      },
-      this.rig,
-    );
-    svg(
-      'path',
-      {
-        d: 'M-12 52l7 4 5-3 6 3M-14 70l26 1',
-        fill: 'none',
-        stroke: '#3b4430',
-        'stroke-width': 1.2,
-        opacity: 0.6,
-      },
-      this.rig,
-    );
-    svg(
-      'path',
-      {
-        d: 'M-35 210L-34 16l6-9 5 8 7-12 5 10 6-7 6 9 7-11 5 9 6-8 5 7 5-6 2 2L36 210Z',
-        fill: 'url(#zh-cloth)',
-        stroke: '#15120f',
-      },
-      this.rig,
-    );
-    svg(
-      'path',
-      {
-        d: 'M-22 22l4 30M8 19l-3 26M24 26l2 22',
-        stroke: '#1a1612',
-        'stroke-width': 1.3,
-        fill: 'none',
-        opacity: 0.8,
-      },
-      this.rig,
-    );
+    // The held copy sits behind the hand, so the fist closes in front of it.
     this.heldScrap = svg('g', { class: 'grave-scrap held' }, this.rig);
-    svg(
-      'path',
+    const { frame, anchor, unitsPerPx } = GRAVE_SPRITE;
+    const sprite = svg(
+      'foreignObject',
       {
-        d: 'M-23 -2C-30 -18-33 -40-31 -57Q-30 -65-21 -65L21 -65Q31 -65 31 -56C32 -37 30 -17 23 -2Z',
-        fill: 'url(#zh-palm)',
-        stroke: SKIN_STROKE,
+        class: 'grave-hand',
+        x: -anchor.x * unitsPerPx,
+        y: -anchor.y * unitsPerPx,
+        width: frame.width * unitsPerPx,
+        height: frame.height * unitsPerPx,
       },
       this.rig,
     );
-    svg(
-      'path',
-      {
-        d: 'M-20 -43Q-2 -36 19 -46M-17 -29Q0 -22 16 -31M-4 -60Q-9 -34-2 -8',
-        fill: 'none',
-        stroke: '#4c5a3c',
-        'stroke-width': 1.2,
-        opacity: 0.55,
-      },
-      this.rig,
-    );
-    svg('ellipse', { cx: 11, cy: -17, rx: 7, ry: 5, fill: '#6e6142', opacity: 0.45 }, this.rig);
-
-    const segment = (parent: SVGGElement, width: number, length: number, tip: boolean): void => {
-      if (tip) {
-        const pad = svg('g', {}, parent);
-        svg(
-          'path',
-          {
-            d: `M${-width * 0.3} ${-length + 4}Q0 ${-length - 10} ${width * 0.3} ${-length + 4}Z`,
-            fill: 'url(#zh-nail)',
-            stroke: '#4a3f24',
-            'stroke-width': 1,
-          },
-          pad,
-        );
-        svg('path', { d: capsule(width, length), fill: 'url(#zh-skin)', stroke: SKIN_STROKE }, pad);
-        svg(
-          'path',
-          {
-            d: `M${-width * 0.28} ${-length * 0.45}q${width * 0.28} 2 ${width * 0.56} 0`,
-            fill: 'none',
-            stroke: '#45523a',
-            'stroke-width': 1,
-            opacity: 0.6,
-          },
-          pad,
-        );
-        const back = svg('g', { visibility: 'hidden' }, parent);
-        svg(
-          'path',
-          { d: capsule(width, length), fill: 'url(#zh-skin)', stroke: SKIN_STROKE },
-          back,
-        );
-        svg(
-          'rect',
-          {
-            x: -width * 0.32,
-            y: -length + 1,
-            width: width * 0.64,
-            height: 11,
-            rx: 3,
-            fill: 'url(#zh-nail)',
-            stroke: '#4a3f24',
-            'stroke-width': 1,
-          },
-          back,
-        );
-        svg(
-          'path',
-          {
-            d: `M${-width * 0.3} ${-length + 3}h${width * 0.6}`,
-            stroke: '#3a311b',
-            'stroke-width': 2,
-          },
-          back,
-        );
-        this.pads.push(pad);
-        this.backs.push(back);
-        return;
-      }
-      svg(
-        'path',
-        { d: capsule(width, length, 0.92), fill: 'url(#zh-skin)', stroke: SKIN_STROKE },
-        parent,
-      );
-      svg(
-        'path',
-        {
-          d: `M${-width * 0.32} ${-length + 3}q${width * 0.32} -3 ${width * 0.64} 0`,
-          fill: 'none',
-          stroke: '#3c4832',
-          'stroke-width': 1.1,
-          opacity: 0.7,
-        },
-        parent,
-      );
-      svg(
-        'path',
-        {
-          d: `M${-width * 0.26} ${-length * 0.5}q${width * 0.26} 2 ${width * 0.52} 0`,
-          fill: 'none',
-          stroke: '#45523a',
-          'stroke-width': 1,
-          opacity: 0.6,
-        },
-        parent,
-      );
-    };
-    for (const finger of FINGERS) {
-      const base = svg('g', { transform: `translate(${finger.x} ${finger.y})` }, this.rig);
-      const proximal = svg('g', {}, base);
-      segment(proximal, finger.width, finger.lengths[0], false);
-      const joint = svg('g', { transform: `translate(0 ${-finger.lengths[0]})` }, proximal);
-      const distal = svg('g', {}, joint);
-      segment(distal, finger.width * 0.94, finger.lengths[1], true);
-      this.proximal.push(proximal);
-      this.distal.push(distal);
-    }
-
-    const thumbBase = svg('g', { transform: `translate(${THUMB.x} ${THUMB.y})` }, this.rig);
-    const thumbProximal = svg('g', {}, thumbBase);
-    segment(thumbProximal, THUMB.width, THUMB.lengths[0], false);
-    const thumbJoint = svg('g', { transform: `translate(0 ${-THUMB.lengths[0]})` }, thumbProximal);
-    const thumbDistal = svg('g', {}, thumbJoint);
-    segment(thumbDistal, THUMB.width * 0.92, THUMB.lengths[1], true);
-    // The thumb never flips, so its pad stays visible.
-    this.pads.pop();
-    this.backs.pop()?.remove();
-    this.thumb = [thumbProximal, thumbDistal];
+    this.canvas = document.createElementNS(XHTML, 'canvas') as HTMLCanvasElement;
+    this.canvas.width = frame.width;
+    this.canvas.height = frame.height;
+    sprite.append(this.canvas);
     for (const [group, scrap] of [
       [this.pageScrap, 'page'],
       [this.heldScrap, 'held'],
@@ -780,6 +606,13 @@ export class GraveEffect {
       this.tomb,
     );
     this.element.setAttribute('hidden', '');
+  }
+
+  /** Supply the decoded frame atlas. Until it arrives the grave opens without a hand. */
+  useSprite(sprite: CanvasImageSource | null): void {
+    this.sprite = sprite;
+    this.drawnFrame = -1;
+    this.render();
   }
 
   /** Begin a new grab. Any previous scene is discarded. */
@@ -887,6 +720,28 @@ export class GraveEffect {
     this.paint(poseAt(this.layout, state));
   }
 
+  private drawSprite(frame: number): void {
+    if (!this.sprite || frame === this.drawnFrame) return;
+    const context = this.canvas.getContext('2d');
+    if (!context) return;
+    const { width, height } = GRAVE_SPRITE.frame;
+    const column = frame % GRAVE_SPRITE.columns;
+    const row = Math.floor(frame / GRAVE_SPRITE.columns);
+    context.clearRect(0, 0, width, height);
+    context.drawImage(
+      this.sprite,
+      column * width,
+      row * height,
+      width,
+      height,
+      0,
+      0,
+      width,
+      height,
+    );
+    this.drawnFrame = frame;
+  }
+
   private buildHole(rgb: [number, number, number]): void {
     const layout = this.layout;
     if (!layout) return;
@@ -903,6 +758,8 @@ export class GraveEffect {
     };
     this.holeBack.replaceChildren();
     this.holeFront.replaceChildren();
+    this.pitShade.setAttribute('rx', String(rx));
+    this.pitShade.setAttribute('ry', String(ry));
     svg('ellipse', { rx: rx * 1.22, ry: ry * 1.5, fill: '#5b4630', opacity: 0.45 }, this.holeBack);
     const flap = (angle: number, spread: number, reach: number, parent: Element, fill: string) => {
       const point = (theta: number, factor = 1) =>
@@ -1019,51 +876,19 @@ export class GraveEffect {
     const open = Math.max(0, pose.open);
     const holeTransform = `translate(${fixed(hole.x)} ${fixed(hole.y)}) scale(${fixed(open)})`;
     this.holeBack.setAttribute('transform', holeTransform);
+    this.pitShade.setAttribute('transform', holeTransform);
     this.holeFront.setAttribute('transform', holeTransform);
     const rx = hole.rx * open;
     const ry = hole.ry * open;
     // Everything above the hole's centre line, plus the opening itself: an arm
     // below the front lip is underground.
-    this.clip.setAttribute(
-      'd',
-      `M-99999 -99999H99999V${fixed(hole.y)}H-99999Z${
-        rx > 0.5
-          ? `M${fixed(hole.x - rx)} ${fixed(hole.y)}a${fixed(rx)} ${fixed(ry)} 0 1 0 ${fixed(2 * rx)} 0a${fixed(rx)} ${fixed(ry)} 0 1 0 ${fixed(-2 * rx)} 0Z`
-          : ''
-      }`,
-    );
+    this.clip.setAttribute('d', graveClip(hole.x, hole.y, rx, ry));
 
     this.rig.setAttribute(
       'transform',
       `translate(${fixed(pose.rig.x)} ${fixed(pose.rig.y)}) rotate(${fixed(pose.rig.rotation)}) scale(${fixed(layout.hand)})`,
     );
-    const curl = pose.curl;
-    for (const [index, finger] of FINGERS.entries()) {
-      const twitch = pose.wiggle * Math.sin(pose.time / 42 + finger.phase);
-      // Curling toward the viewer foreshortens the finger; past the fold the
-      // fingertip hangs down over the paper. The fingertip's own scale undoes
-      // its parent's foreshortening so its visible length stays honest.
-      const proximalScale = 1 - 0.55 * curl;
-      const visible = 1 - 1.85 * curl;
-      const distalScale =
-        (Math.abs(visible) < 0.04 ? 0.04 * Math.sign(visible || 1) : visible) / proximalScale;
-      this.proximal[index]?.setAttribute(
-        'transform',
-        `rotate(${fixed(finger.splay * (1 - 0.85 * curl) + twitch * 7)}) scale(1 ${fixed(proximalScale)})`,
-      );
-      this.distal[index]?.setAttribute(
-        'transform',
-        `rotate(${fixed(finger.crook * (1 - curl) + twitch * 5)}) scale(1 ${fixed(distalScale)})`,
-      );
-      // Past the fold, the back of the fingertip (and its nail) faces the viewer.
-      this.pads[index]?.setAttribute('visibility', distalScale >= 0 ? 'visible' : 'hidden');
-      this.backs[index]?.setAttribute('visibility', distalScale >= 0 ? 'hidden' : 'visible');
-    }
-    this.thumb[0].setAttribute(
-      'transform',
-      `rotate(${fixed(lerp(-50, 30, curl))}) scale(1 ${fixed(1 - 0.22 * curl)})`,
-    );
-    this.thumb[1].setAttribute('transform', `rotate(${fixed(lerp(8, 46, curl))})`);
+    this.drawSprite(spriteFrame(pose));
 
     const held = pose.scrap.mode === 'held';
     const scrapTransform = (transform: Transform) =>

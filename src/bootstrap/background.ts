@@ -30,6 +30,7 @@ import { cropSnapshot, downloadImage } from '../adapters/browser/media';
 import { preserveImage } from '../features/image/preserve';
 import { createCoordinator } from '../application/coordinator';
 import { parseImportedTranscript, youtubeVideoId } from '../features/youtube/transcript';
+import { GRAVE_SPRITE } from '../ui/grave-sprite';
 
 type Arm = {
   token: string;
@@ -238,6 +239,25 @@ async function executeCapture(arm: Arm): Promise<void> {
   }
 }
 
+let handSprite: Promise<string> | undefined;
+/** The packaged frame atlas, read from the extension origin so it never needs to be web accessible. */
+function readHandSprite(): Promise<string> {
+  handSprite ??= fetch(chrome.runtime.getURL(GRAVE_SPRITE.path))
+    .then(async (response) => {
+      if (!response.ok) throw new Error('The hand sprite is missing from the package.');
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 16384)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 16384));
+      return btoa(binary);
+    })
+    .catch((error: unknown) => {
+      handSprite = undefined;
+      throw error;
+    });
+  return handSprite;
+}
+
 async function contentRequest(
   raw: unknown,
   sender: chrome.runtime.MessageSender,
@@ -252,6 +272,8 @@ async function contentRequest(
       activationIntent += 1;
       await handActivation.pause();
       return { ok: true, activation: handActivation.getMode() };
+    case 'HAND_SPRITE':
+      return { ok: true, sprite: await readHandSprite() };
     case 'CONTENT_STATUS': {
       const settings = await readSettings();
       const features = __CORE_ONLY__

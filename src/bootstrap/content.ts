@@ -503,6 +503,14 @@ function activate(): () => void {
     chipTimer = setTimeout(showSelectionChip, delay);
   };
 
+  /** The background hands over the packaged atlas as bytes; decoding them needs no URL the page CSP could block. */
+  const loadSprite = async (): Promise<ImageBitmap | null> => {
+    const response = await request({ v: 1, type: 'HAND_SPRITE' });
+    if (!response.ok || !response.sprite) return null;
+    const bytes = Uint8Array.from(atob(response.sprite), (character) => character.charCodeAt(0));
+    return createImageBitmap(new Blob([bytes], { type: 'image/webp' }));
+  };
+
   const view = new HandView(document, {
     capture: () => {
       void captureSelection();
@@ -523,6 +531,7 @@ function activate(): () => void {
       void request({ v: 1, type: 'PAUSE_HAND' });
       dispose();
     },
+    sprite: loadSprite,
   });
 
   // A modifier hold owns exactly one lasso. Its release never cancels a

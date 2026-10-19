@@ -44,6 +44,7 @@ for (const filename of [
   'graveyard.html',
   'LICENSE',
   'THIRD_PARTY_NOTICES.md',
+  'assets/grave-hand.webp',
 ]) {
   assert(
     (await readFile(resolve(destination, filename))).length > 0,

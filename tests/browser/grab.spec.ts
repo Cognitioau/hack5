@@ -22,6 +22,83 @@ async function frame(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: resolve(directory, `${name}.png`) });
 }
 
+/** Counts hand-coloured pixels (tinted, not page ink, paper or grave soil) in a screenshot region. */
+async function handPixels(
+  fixture: Awaited<ReturnType<typeof launchExtension>>,
+  shot: Buffer,
+  region: { x: number; y: number; width: number; height: number },
+): Promise<number> {
+  const decoder = await fixture.context.newPage();
+  try {
+    return await decoder.evaluate(
+      async ({ bytes, area }) => {
+        const bitmap = await createImageBitmap(
+          new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
+        );
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('No 2D context');
+        context.drawImage(bitmap, 0, 0);
+        const { data } = context.getImageData(area.x, area.y, area.width, area.height);
+        let count = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const [r = 0, g = 0, b = 0] = [data[i], data[i + 1], data[i + 2]];
+          const luma = 0.3 * r + 0.59 * g + 0.11 * b;
+          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+          // Grey-green skin: not page ink, paper, the blue selection or brown grave soil.
+          if (luma > 25 && luma < 215 && chroma >= 8 && r <= g + 4 && b <= g + 4) count += 1;
+        }
+        return count;
+      },
+      { bytes: [...shot], area: region },
+    );
+  } finally {
+    await decoder.close();
+  }
+}
+
+test('the rendered hand bursts through a page whose CSP forbids every image', async () => {
+  test.setTimeout(60_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const strict = await fixture.context.newPage();
+    await strict.goto(`${vault.origin}/strict`);
+    await wake(fixture, strict);
+    const viewport = strict.viewportSize();
+    if (!viewport) throw new Error('No viewport');
+    const words = await dragSelect(strict, '#strict');
+    const selected = await strict.evaluate(() => {
+      const rectangle = getSelection()?.getRangeAt(0).getBoundingClientRect();
+      return rectangle ? { x: rectangle.x + rectangle.width / 2, bottom: rectangle.bottom } : null;
+    });
+    if (!selected) throw new Error('No selection rectangle');
+    // The grave tears open just below the passage and the hand climbs out over it.
+    const region = {
+      x: Math.round(selected.x - 90),
+      y: Math.round(selected.bottom - 150),
+      width: 180,
+      height: 200,
+    };
+    const quiet = await handPixels(fixture, await strict.screenshot(), region);
+    await strict.mouse.click(viewport.width - 35, viewport.height - 35);
+    await strict.waitForTimeout(640);
+    const shot = await strict.screenshot();
+    await frame(strict, 'grab-strict-csp');
+    const haunted = await handPixels(fixture, shot, region);
+    expect(quiet).toBeLessThan(60);
+    // Measured near 1,200 on this fixture; an undrawn hand stays near the baseline.
+    expect(haunted).toBeGreaterThan(600);
+    await expect
+      .poll(async () => (await state(fixture)).map((c) => c.candidate.text))
+      .toContain(words);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
 test('one click grabs a selection or the whole page, and a chip follows a settled selection', async () => {
   test.setTimeout(120_000);
   const vault = await startVaultFixture();

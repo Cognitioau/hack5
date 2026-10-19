@@ -15,6 +15,8 @@ export interface HandActions {
   page?: () => void;
   /** The primary button: the selection when there is one, otherwise the page. */
   grab?: () => void;
+  /** Decodes the grave hand's frame atlas; the grave opens without a hand until it resolves. */
+  sprite?: () => Promise<CanvasImageSource | null>;
 }
 export interface TargetPresentation {
   kind?: GraveKind;
@@ -57,7 +59,7 @@ const STYLE = `
 .effect{position:fixed;inset:0;pointer-events:none;z-index:2147483646}
 .grave{position:absolute;inset:0;overflow:visible;--paper:#f6f3ea;--paper-ink:#28301f;--crack:#28301f;--paper-font:Georgia,"Times New Roman",serif}
 .grave .crack{fill:none;stroke:var(--crack);stroke-width:1.4;stroke-dasharray:1;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.grave-rig{filter:drop-shadow(0 6px 4px #0000004d)}.grave-rig :is(path,ellipse,rect):not([stroke-width]){stroke-width:1.6}.grave-rig [stroke]{vector-effect:non-scaling-stroke}
+.grave-rig{filter:drop-shadow(0 6px 5px #00000059)}.grave-hand{overflow:visible}.grave-hand canvas{display:block;width:100%;height:100%}
 .grave-scrap{filter:drop-shadow(0 5px 5px #00000040)}
 .grave .clod{fill:#5d4730;stroke:#2e2318;stroke-width:.25}.grave .shard{fill:var(--paper);stroke:#00000050;stroke-width:.2}
 .slip{box-sizing:border-box;width:100%;height:100%;padding:8px 11px 9px;background:var(--paper);background-image:linear-gradient(170deg,#ffffff1f,#0000000a);color:var(--paper-ink);font:13px/1.32 var(--paper-font);overflow:hidden;clip-path:polygon(0 7%,4% 0,11% 5%,19% 1%,27% 5%,36% 0,44% 6%,53% 1%,62% 5%,70% 0,79% 6%,87% 1%,95% 5%,100% 1%,99% 24%,100% 47%,98% 71%,100% 94%,94% 100%,86% 95%,77% 100%,68% 96%,59% 100%,50% 95%,41% 100%,32% 96%,23% 100%,14% 95%,5% 100%,0 95%,2% 72%,0 49%,2% 26%)}
@@ -106,10 +108,11 @@ export class HandView {
   private effectStartedAt = 0;
   private effectScene: Parameters<GraveEffect['start']>[0] | null = null;
   private targetActive = false;
+  private spriteRequest: Promise<void> | null = null;
 
   constructor(
     private readonly document: Document,
-    actions: HandActions,
+    private readonly actions: HandActions,
   ) {
     const node = <T extends keyof HTMLElementTagNameMap>(
       tag: T,
@@ -326,6 +329,8 @@ export class HandView {
         ...(presentation.detail === undefined ? {} : { detail: presentation.detail }),
         ...(presentation.style ? { style: presentation.style } : {}),
       };
+      // Decode the hand while the user confirms, so it is ready to burst through.
+      this.loadSprite();
     }
     this.snippet.textContent = snippet.slice(0, 220);
     this.snippet.hidden = snippet.length === 0;
@@ -488,9 +493,24 @@ export class HandView {
     );
   }
 
+  /** Loads the atlas once; a failed load is retried at the next target. */
+  private loadSprite(): void {
+    if (this.spriteRequest || !this.actions.sprite) return;
+    this.spriteRequest = this.actions.sprite().then(
+      (sprite) => {
+        if (!sprite) this.spriteRequest = null;
+        else if (!this.disposed) this.grave.useSprite(sprite);
+      },
+      () => {
+        this.spriteRequest = null;
+      },
+    );
+  }
+
   private startEffect(): void {
     this.hideEffect();
     if (!this.targetActive || !this.effectScene || this.disposed) return;
+    this.loadSprite();
     this.effect.dataset.phase = 'reach';
     this.effect.hidden = false;
     this.grave.start(this.effectScene);

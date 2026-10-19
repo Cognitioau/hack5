@@ -233,6 +233,7 @@ export const defaultSettings: Settings = {
 export const contentMessageSchema = z.discriminatedUnion('type', [
   z.object({ v: z.literal(1), type: z.literal('CONTENT_STATUS') }).strict(),
   z.object({ v: z.literal(1), type: z.literal('PAUSE_HAND') }).strict(),
+  z.object({ v: z.literal(1), type: z.literal('HAND_SPRITE') }).strict(),
   z
     .object({
       v: z.literal(1),
@@ -338,6 +339,8 @@ export type AppResponse =
       features?: Features;
       activation?: 'manual' | 'universal' | 'paused';
       activationRequest?: string;
+      /** The packaged grave-hand frame atlas, base64-encoded WebP. */
+      sprite?: string;
     }
   | { ok: false; error: string };
 export type FocusPoint = {

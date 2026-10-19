@@ -511,6 +511,34 @@ describe('production background capability boundary', () => {
     },
   );
 
+  it('hands a page only the packaged hand atlas, read from the extension origin', async () => {
+    const bytes = new Uint8Array([82, 73, 70, 70, 0, 255, 128]);
+    context.network.mockImplementationOnce(async () => new Response(bytes));
+    expect(await context.send({ v: 1, type: 'HAND_SPRITE' })).toMatchObject({
+      ok: true,
+      sprite: btoa(String.fromCharCode(...bytes)),
+    });
+    expect(context.network).toHaveBeenLastCalledWith(
+      context.api.runtime.getURL('assets/grave-hand.webp'),
+    );
+    // A page cannot choose which packaged file is read.
+    const calls = context.network.mock.calls.length;
+    expect((await context.send({ v: 1, type: 'HAND_SPRITE', path: 'models/private' })).ok).toBe(
+      false,
+    );
+    expect(context.network.mock.calls.length).toBe(calls);
+  });
+
+  it('retries the hand atlas after a failed read instead of caching the failure', async () => {
+    context.network.mockImplementationOnce(async () => new Response('', { status: 404 }));
+    expect((await context.send({ v: 1, type: 'HAND_SPRITE' })).ok).toBe(false);
+    context.network.mockImplementationOnce(async () => new Response(new Uint8Array([1, 2, 3])));
+    expect(await context.send({ v: 1, type: 'HAND_SPRITE' })).toMatchObject({
+      ok: true,
+      sprite: btoa('\x01\x02\x03'),
+    });
+  });
+
   it('lets a page pause globally, then rejects stale arming and confirmation', async () => {
     const token = await arm();
     expect((await context.send({ v: 1, type: 'PAUSE_HAND' })).ok).toBe(true);
