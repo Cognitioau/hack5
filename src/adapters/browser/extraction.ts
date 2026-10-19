@@ -34,6 +34,13 @@ const CONTROL_SELECTOR =
   'button,summary,nav,[inert],[role="button"],[role="checkbox"],[role="radio"],[role="switch"],[role="slider"],[role="spinbutton"],[role="combobox"],[role="menuitem"],[role="tab"],[role="option"]';
 const OMITTED_SELECTOR =
   'script,style,noscript,template,[hidden],[aria-hidden="true"],[data-zombie-hand-ui]';
+/** Page furniture never belongs in a whole-page excerpt. */
+const PAGE_CHROME_SELECTOR =
+  'nav,aside,form,dialog,footer,[role="navigation"],[role="complementary"],[role="contentinfo"],[role="search"],[role="dialog"]';
+const PAGE_BANNER_SELECTOR = 'header,[role="banner"]';
+const PAGE_ROOT_SELECTOR = 'article,main,[role="main"]';
+const MAX_PAGE_EXCERPT = 4_000;
+const MAX_PAGE_BLOCKS = 400;
 const MAX_TEXT = 12_000;
 const MAX_SOURCE_TEXT = 64_000;
 const MAX_SOURCE_NODES = 2_048;
@@ -369,6 +376,11 @@ export function extractCandidate(
 ): ExtractedCandidate | null {
   const pageUrl = publicWebUrl(document.location.href, document.location.href);
   if (!pageUrl || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  // An explicit selection does not depend on where the pointer happens to rest.
+  if (options.preferSelection) {
+    const selected = selectionCandidate(document, point, true, pageUrl);
+    if (selected) return selected;
+  }
   const target = document.elementFromPoint(point.x, point.y);
   if (
     !target ||
@@ -377,7 +389,9 @@ export function extractCandidate(
     target.closest(OMITTED_SELECTOR)
   )
     return null;
-  const selected = selectionCandidate(document, point, options.preferSelection ?? false, pageUrl);
+  const selected = options.preferSelection
+    ? null
+    : selectionCandidate(document, point, false, pageUrl);
   if (selected) return selected;
   const rectangle = targetRectangle(target, document);
   const special = options.special?.(document, target);
@@ -424,4 +438,74 @@ export function extractCandidate(
 
   const block = target.closest(BLOCK_SELECTOR);
   return block ? textCandidate(document, point, block, pageUrl) : null;
+}
+
+/** The current explicit page selection, wherever the pointer is. */
+export function extractSelection(document: Document): ExtractedCandidate | null {
+  const pageUrl = publicWebUrl(document.location.href, document.location.href);
+  return pageUrl ? selectionCandidate(document, { x: 0, y: 0 }, true, pageUrl) : null;
+}
+
+/**
+ * The page itself: its title and link plus a bounded excerpt of visible reading
+ * text. Navigation, forms, editable regions and hidden content are skipped.
+ */
+export function extractPage(document: Document): ExtractedCandidate | null {
+  const pageUrl = publicWebUrl(document.location.href, document.location.href);
+  const body = document.body;
+  if (!pageUrl || !body) return null;
+  const title = cleanText(document.title || pageUrl, 300);
+  const root = document.querySelector(PAGE_ROOT_SELECTOR) ?? body;
+  const skipped =
+    root === body ? `${PAGE_CHROME_SELECTOR},${PAGE_BANNER_SELECTOR}` : PAGE_CHROME_SELECTOR;
+  const paragraphs: string[] = [];
+  let length = 0;
+  for (const block of Array.from(root.querySelectorAll(BLOCK_SELECTOR)).slice(0, MAX_PAGE_BLOCKS)) {
+    if (block.closest(skipped)) continue;
+    const text = cleanText(collectText(document, block)?.text ?? '', MAX_PAGE_EXCERPT);
+    if (text.length < 2) continue;
+    const separator = paragraphs.length ? 2 : 0;
+    const room = MAX_PAGE_EXCERPT - length - separator;
+    if (text.length > room) {
+      const cut = text.slice(0, Math.max(0, room - 1)).replace(/\s+\S*$/u, '');
+      if (cut) paragraphs.push(`${cut}…`);
+      else if (paragraphs.length) paragraphs.push(`${paragraphs.pop()}…`);
+      break;
+    }
+    paragraphs.push(text);
+    length += separator + text.length;
+  }
+  const window = document.defaultView;
+  const width = window?.innerWidth ?? document.documentElement.clientWidth;
+  const height = window?.innerHeight ?? document.documentElement.clientHeight;
+  return {
+    candidate: { kind: 'link', url: pageUrl, title, text: paragraphs.join('\n\n') || title },
+    target: body,
+    rectangle: { x: 0, y: 0, width, height, viewportWidth: width, viewportHeight: height },
+  };
+}
+
+/** The type face and colours a grabbed copy should borrow from its source. */
+export function readingStyle(
+  element: Element,
+  document: Document,
+): { fontFamily: string; color: string; background: string } | undefined {
+  const window = document.defaultView;
+  if (!window) return undefined;
+  const style = window.getComputedStyle(element);
+  let background = '';
+  for (
+    let current: Element | null = element;
+    current && !background;
+    current = current.parentElement
+  ) {
+    const value = window.getComputedStyle(current).backgroundColor;
+    if (value && value !== 'transparent' && !/^rgba\(.*,\s*0\s*\)$/u.test(value))
+      background = value;
+  }
+  return {
+    fontFamily: style.fontFamily,
+    color: style.color,
+    background: background || 'rgb(255, 255, 255)',
+  };
 }

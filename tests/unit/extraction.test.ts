@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://example.org/article"}
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractCandidate, publicWebUrl, sentenceAt } from '../../src/adapters/browser/extraction';
+import {
+  extractCandidate,
+  extractPage,
+  extractSelection,
+  publicWebUrl,
+  readingStyle,
+  sentenceAt,
+} from '../../src/adapters/browser/extraction';
 
 const rectangle = new DOMRect(30, 40, 200, 60);
 let target: Element;
@@ -295,6 +302,90 @@ describe('bounded untrusted page extraction', () => {
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
     target = document.body;
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+});
+
+describe('explicit selection and whole-page grabs', () => {
+  it('keeps a selection when the pointer rests over a control or the extension', () => {
+    fixture(
+      '<p id="text">Keep this selected sentence.</p><nav><button id="menu">Menu</button></nav>',
+      '#menu',
+    );
+    const paragraph = document.querySelector('#text') as Element;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    document.getSelection()?.addRange(range);
+    expect(
+      extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true })?.candidate.text,
+    ).toBe('Keep this selected sentence.');
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    expect(extractSelection(document)?.candidate).toMatchObject({
+      kind: 'text',
+      url: 'https://example.org/article',
+      text: 'Keep this selected sentence.',
+    });
+  });
+
+  it('returns no selection for a collapsed, editable or control selection', () => {
+    fixture(
+      '<p id="text">Public words</p><div contenteditable="true" id="private">Secret</div>',
+      '#text',
+    );
+    expect(extractSelection(document)).toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector('#private') as Node);
+    document.getSelection()?.addRange(range);
+    expect(extractSelection(document)).toBeNull();
+  });
+
+  it('grabs a page as its link plus a bounded excerpt of visible reading text', () => {
+    fixture(
+      `<header><p>Site banner</p></header><nav><p>Home · About</p></nav>
+       <main><h1>Keep the interesting part</h1><p>First   public paragraph.</p>
+       <p style="display:none">Hidden paragraph</p><form><p>Form label</p><input value="secret"></form>
+       <div contenteditable="true"><p>Draft text</p></div><aside><p>Related links</p></aside>
+       <ul><li>One <p>nested</p></li></ul><footer><p>Copyright</p></footer></main>`,
+      'main',
+    );
+    const page = extractPage(document);
+    expect(page?.candidate).toMatchObject({
+      kind: 'link',
+      url: 'https://example.org/article',
+      title: 'Synthetic public article',
+    });
+    expect(page?.candidate.text).toBe(
+      'Keep the interesting part\n\nFirst public paragraph.\n\nOne\n\nnested',
+    );
+    expect(page?.target).toBe(document.body);
+    expect(page?.rectangle).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it('bounds the page excerpt and falls back to the title for a page without reading text', () => {
+    fixture(`<main>${'<p>Twenty characters!! </p>'.repeat(400)}</main>`, 'main');
+    const text = extractPage(document)?.candidate.text ?? '';
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text.endsWith('…')).toBe(true);
+    fixture('<main><button>Only a control</button></main>', 'main');
+    expect(extractPage(document)?.candidate.text).toBe('Synthetic public article');
+  });
+
+  it('skips banner chrome only when the page has no article or main landmark', () => {
+    fixture('<header><p>Site banner</p></header><p id="body">Body text.</p>', '#body');
+    expect(extractPage(document)?.candidate.text).toBe('Body text.');
+    fixture('<article><header><h1>Article title</h1></header><p>Body.</p></article>', 'article');
+    expect(extractPage(document)?.candidate.text).toBe('Article title\n\nBody.');
+  });
+
+  it('reads the visible reading style from the nearest opaque background', () => {
+    fixture(
+      '<div style="background-color: rgb(20, 22, 28)"><p id="text" style="color: rgb(220, 221, 228); font-family: Georgia">Dark words</p></div>',
+      '#text',
+    );
+    expect(readingStyle(target, document)).toEqual({
+      fontFamily: 'Georgia',
+      color: 'rgb(220, 221, 228)',
+      background: 'rgb(20, 22, 28)',
+    });
   });
 });
 
