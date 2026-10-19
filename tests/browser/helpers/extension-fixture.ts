@@ -1,0 +1,171 @@
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { chromium, expect, type BrowserContext, type Page, type Worker } from '@playwright/test';
+import type { AppResponse, PublicCapture } from '../../../src/core/contracts/index';
+import type { VaultFixture } from './vault-fixture';
+
+export interface ExtensionFixture {
+  directory: string;
+  extension: string;
+  profile: string;
+  context: BrowserContext;
+  worker: Worker;
+  id: string;
+  options: Page;
+  restart(): Promise<void>;
+  close(): Promise<void>;
+}
+
+export async function launchExtension(
+  profileName: 'full' | 'core',
+  pregrantFixtureOrigins = true,
+): Promise<ExtensionFixture> {
+  const directory = await mkdtemp(resolve(tmpdir(), 'hack5-capture-browser-'));
+  const extension = resolve(directory, 'extension');
+  const profile = resolve(directory, 'profile');
+  await cp(resolve(profileName === 'core' ? 'dist-core' : 'dist'), extension, { recursive: true });
+  if (pregrantFixtureOrigins) {
+    // Chromium's native optional-host approval dialog cannot be accepted in
+    // headless CI. Only the disposable test copy receives these exact hosts.
+    // Production build artifacts, executable code and optional permissions are unchanged.
+    const manifest = JSON.parse(await readFile(resolve(extension, 'manifest.json'), 'utf8')) as {
+      host_permissions?: string[];
+    };
+    manifest.host_permissions = ['http://127.0.0.1/*', 'https://www.youtube.com/*'];
+    await writeFile(resolve(extension, 'manifest.json'), JSON.stringify(manifest));
+  }
+  const launch = async () => {
+    const context = await chromium.launchPersistentContext(profile, {
+      headless: true,
+      channel: 'chromium',
+      viewport: { width: 1280, height: 900 },
+      deviceScaleFactor: 1,
+      args: [
+        '--enable-unsafe-extension-debugging',
+        `--disable-extensions-except=${extension}`,
+        `--load-extension=${extension}`,
+      ],
+    });
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+    const id = new URL(worker.url()).hostname;
+    const options = await context.newPage();
+    await options.goto(`chrome-extension://${id}/options.html`);
+    await expect(options.locator('#key-state')).not.toHaveText('Checking local settings…');
+    return { context, worker, id, options };
+  };
+  const instance: ExtensionFixture = {
+    directory,
+    extension,
+    profile,
+    ...(await launch()),
+    async restart() {
+      await instance.context.close();
+      Object.assign(instance, await launch());
+    },
+    async close() {
+      await instance.context.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+  return instance;
+}
+
+export async function configureVault(
+  fixture: ExtensionFixture,
+  vault: VaultFixture,
+  semantic = true,
+): Promise<void> {
+  await fixture.options.locator('#endpoint').fill(vault.origin);
+  await fixture.options.locator('#api-key').fill(vault.key);
+  await fixture.options.locator('#allow-http').check();
+  await fixture.options.locator('#remember-key').check();
+  await fixture.options.locator('#feature-semantic').setChecked(semantic);
+  await fixture.options.locator('#feature-haunting').uncheck();
+  await fixture.options.locator('#connect').click();
+  await expect(fixture.options.locator('#message')).toContainText('binary roundtrip verified', {
+    timeout: 30_000,
+  });
+}
+
+export async function wake(fixture: ExtensionFixture, page: Page): Promise<number> {
+  await page.bringToFront();
+  const browser = fixture.context.browser();
+  if (!browser) throw new Error('No browser');
+  const session = await browser.newBrowserCDPSession();
+  try {
+    const { targetInfos } = await session.send('Target.getTargets', { filter: [{ type: 'tab' }] });
+    const target = targetInfos.find((entry) => entry.url === page.url());
+    if (!target) throw new Error('No tab target');
+    // Browser-level action grants Chrome's actual activeTab capability. Some
+    // headless builds do not dispatch action.onClicked, so inject the shipped
+    // content entry through the same production scripting API afterward.
+    await session.send('Extensions.triggerAction', { id: fixture.id, targetId: target.targetId });
+  } finally {
+    await session.detach();
+  }
+  const tabId = await fixture.worker.evaluate(async (url) => {
+    const tab = (await chrome.tabs.query({})).find((entry) => entry.url === url);
+    if (tab?.id === undefined) throw new Error('Fixture tab unavailable');
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    return tab.id;
+  }, page.url());
+  await expect(page.locator('[data-zombie-hand-ui]')).toBeAttached();
+  return tabId;
+}
+
+export async function state(fixture: ExtensionFixture): Promise<PublicCapture[]> {
+  const response = await fixture.options.evaluate(
+    () => chrome.runtime.sendMessage({ v: 1, type: 'GET_STATE' }) as Promise<AppResponse>,
+  );
+  if (!response.ok) throw new Error(response.error);
+  return response.captures ?? [];
+}
+
+export async function isolatedMessage(
+  fixture: ExtensionFixture,
+  tabId: number,
+  message: unknown,
+): Promise<AppResponse> {
+  return fixture.worker.evaluate(
+    async ({ tabId: id, message: payload }) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: id },
+        func: async (raw: unknown) => chrome.runtime.sendMessage(raw),
+        args: [payload],
+      });
+      return results[0]?.result as AppResponse;
+    },
+    { tabId, message },
+  );
+}
+
+export async function captureAt(
+  page: Page,
+  selector: string,
+  gesture: 'keyboard' | 'circle' = 'keyboard',
+): Promise<void> {
+  const bounds = await page.locator(selector).boundingBox();
+  if (!bounds) throw new Error('Capture target unavailable');
+  const x = bounds.x + Math.min(100, bounds.width / 2);
+  const y = bounds.y + Math.min(18, bounds.height / 2);
+  await page.mouse.move(x, y);
+  if (gesture === 'keyboard') {
+    await page.keyboard.press('Alt+Shift+Z');
+    return;
+  }
+  await page.waitForTimeout(950);
+  await page.mouse.move(x + 52, y, { steps: 8 });
+  for (let step = 1; step <= 64; step++) {
+    const angle = (step / 64) * Math.PI * 2;
+    await page.mouse.move(x + Math.cos(angle) * 52, y + Math.sin(angle) * 52);
+    await page.waitForTimeout(5);
+  }
+}
+
+export async function screenshotArtifact(page: Page, name: string): Promise<void> {
+  const directory = resolve('.cache/browser-artifacts');
+  await mkdir(directory, { recursive: true });
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await page.screenshot({ path: resolve(directory, `${name}.png`), fullPage: true });
+}

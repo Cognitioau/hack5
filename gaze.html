@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="connect-src 'self'">
+  <title>Zombie Hand · Gaze lab</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="gaze.css">
+</head>
+<body>
+  <main class="gaze-panel" id="gaze-panel">
+    <a href="options.html">← Settings</a>
+    <p class="eyebrow">ZOMBIE HAND / EXPERIMENTAL</p>
+    <h1>Gaze lab</h1>
+    <p>Try a local camera calibration. This lab does not arm or capture content on other pages.</p>
+    <p class="hint">Camera images and calibration stay in memory on this device. Nothing is uploaded or saved. Hiding or closing this page stops the camera and clears the session.</p>
+    <video id="gaze-video" autoplay muted playsinline aria-label="Local camera preview"></video>
+    <p id="gaze-status" role="status" aria-live="polite">Camera is off. Start only when you are ready.</p>
+    <div class="actions">
+      <button id="gaze-start" type="button">Start local camera</button>
+      <button id="gaze-calibrate" type="button" disabled>Begin calibration</button>
+    </div>
+    <p id="gaze-diagnostics" class="hint">Nine calibration points are followed by five separate checks. Results describe this session only; they do not establish capture accuracy.</p>
+    <p class="hint">Keep the window, your seat and lighting steady. Look directly at each target, wait for “Click”, then click it. Moving or resizing the window requires recalibration.</p>
+  </main>
+  <p id="gaze-step" hidden aria-live="polite"></p>
+  <button id="gaze-target" type="button" hidden disabled>Look here</button>
+  <span id="gaze-dot" hidden aria-hidden="true"></span>
+  <button id="gaze-stop" type="button" disabled>Stop and clear camera session</button>
+  <script type="module" src="gaze.js"></script>
+</body>
+</html>

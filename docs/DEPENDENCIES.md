@@ -1,0 +1,43 @@
+# Dependency and runtime decisions
+
+Verified 20 October 2026 against official distribution metadata and the installed packages.
+
+- Runtime: Node.js 24.22.0 LTS with npm 11.19.1, pinned in .nvmrc/package.json; the local binary was checked against Node's published SHA-256 list. [Node releases](https://nodejs.org/dist/index.json)
+- Build: exact-version esbuild with separate ESM background/options/graveyard and a standalone IIFE content script. No framework or development server runs inside the extension. Minimum browser is Chrome 120; Playwright uses its pinned Chromium distribution for extension tests.
+- Language: TypeScript 5.9.3 with strict mode, checked indexed access, exact optional properties and unused-code errors. Biome lint plus AST import/capability checks enforce the planned boundaries.
+- Runtime libraries: Zod for input contracts, YAML for escaped vault metadata, Transformers.js 4.3.1 and its pinned ONNX Runtime Web dependency for local embeddings. npm audit reported zero known advisories at installation; this is a point-in-time check, not a guarantee.
+- License: GPL-3.0-only for project source, compatible with the intended future WebGazer GPLv3 integration. WebGazer is not yet included. Third-party notices and model provenance are recorded in THIRD_PARTY_NOTICES.md.
+
+## Local inference
+
+Xenova/all-MiniLM-L6-v2 revision 751bff37182d3f1213fa05d7196b954e230abad9 is the fixed q8, 384-dimensional model. Its model card identifies Apache-2.0. The developer-time `npm run model:fetch` command downloads only pinned files and verifies every size/hash. `npm run build` refuses missing or modified assets and copies them into the extension; no model-host permission or provider key is required at runtime. [Model source](https://huggingface.co/Xenova/all-MiniLM-L6-v2/tree/751bff37182d3f1213fa05d7196b954e230abad9)
+
+Transformers.js remote loading and model/WASM caches are disabled because all data and executable assets are installed locally. WASM uses one thread and an embedded factory with a local binary URL. Overriding the factory's mjs URL would cause a dynamic import that a Manifest V3 service worker cannot use. Bundling the factory avoids that route and avoids loading executable code from a CDN. [Transformers environment settings](https://huggingface.co/docs/transformers.js/en/custom_usage), [Chrome remote code requirements](https://developer.chrome.com/docs/extensions/develop/migrate/remote-hosted-code)
+
+The adapter serializes inference, retries a failed initialization, validates output shape/finite values, and rejects results after cancellation/disposal. A running WASM calculation cannot be forcibly interrupted by AbortSignal; its result is discarded and disposal waits for completion. Input passages are limited to 8,000 characters and the model tokenizer truncates to its supported token window; the caller must chunk longer sources. Package assets survive browser restarts; temporary sessions/vectors must be rebuilt from persisted source text and the model identity.
+
+`npm run test:inference` runs the real production adapter in a dedicated extension worker with packaged WASM/model assets, normal extension CSP, and browser network disabled. It checks finite normalized vectors, semantic ordering, deterministic repeated calls and a cold browser restart. This isolates inference evidence; application/vault tests separately prove the full capture workflow.
+
+## Gaze runtime and remaining integration gate
+
+WebGazer 3.5.3 was inspected and tested separately; it is **not installed or shipped**. The npm package declares GPL-3.0-or-later and includes local MediaPipe JS/WASM/data assets. In a real Manifest V3 extension page, with all assets local, browser network offline and Chromium's fake-camera flags, an explicit `webgazer.begin()` failed before producing a prediction:
+
+`EvalError: Evaluating a string as JavaScript violates ... script-src 'self' 'wasm-unsafe-eval'`
+
+The exact failure originated in `createNamedFunction`, called by `extendError`, in WebGazer's old `face_mesh_solution_simd_wasm_bin.js`. The extension's CSP was not weakened and vendor code was not patched. [WebGazer package source](https://github.com/brownhci/WebGazer), [Chrome extension CSP limits](https://developer.chrome.com/docs/extensions/reference/manifest/content-security-policy)
+
+The inspected source also sets `saveDataAcrossSessions` true by default, uses `requestAnimationFrame` for its prediction loop, and leaves camera stopping commented out in `end()`. A future adapter must disable persistence before startup, explicitly stop every owned media track, clear listeners/training state, and verify visible-page geometry and background behavior before enabling gaze arming. No real camera frames or personal calibration data were used in this probe.
+
+The full build instead includes an isolated **MediaPipe Tasks Vision 1.1.1 gaze lab**, with its JS/WASM and fixed Face Landmarker float16 version 1 model packaged locally. Its three component model cards explicitly state Apache-2.0. A production-CSP probe detected one face and 478 landmarks in Google's public portrait fixture; a separate Chromium fake-camera stream exercised frame processing and track cleanup. These checks establish runtime operation, not human gaze accuracy. [Face Landmarker API](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/web_js)
+
+The upstream Tasks runtime attempted a Google telemetry POST in the first probe. The gaze page adds the stricter `connect-src 'self'` policy before loading code. Its browser test verifies zero outgoing HTTP requests, including with offline mode removed and a guarded external fetch attempt. The project does not rely on an undocumented telemetry opt-out or weaken the global extension CSP.
+
+The lab requests camera access only after Start, extracts normalized eye/face geometry, fits a regularized local regression to nine targets, and measures five separate holdout deviations in pixels. Calibration and training features stay in memory. Stop, externally ended camera access, page hiding and page closure stop owned tracks and clear the session; window movement, resizing or device-scale changes invalidate calibration. The core build omits the entire lab, runtime and face model.
+
+Human calibration quality and transfer into another page's viewport remain unverified. The lab therefore displays a local gaze estimate and explicitly does **not** arm or capture elsewhere. There is no background gaze-forwarding message or automatic camera enablement. Connecting gaze requires a tested coordinate/geometry contract and human demonstration evidence; the mouse build remains independent.
+
+## Reproduce
+
+Use Node from .nvmrc, then run `npm ci`, `npm run model:fetch`, `npm run check`, `npx playwright install chromium`, and `npm run test:browser`. `npm run build:core` must omit image/YouTube/gaze feature code and broad media-origin permissions; `node scripts/check-package.mjs --core` verifies the resulting package. Check implementations intentionally fail if tests, entrypoints or required artifacts are absent.
+
+`npm run package` builds and validates both profiles, then uses standard `zip`/`unzip` tools to create `.cache/packages/zombie-hand-0.1.0-full.zip` and `-core.zip`. It packages only regular files from verified build directories, adds a public source/content inventory, tests each archive and writes SHA256SUMS plus packages.json. The metadata identifies the source commit, dirty state and source snapshot digest; regenerate after the final commit for a clean distribution. Browser profiles, caches and source machine paths are not archive inputs.

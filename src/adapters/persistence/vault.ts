@@ -1,0 +1,972 @@
+import { stringify as stringifyYaml } from 'yaml';
+import { z } from 'zod';
+import {
+  captureRecordSchema,
+  type CaptureRecord,
+  type VaultConfig,
+  type VaultImportResult,
+  type VaultProbeResult,
+  type VaultRepository,
+  type VaultSaveResult,
+} from '../../core/contracts/index';
+
+const marker = 'hack5:zombie-hand';
+const maxAssetBytes = 12 * 1024 * 1024;
+const maxDocumentBytes = 8 * 1024 * 1024;
+const maxImportBytes = 64 * 1024 * 1024;
+const maxImportRecords = 200;
+const encoder = new TextEncoder();
+const decoder = new TextDecoder('utf-8', { fatal: true });
+
+const rawCaptureSchema = captureRecordSchema.pick({
+  schemaVersion: true,
+  id: true,
+  operationId: true,
+  createdAt: true,
+  candidate: true,
+  preservation: true,
+  contentRevision: true,
+});
+const assetDescriptorSchema = z
+  .object({
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    byteLength: z.number().int().positive().max(maxAssetBytes),
+    mimeType: z.string().max(100),
+    extension: z.enum(['png', 'jpg', 'webp', 'gif', 'avif', 'pdf']),
+  })
+  .strict();
+const metadataSchema = z
+  .object({
+    marker: z.literal(marker),
+    schemaVersion: z.literal(1),
+    capture: rawCaptureSchema,
+    lifecycle: z
+      .object({
+        status: z.enum(['active', 'archived']),
+        revision: z.number().int().min(0),
+        updatedAt: z.string().datetime(),
+      })
+      .strict(),
+    evidence: z
+      .object({
+        noteSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        asset: assetDescriptorSchema.optional(),
+      })
+      .strict(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
+type VaultMetadata = z.infer<typeof metadataSchema>;
+type AssetDescriptor = z.infer<typeof assetDescriptorSchema>;
+type NormalizedConfig = { endpoint: string; apiKey: string; folder: string };
+type Reply = { status: number; bytes: Uint8Array; etag?: string };
+type PreparedCapture = { record: CaptureRecord; note: Uint8Array; metadata: VaultMetadata };
+type VaultClientOptions = { fetch?: typeof globalThis.fetch; timeoutMs?: number };
+
+class VaultFailure extends Error {
+  constructor(
+    readonly status: Exclude<VaultSaveResult['status'], 'saved-vault'>,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** Only numeric loopback and a generated namespace may receive the vault key. */
+function normalizeConfig(config: VaultConfig): NormalizedConfig {
+  const match = /^(https?):\/\/(127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})\/?$/.exec(config.endpoint);
+  const port = Number(match?.[3]);
+  if (!match || port > 65535) {
+    throw new VaultFailure(
+      'failed',
+      'Use a numeric loopback endpoint with an explicit port and no path.',
+    );
+  }
+  if (match[1] === 'http' && !config.allowInsecureLoopback) {
+    throw new VaultFailure('failed', 'Plain HTTP requires the explicit loopback HTTP setting.');
+  }
+  if (!/^[\x21-\x7e]{1,1000}$/.test(config.apiKey)) {
+    throw new VaultFailure('failed', 'A vault API key is required.');
+  }
+  if (
+    config.folder.length > 150 ||
+    config.folder
+      .split('/')
+      .some(
+        (segment) =>
+          !/^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/.test(segment) || segment.trim() !== segment,
+      )
+  ) {
+    throw new VaultFailure(
+      'failed',
+      'Use a vault folder made from letters, digits, spaces, underscores or hyphens.',
+    );
+  }
+  return {
+    endpoint: config.endpoint.replace(/\/$/, ''),
+    apiKey: config.apiKey,
+    folder: config.folder,
+  };
+}
+
+/** JSON-safe metadata with deterministic ordering; never invoke a supplied toJSON/getter. */
+function canonicalJson(value: unknown, depth = 0): string {
+  if (depth > 40) throw new VaultFailure('failed', 'Capture metadata is too deeply nested.');
+  if (value === null) return 'null';
+  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
+  if (Array.isArray(value))
+    return `[${value.map((item) => canonicalJson(item, depth + 1)).join(',')}]`;
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  ) {
+    return `{${Object.entries(Object.getOwnPropertyDescriptors(value))
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, descriptor]) => {
+        if (!('value' in descriptor))
+          throw new VaultFailure('failed', 'Capture metadata must contain only JSON data.');
+        return `${JSON.stringify(key)}:${canonicalJson(descriptor.value, depth + 1)}`;
+      })
+      .join(',')}}`;
+  }
+  throw new VaultFailure('failed', 'Capture metadata must contain only JSON data.');
+}
+
+function jsonBytes(value: unknown): Uint8Array {
+  const bytes = encoder.encode(`${canonicalJson(value)}\n`);
+  if (bytes.byteLength > maxDocumentBytes)
+    throw new VaultFailure('failed', 'Capture metadata is too large.');
+  return bytes;
+}
+
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes).buffer);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.byteLength === b.byteLength && a.every((byte, index) => byte === b[index]);
+}
+
+function escapeMarkdown(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/[\\`*_[\]{}()#+\-!|~]/g, '\\$&')
+    .replace(/[\r\n]+/g, ' ');
+}
+
+function quoteEvidence(value: string): string {
+  const longestRun = Math.max(2, ...Array.from(value.matchAll(/`+/g), (match) => match[0].length));
+  const fence = '`'.repeat(longestRun + 1);
+  return `${fence}text\n${value}\n${fence}`;
+}
+
+function notePath(config: NormalizedConfig, id: string): string {
+  return `${config.folder}/captures/${id}.md`;
+}
+
+function metadataPath(config: NormalizedConfig, id: string): string {
+  return `${config.folder}/metadata/${id}.json`;
+}
+
+function attachmentPath(config: NormalizedConfig, id: string, extension: string): string {
+  return `${config.folder}/attachments/${id}.${extension}`;
+}
+
+function sourceLink(url: string): string {
+  // Angle brackets keep parentheses in URLs from closing the generated Markdown link.
+  const encoded = new URL(url).href.replace(/[<>\s]/g, (character) =>
+    encodeURIComponent(character),
+  );
+  return `[Open source](<${encoded}>)`;
+}
+
+function renderNote(
+  config: NormalizedConfig,
+  record: CaptureRecord,
+  asset?: AssetDescriptor,
+): Uint8Array {
+  const frontmatter = stringifyYaml(
+    {
+      zombie_hand: marker,
+      schema_version: 1,
+      capture_id: record.id,
+      operation_id: record.operationId,
+      captured_at: record.createdAt,
+      title: record.candidate.title,
+      source: record.candidate.url,
+      kind: record.candidate.kind,
+      preservation: record.preservation,
+    },
+    { defaultStringType: 'QUOTE_DOUBLE', doubleQuotedAsJSON: true, lineWidth: 0 },
+  );
+  const lines = [
+    '---',
+    frontmatter.trimEnd(),
+    '---',
+    '',
+    `# ${escapeMarkdown(record.candidate.title)}`,
+    '',
+    sourceLink(record.candidate.url),
+    '',
+    `Preservation: ${record.preservation}.`,
+    '',
+  ];
+  if (asset) {
+    const path = attachmentPath(config, record.id, asset.extension);
+    lines.push(asset.extension === 'pdf' ? `[[${path}|Saved PDF]]` : `![[${path}]]`, '');
+  }
+  if (record.candidate.text)
+    lines.push('## Captured evidence', '', quoteEvidence(record.candidate.text), '');
+  const video = record.candidate.video;
+  if (video) {
+    const moment = `https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(video.seconds)}s`;
+    lines.push(
+      `Video moment: ${sourceLink(moment)}`,
+      '',
+      `Transcript: ${video.transcript.status}; source: ${video.transcript.provenance}.`,
+      '',
+    );
+    for (const cue of video.transcript.cues) {
+      const seconds = Math.floor(cue.start);
+      const time = `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
+      lines.push(
+        `[${time}](https://www.youtube.com/watch?v=${video.id}&t=${seconds}s) ${escapeMarkdown(cue.text)}`,
+        '',
+      );
+    }
+  }
+  const bytes = encoder.encode(`${lines.join('\n')}\n`);
+  if (bytes.byteLength > maxDocumentBytes)
+    throw new VaultFailure('failed', 'Capture note is too large.');
+  return bytes;
+}
+
+function validateAsset(record: CaptureRecord): void {
+  const asset = record.asset;
+  if (record.preservation === 'file' || record.preservation === 'screenshot') {
+    if (!asset)
+      throw new VaultFailure('failed', 'A file outcome requires retained attachment bytes.');
+  } else if (asset) {
+    throw new VaultFailure(
+      'failed',
+      'Attachment bytes do not match the capture preservation outcome.',
+    );
+  }
+  if (!asset) return;
+  const mimeByExtension = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    avif: 'image/avif',
+    pdf: 'application/pdf',
+  };
+  if (
+    asset.bytes.byteLength < 1 ||
+    asset.bytes.byteLength > maxAssetBytes ||
+    mimeByExtension[asset.extension] !== asset.mimeType
+  ) {
+    throw new VaultFailure(
+      'failed',
+      'Attachment size or MIME type does not match a supported file.',
+    );
+  }
+  if (record.preservation === 'screenshot' && asset.extension === 'pdf') {
+    throw new VaultFailure('failed', 'A screenshot must contain raster image bytes.');
+  }
+  const bytes = asset.bytes;
+  const ascii = (start: number, end: number) =>
+    Array.from(bytes.subarray(start, end), (byte) => String.fromCharCode(byte)).join('');
+  const validSignature = {
+    png:
+      bytes.length >= 8 &&
+      equalBytes(bytes.subarray(0, 8), new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])),
+    jpg: bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255,
+    webp: bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP',
+    gif: bytes.length >= 6 && ['GIF87a', 'GIF89a'].includes(ascii(0, 6)),
+    avif: bytes.length >= 16 && ascii(4, 8) === 'ftyp' && ['avif', 'avis'].includes(ascii(8, 12)),
+    pdf: bytes.length >= 5 && ascii(0, 5) === '%PDF-',
+  };
+  if (!validSignature[asset.extension])
+    throw new VaultFailure('failed', 'Attachment bytes do not match their declared file type.');
+}
+
+async function prepare(config: NormalizedConfig, input: CaptureRecord): Promise<PreparedCapture> {
+  const validation = captureRecordSchema.safeParse(input);
+  if (!validation.success) throw new VaultFailure('failed', 'The capture record is invalid.');
+  const record = validation.data;
+  validateAsset(record);
+  // Freeze the boundary snapshot before the first asynchronous hash or network operation.
+  if (record.asset) record.asset = { ...record.asset, bytes: new Uint8Array(record.asset.bytes) };
+  if (record.metadata)
+    record.metadata = JSON.parse(decoder.decode(jsonBytes(record.metadata))) as Record<
+      string,
+      unknown
+    >;
+  const asset = record.asset
+    ? {
+        sha256: await sha256(record.asset.bytes),
+        byteLength: record.asset.bytes.byteLength,
+        mimeType: record.asset.mimeType,
+        extension: record.asset.extension,
+      }
+    : undefined;
+  const note = renderNote(config, record, asset);
+  const metadata: VaultMetadata = {
+    marker,
+    schemaVersion: 1,
+    capture: rawCaptureSchema.parse({
+      schemaVersion: record.schemaVersion,
+      id: record.id,
+      operationId: record.operationId,
+      createdAt: record.createdAt,
+      candidate: record.candidate,
+      preservation: record.preservation,
+      contentRevision: record.contentRevision,
+    }),
+    lifecycle: {
+      status: record.lifecycle,
+      revision: record.lifecycleRevision,
+      updatedAt: record.updatedAt,
+    },
+    evidence: { noteSha256: await sha256(note), ...(asset ? { asset } : {}) },
+    ...(record.metadata ? { metadata: record.metadata } : {}),
+  };
+  jsonBytes(metadata);
+  return { record, note, metadata };
+}
+
+function resultFromError(error: unknown): VaultSaveResult {
+  if (error instanceof VaultFailure) return { status: error.status, message: error.message };
+  // Network exception strings may contain URLs or other private request details.
+  return {
+    status: 'failed',
+    message: 'The vault operation failed. Check the connection and retry.',
+  };
+}
+
+/** Scoped Local REST API client. The caller owns credential storage and permission grants. */
+export function createVaultClient(
+  config: VaultConfig,
+  options: VaultClientOptions = {},
+): VaultRepository {
+  let normalized: NormalizedConfig | undefined;
+  let configFailure: VaultFailure | undefined;
+  try {
+    normalized = normalizeConfig(config);
+  } catch (error) {
+    configFailure =
+      error instanceof VaultFailure
+        ? error
+        : new VaultFailure('failed', 'Vault settings are invalid.');
+  }
+  const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const timeoutMs = Math.max(10, Math.min(options.timeoutMs ?? 8_000, 30_000));
+  let verified = false;
+  let pendingProbe: Promise<VaultProbeResult> | undefined;
+
+  function settings(): NormalizedConfig {
+    if (!normalized)
+      throw configFailure ?? new VaultFailure('failed', 'Vault settings are invalid.');
+    return normalized;
+  }
+
+  async function request(
+    path: string | undefined,
+    method: 'GET' | 'PUT',
+    signal?: AbortSignal,
+    body?: Uint8Array,
+    headers: Record<string, string> = {},
+    limit = maxDocumentBytes,
+  ): Promise<Reply> {
+    const resolved = settings();
+    if (signal?.aborted)
+      throw new VaultFailure('failed', 'The vault operation was cancelled before transmission.');
+    const abort = new AbortController();
+    const cancel = () => abort.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    const timer = setTimeout(cancel, timeoutMs);
+    try {
+      const url =
+        path === undefined
+          ? `${resolved.endpoint}/`
+          : `${resolved.endpoint}/vault/${path.split('/').map(encodeURIComponent).join('/')}`;
+      const response = await fetcher(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${resolved.apiKey}`,
+          Accept: 'application/octet-stream',
+          ...headers,
+        },
+        ...(body ? { body: new Uint8Array(body).buffer } : {}),
+        signal: abort.signal,
+        credentials: 'omit',
+        redirect: 'error',
+        cache: 'no-store',
+        referrerPolicy: 'no-referrer',
+      });
+      if (response.redirected || (response.status >= 300 && response.status < 400)) {
+        throw new VaultFailure(
+          'failed',
+          'The vault endpoint returned a redirect, which is not allowed.',
+        );
+      }
+      const declaredLength = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declaredLength) && declaredLength > limit) {
+        await response.body?.cancel();
+        throw new VaultFailure('failed', 'The vault response exceeded the size limit.');
+      }
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      const reader = response.body?.getReader();
+      if (reader) {
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            length += chunk.value.byteLength;
+            if (length > limit) {
+              await reader.cancel();
+              throw new VaultFailure('failed', 'The vault response exceeded the size limit.');
+            }
+            chunks.push(chunk.value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      }
+      const bytes = new Uint8Array(length);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const etagHeader = response.headers.get('etag');
+      // Never turn a wildcard, weak validator or header list into an update precondition.
+      const etag =
+        etagHeader && /^"[A-Za-z0-9._:-]{1,200}"$/.test(etagHeader) ? etagHeader : undefined;
+      return { status: response.status, bytes, ...(etag ? { etag } : {}) };
+    } catch (error) {
+      if (error instanceof VaultFailure) throw error;
+      throw new VaultFailure(
+        method === 'PUT' ? 'uncertain' : 'failed',
+        method === 'PUT'
+          ? 'The write was not acknowledged. Its outcome will be reconciled before retrying.'
+          : 'The vault could not be read. Check its connection, certificate and permission.',
+      );
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+    }
+  }
+
+  function requireSuccess(reply: Reply): void {
+    if (reply.status === 401 || reply.status === 403)
+      throw new VaultFailure(
+        'failed',
+        'Vault access was denied. Check the API key and permission.',
+      );
+    if (reply.status < 200 || reply.status >= 300)
+      throw new VaultFailure('failed', `The vault returned HTTP ${reply.status}.`);
+  }
+
+  async function readFile(
+    path: string,
+    signal?: AbortSignal,
+    limit = maxDocumentBytes,
+  ): Promise<Reply | undefined> {
+    const reply = await request(path, 'GET', signal, undefined, {}, limit);
+    if (reply.status === 404) return undefined;
+    requireSuccess(reply);
+    return reply;
+  }
+
+  async function createFile(
+    path: string,
+    bytes: Uint8Array,
+    contentType: string,
+    signal?: AbortSignal,
+  ): Promise<Reply> {
+    let reply: Reply | undefined;
+    let uncertain = false;
+    try {
+      reply = await request(path, 'PUT', signal, bytes, {
+        'If-None-Match': '*',
+        'Content-Type': contentType,
+      });
+      if (reply.status !== 412) requireSuccess(reply);
+    } catch (error) {
+      if (!(error instanceof VaultFailure) || error.status !== 'uncertain') throw error;
+      uncertain = true;
+    }
+    // Also read after a normal acknowledgement: the raw body is the evidence, not an animation.
+    let current: Reply | undefined;
+    try {
+      current = await readFile(path, signal, Math.max(maxDocumentBytes, bytes.byteLength));
+    } catch (error) {
+      if (uncertain || (reply && reply.status >= 200 && reply.status < 300)) {
+        throw new VaultFailure(
+          'uncertain',
+          'A write may have completed, but its contents could not be verified. Retry reconciliation.',
+        );
+      }
+      throw error;
+    }
+    if (!current)
+      throw new VaultFailure(
+        'uncertain',
+        'The expected file is not visible yet. Retry reconciliation.',
+      );
+    if (!equalBytes(current.bytes, bytes))
+      throw new VaultFailure(
+        'conflict',
+        'A generated vault path contains different content. No existing content was overwritten.',
+      );
+    return current;
+  }
+
+  function parseMetadata(reply: Reply, expected: PreparedCapture): VaultMetadata {
+    let metadata: VaultMetadata;
+    try {
+      metadata = metadataSchema.parse(JSON.parse(decoder.decode(reply.bytes)));
+    } catch {
+      throw new VaultFailure(
+        'conflict',
+        'The existing capture metadata is invalid or belongs to an unsupported format.',
+      );
+    }
+    if (
+      canonicalJson(metadata.capture) !== canonicalJson(expected.metadata.capture) ||
+      canonicalJson(metadata.evidence) !== canonicalJson(expected.metadata.evidence)
+    ) {
+      throw new VaultFailure(
+        'conflict',
+        'The existing capture metadata does not match this operation and evidence.',
+      );
+    }
+    if (!reply.etag)
+      throw new VaultFailure(
+        'failed',
+        'The vault did not expose the ETag needed for safe metadata updates.',
+      );
+    return metadata;
+  }
+
+  async function ensureMetadata(prepared: PreparedCapture, signal?: AbortSignal): Promise<string> {
+    const path = metadataPath(settings(), prepared.record.id);
+    let current: Reply | undefined;
+    let attempted = false;
+    try {
+      const created = await request(path, 'PUT', signal, jsonBytes(prepared.metadata), {
+        'If-None-Match': '*',
+        'Content-Type': 'text/plain; charset=utf-8',
+      });
+      attempted = created.status >= 200 && created.status < 300;
+      if (created.status !== 412) requireSuccess(created);
+    } catch (error) {
+      if (!(error instanceof VaultFailure) || error.status !== 'uncertain') throw error;
+      attempted = true;
+    }
+    try {
+      current = await readFile(path, signal);
+    } catch (error) {
+      if (attempted)
+        throw new VaultFailure(
+          'uncertain',
+          'Capture metadata may have been written. Retry reconciliation.',
+        );
+      throw error;
+    }
+    if (!current)
+      throw new VaultFailure(
+        'uncertain',
+        'Capture metadata is not visible yet. Retry reconciliation.',
+      );
+    const remote = parseMetadata(current, prepared);
+    const desired = prepared.metadata.lifecycle;
+    if (
+      remote.lifecycle.revision > desired.revision ||
+      (remote.lifecycle.revision === desired.revision && remote.lifecycle.status !== desired.status)
+    ) {
+      throw new VaultFailure(
+        'conflict',
+        'The vault contains a different or newer lifecycle. A stale operation cannot change it.',
+      );
+    }
+    if (remote.lifecycle.revision === desired.revision) return current.etag as string;
+    if (
+      prepared.record.vault?.metadataEtag &&
+      prepared.record.vault.metadataEtag !== current.etag
+    ) {
+      throw new VaultFailure(
+        'conflict',
+        'Capture metadata changed since the last acknowledgement. Reconcile it before updating.',
+      );
+    }
+    const replacement = { ...remote, lifecycle: desired };
+    let uncertain = false;
+    try {
+      const updated = await request(path, 'PUT', signal, jsonBytes(replacement), {
+        'If-Match': current.etag as string,
+        'Content-Type': 'text/plain; charset=utf-8',
+      });
+      if (updated.status === 412)
+        throw new VaultFailure(
+          'conflict',
+          'Capture metadata changed during the update. Nothing was overwritten.',
+        );
+      requireSuccess(updated);
+    } catch (error) {
+      if (!(error instanceof VaultFailure) || error.status !== 'uncertain') throw error;
+      uncertain = true;
+    }
+    let verifiedUpdate: Reply | undefined;
+    try {
+      verifiedUpdate = await readFile(path, signal);
+    } catch {
+      throw new VaultFailure(
+        'uncertain',
+        'The lifecycle write could not be verified. Retry reconciliation.',
+      );
+    }
+    if (!verifiedUpdate)
+      throw new VaultFailure(
+        'uncertain',
+        'The lifecycle metadata is not visible yet. Retry reconciliation.',
+      );
+    const updatedMetadata = parseMetadata(verifiedUpdate, prepared);
+    if (canonicalJson(updatedMetadata) !== canonicalJson(replacement)) {
+      if (uncertain && canonicalJson(updatedMetadata) === canonicalJson(remote)) {
+        throw new VaultFailure(
+          'uncertain',
+          'The lifecycle write is still unacknowledged. Retry reconciliation.',
+        );
+      }
+      throw new VaultFailure(
+        'conflict',
+        'The lifecycle write differs from its expected contents. Existing content was preserved.',
+      );
+    }
+    return verifiedUpdate.etag as string;
+  }
+
+  async function runProbe(signal?: AbortSignal): Promise<VaultProbeResult> {
+    try {
+      const resolved = settings();
+      const status = await request(undefined, 'GET', signal);
+      requireSuccess(status);
+      let authenticated = false;
+      try {
+        authenticated =
+          (JSON.parse(decoder.decode(status.bytes)) as { authenticated?: unknown })
+            .authenticated === true;
+      } catch {
+        /* A normal API status must be JSON. */
+      }
+      if (!authenticated)
+        throw new VaultFailure('failed', 'The vault did not confirm API-key authentication.');
+      const probeId = crypto.randomUUID();
+      const path = `${resolved.folder}/_health/probe-${probeId}.txt`;
+      const original = encoder.encode(`${marker}\n${probeId}\nconditional-write probe\n`);
+      const replacement = encoder.encode(
+        `${marker}\n${probeId}\nconditional-write probe complete\n`,
+      );
+      const created = await createFile(path, original, 'text/plain; charset=utf-8', signal);
+      if (!created.etag)
+        throw new VaultFailure(
+          'failed',
+          'The vault must expose file ETags before normal writes are enabled.',
+        );
+      const duplicate = await request(path, 'PUT', signal, replacement, {
+        'If-None-Match': '*',
+        'Content-Type': 'text/plain',
+      });
+      if (duplicate.status !== 412)
+        throw new VaultFailure(
+          'failed',
+          'The vault does not enforce create-only writes. Update the Local REST API plugin.',
+        );
+      const stale = await request(path, 'PUT', signal, replacement, {
+        'If-Match': `"missing-${probeId}"`,
+        'Content-Type': 'text/plain',
+      });
+      if (stale.status !== 412)
+        throw new VaultFailure(
+          'failed',
+          'The vault does not reject stale ETags. Update the Local REST API plugin.',
+        );
+      const unchanged = await readFile(path, signal);
+      if (!unchanged || !equalBytes(unchanged.bytes, original))
+        throw new VaultFailure(
+          'failed',
+          'The vault did not preserve content after failed preconditions.',
+        );
+      const changed = await request(path, 'PUT', signal, replacement, {
+        'If-Match': created.etag,
+        'Content-Type': 'text/plain',
+      });
+      requireSuccess(changed);
+      const confirmed = await readFile(path, signal);
+      if (!confirmed?.etag || !equalBytes(confirmed.bytes, replacement))
+        throw new VaultFailure('failed', 'The vault did not confirm the conditional update.');
+      const binary = new Uint8Array([0, 255, 137, 80, 13, 10, 128, 254, 1]);
+      await createFile(
+        `${resolved.folder}/_health/probe-${probeId}.bin`,
+        binary,
+        'application/octet-stream',
+        signal,
+      );
+      verified = true;
+      return {
+        ok: true,
+        message:
+          'Vault authentication, create-only writes, ETags, conflict rejection and binary roundtrip verified. Synthetic probe files are retained under _health.',
+      };
+    } catch (error) {
+      verified = false;
+      return {
+        ok: false,
+        message: resultFromError(error).message ?? 'The vault capability probe failed.',
+      };
+    }
+  }
+
+  async function probe(signal?: AbortSignal): Promise<VaultProbeResult> {
+    if (!pendingProbe)
+      pendingProbe = runProbe(signal).finally(() => {
+        pendingProbe = undefined;
+      });
+    return pendingProbe;
+  }
+
+  async function ensureCapture(
+    input: CaptureRecord,
+    signal?: AbortSignal,
+  ): Promise<VaultSaveResult> {
+    let hasRemoteEvidence = false;
+    try {
+      const resolved = settings();
+      const prepared = await prepare(resolved, input);
+      if (!verified) {
+        const outcome = await probe(signal);
+        if (!outcome.ok) return { status: 'failed', message: outcome.message };
+      }
+      if (prepared.record.asset) {
+        await createFile(
+          attachmentPath(resolved, prepared.record.id, prepared.record.asset.extension),
+          prepared.record.asset.bytes,
+          prepared.record.asset.mimeType,
+          signal,
+        );
+        hasRemoteEvidence = true;
+      }
+      await createFile(
+        notePath(resolved, prepared.record.id),
+        prepared.note,
+        'text/markdown; charset=utf-8',
+        signal,
+      );
+      hasRemoteEvidence = true;
+      const etag = await ensureMetadata(prepared, signal);
+      return {
+        status: 'saved-vault',
+        metadataEtag: etag,
+        vault: {
+          notePath: notePath(resolved, prepared.record.id),
+          metadataPath: metadataPath(resolved, prepared.record.id),
+          metadataEtag: etag,
+        },
+      };
+    } catch (error) {
+      const result = resultFromError(error);
+      return hasRemoteEvidence && result.status === 'failed'
+        ? {
+            status: 'uncertain',
+            message:
+              'Some capture evidence is stored, but the complete save could not be confirmed. Retry reconciliation.',
+          }
+        : result;
+    }
+  }
+
+  async function importCaptures(signal?: AbortSignal): Promise<VaultImportResult> {
+    const records: CaptureRecord[] = [];
+    const unavailable: NonNullable<VaultImportResult['unavailable']> = [];
+    let skipped = 0;
+    try {
+      const resolved = settings();
+      const listing = await readFile(`${resolved.folder}/metadata/`, signal, 256 * 1024);
+      if (!listing) return { records, skipped };
+      const names = z
+        .object({ files: z.array(z.string().max(256)).max(10_000) })
+        .parse(JSON.parse(decoder.decode(listing.bytes))).files;
+      const candidates = [
+        ...new Set(
+          names.filter((name) =>
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/i.test(name),
+          ),
+        ),
+      ];
+      skipped =
+        names.length - candidates.length + Math.max(0, candidates.length - maxImportRecords);
+      let consumed = listing.bytes.byteLength;
+      const deadline = Date.now() + 30_000;
+      async function readForImport(
+        path: string,
+        limit = maxDocumentBytes,
+      ): Promise<Reply | undefined> {
+        const allowance = Math.min(limit, maxImportBytes - consumed);
+        if (allowance <= 0 || Date.now() >= deadline)
+          throw new VaultFailure('failed', 'The vault import reached its resource limit.');
+        let reply: Reply;
+        try {
+          reply = await request(path, 'GET', signal, undefined, {}, allowance);
+        } catch (error) {
+          // A failed stream may already have consumed its entire allowance.
+          consumed += allowance;
+          throw error;
+        }
+        consumed += reply.bytes.byteLength;
+        if (reply.status === 404) return undefined;
+        requireSuccess(reply);
+        return reply;
+      }
+      const selected = candidates.slice(0, maxImportRecords);
+      for (const [index, name] of selected.entries()) {
+        if (signal?.aborted || consumed >= maxImportBytes || Date.now() >= deadline) {
+          skipped += selected.length - index;
+          break;
+        }
+        try {
+          const id = name.slice(0, -5);
+          const metadataReply = await readForImport(metadataPath(resolved, id));
+          if (!metadataReply?.etag) {
+            skipped++;
+            continue;
+          }
+          const metadata = metadataSchema.parse(JSON.parse(decoder.decode(metadataReply.bytes)));
+          if (metadata.capture.id !== id) {
+            skipped++;
+            continue;
+          }
+          canonicalJson(metadata);
+          // A skipped or absent listing entry is not evidence of deletion. Reconcile only a
+          // directly observed inconsistency tied to validated application-owned metadata.
+          const observeUnavailable = (reason: 'missing' | 'conflict', message: string) => {
+            unavailable.push({
+              id,
+              operationId: metadata.capture.operationId,
+              contentRevision: metadata.capture.contentRevision,
+              lifecycleRevision: metadata.lifecycle.revision,
+              notePath: notePath(resolved, id),
+              metadataPath: metadataPath(resolved, id),
+              reason,
+              message,
+            });
+            skipped++;
+          };
+          const note = await readForImport(notePath(resolved, id));
+          if (!note) {
+            observeUnavailable(
+              'missing',
+              'The saved vault note is missing. The cached capture was retained for manual reconciliation.',
+            );
+            continue;
+          }
+          if ((await sha256(note.bytes)) !== metadata.evidence.noteSha256) {
+            observeUnavailable(
+              'conflict',
+              'The saved vault note no longer matches its capture metadata. Existing evidence was preserved.',
+            );
+            continue;
+          }
+          let asset: CaptureRecord['asset'];
+          if (metadata.evidence.asset) {
+            const descriptor = metadata.evidence.asset;
+            if (consumed + descriptor.byteLength > maxImportBytes) {
+              skipped++;
+              continue;
+            }
+            const file = await readForImport(
+              attachmentPath(resolved, id, descriptor.extension),
+              descriptor.byteLength,
+            );
+            if (!file) {
+              observeUnavailable(
+                'missing',
+                'A saved vault attachment is missing. The cached capture was retained for manual reconciliation.',
+              );
+              continue;
+            }
+            if (
+              file.bytes.byteLength !== descriptor.byteLength ||
+              (await sha256(file.bytes)) !== descriptor.sha256
+            ) {
+              observeUnavailable(
+                'conflict',
+                'A saved vault attachment no longer matches its capture metadata. Existing evidence was preserved.',
+              );
+              continue;
+            }
+            asset = {
+              bytes: new Uint8Array(file.bytes),
+              extension: descriptor.extension,
+              mimeType: descriptor.mimeType,
+            };
+          }
+          const recovered = captureRecordSchema.parse({
+            ...metadata.capture,
+            updatedAt: metadata.lifecycle.updatedAt,
+            lifecycle: metadata.lifecycle.status,
+            lifecycleRevision: metadata.lifecycle.revision,
+            persistence: 'saved-vault',
+            indexState: 'pending',
+            vault: {
+              notePath: notePath(resolved, id),
+              metadataPath: metadataPath(resolved, id),
+              metadataEtag: metadataReply.etag,
+            },
+            ...(asset ? { asset } : {}),
+            ...(metadata.metadata ? { metadata: metadata.metadata } : {}),
+          });
+          validateAsset(recovered);
+          // Regenerate the raw note to confirm its marker, operation, and source match the metadata.
+          if (!equalBytes(renderNote(resolved, recovered, metadata.evidence.asset), note.bytes)) {
+            observeUnavailable(
+              'conflict',
+              'The saved vault note no longer matches its original capture format. Existing evidence was preserved.',
+            );
+            continue;
+          }
+          records.push(recovered);
+        } catch {
+          skipped++;
+        }
+      }
+      return {
+        records,
+        skipped,
+        ...(unavailable.length ? { unavailable } : {}),
+        ...(skipped
+          ? {
+              message: `${skipped} vault entries were skipped because they were invalid, missing, changed or outside import limits.`,
+            }
+          : {}),
+      };
+    } catch (error) {
+      return {
+        records,
+        skipped,
+        ...(unavailable.length ? { unavailable } : {}),
+        message: resultFromError(error).message ?? 'Vault import failed.',
+      };
+    }
+  }
+
+  return { ensureCapture, syncLifecycle: ensureCapture, probe, importCaptures };
+}

@@ -1,6 +1,6 @@
 # Implementation milestones
 
-Start from [the critique](PLAN_REVIEW.md), [architecture](ARCHITECTURE.md), and [security requirements](SECURITY.md). Each milestone produces a usable increment and evidence. Feature completion is independent of whether the calendar slot has ended.
+Start from [the critique](PLAN_REVIEW.md), [architecture](ARCHITECTURE.md), and [security requirements](SECURITY.md). Each milestone produces a usable increment and evidence. Feature completion is independent of whether the calendar slot has ended. [STATUS.md](STATUS.md) records current implementation and unfinished acceptance gates; this document retains the target scope.
 
 ## Delivery priorities
 
@@ -18,7 +18,7 @@ Cut optional breadth in this order if time compresses: short clips/additional si
 **First build session; dependency probes should be short and explicit.**
 
 - Resolve the distribution license against the actual gaze dependency/model choices before incorporating runtime code. Record versions and supported minimum Chrome version.
-- Scaffold one Manifest V3 TypeScript extension, using Vite and adding CRXJS only if useful. Pin a supported runtime/package manager and dependencies; commit the lockfile.
+- Scaffold one Manifest V3 TypeScript extension with a small static build. The implementation uses esbuild; no development server or framework is needed. Pin a supported runtime/package manager and dependencies; commit the lockfile.
 - Create the module layout and runtime schemas in ARCHITECTURE.md. Wire a static registry/composition root and a core-only profile. Add strict TypeScript, formatting/linting and import-boundary checks.
 - Add a minimal frozen-lockfile CI workflow for the actual commands. Keep permissions read-only, pin third-party actions, and use no private secrets or privileged PR execution. Validate the built manifest/CSP and bundled executable assets.
 - Probe the installed Obsidian plugin in a synthetic vault: connection, certificate setup, create-only rejection, ETag read, conditional-update conflict and attachment bytes. Report missing support as a setup requirement.
@@ -93,7 +93,7 @@ Target Friday 23 October for completion, leaving margin before the Saturday 05:0
 
 - Freeze scope before recording. Repeat the core and media checks in a fresh extension profile with a dedicated test vault. Verify cached local inference separately from first download.
 - Run the established type/lint/import, unit/contract, focused browser/security and packaging checks. Review dependency findings, the actual manifest/CSP, secret exclusions, licenses and packaged model/runtime assets.
-- Run the installed Jev advisory review on the intended code diff, read its evidence/coverage/limitations, and independently inspect important boundaries and failures. Record unavailable evidence; do not treat an advisory score as merge approval.
+- Use direct review and focused independent subagent review on the intended diff. Sam disabled jev-review for this build on 20 October 2026. Record actual coverage, findings and fixes alongside executable checks.
 - Produce an unpacked extension/release zip, truthful setup/privacy documentation, actual model declaration and known supported conditions.
 - Record a 60–90 second real demonstration: deliberate grab, note in Obsidian, local image, YouTube transcript moment, retrieval back to the timestamp, cancel/spit-back, haunting and gaze if working. Use genuine current captures.
 - Prepare a screenshot and a writeup of at most 500 characters describing only shipped behavior. Provide submission materials for the builder.

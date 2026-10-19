@@ -1,6 +1,6 @@
 # Architecture and component contracts
 
-This is the implementation design. Module names are intended locations; they are not implemented yet. Use a single TypeScript package and static composition so the project stays small enough for the Yard.
+This is the target implementation design. The current extension uses a single TypeScript package and static composition. [IMPLEMENTATION.md](IMPLEMENTATION.md) maps the shipped modules and simplifications; [STATUS.md](STATUS.md) records observed evidence. Planned contracts and optional integrations below are not all implemented.
 
 ## Ownership and dependency direction
 

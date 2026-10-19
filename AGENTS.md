@@ -27,8 +27,6 @@ User instructions override this plan. Preserve the deliberate arm/circle/shake i
 
 Implement the checks specified for the current milestone. Run focused tests while iterating and the required milestone checks before calling it complete. Do not add tests that simply mirror trivial implementation details.
 
-Use the installed jev-review skill as the first advisory pass on the intended code diff when a valid baseline exists. Inspect its evidence and limitations, then review important contracts independently. If unavailable, report that and continue required review; Jev never replaces verification or authorizes a merge.
-
-Public project source may be sent to the configured advisory reviewer. Do not include credentials, personal browser data, or private fixtures in that input. Do not create commits merely to manufacture a review baseline.
+Do not use jev-review: Sam disabled it on 20 October 2026 because it is not working as intended. Use direct code review and focused independent subagent review where helpful, alongside executable checks. Subagents are authorized for this build; assign distinct file ownership and integrate their work carefully. Do not send source to an advisory service.
 
 At handoff, update docs/STATUS.md with the actual revision, completed work, checks run, remaining gaps, and the next concrete step. Record model declarations honestly. Do not claim production readiness or site-wide capture coverage from a small demo sample.

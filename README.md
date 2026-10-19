@@ -1,41 +1,63 @@
 # Zombie Hand
 
-A Chrome extension for Hackyard Yard 5. Hesitate over content to arm a zombie hand, circle to capture it into an Obsidian vault, and shake to cancel or spit back a capture. Related notes return as ghosts while you browse.
+A Chrome extension for Hackyard Yard 5. Pause over a phrase, circle to capture it into Obsidian, and shake to cancel or archive it. Search saved evidence locally and let related thoughts return as ghosts.
 
-**Status: planning baseline.** This repository contains the reviewed specification, architecture, security requirements, and implementation sequence. The extension and the controls described here have not been implemented or verified yet.
+**Status: working development build, with automated browser tests and a separate live Obsidian integration check.** See [current evidence](docs/STATUS.md). Broad website coverage, human gaze accuracy, and an installed Chrome-to-Obsidian rehearsal are still unverified.
 
-## Start here
+## Run it
 
-- [Plan critique](docs/PLAN_REVIEW.md): weaknesses in the original brief and the decisions that address them.
-- [Architecture](docs/ARCHITECTURE.md): module ownership, contracts, persistence, and how to add or remove features.
-- [Security requirements](docs/SECURITY.md): trust boundaries, permissions, data handling, and release gates.
-- [Build plan](docs/BUILD_PLAN.md): ordered milestones with observable completion criteria.
-- [Current status](docs/STATUS.md): resume point, decisions still to verify, and evidence.
-- [Contributor instructions](AGENTS.md): rules for implementing this plan.
+Use Node **24.22.0** and npm **11.19.1**. From this repository:
 
-## Intended experience
+```sh
+npm ci
+npm run model:fetch
+npm run build
+```
 
-1. Enable capture on a page. Pause over a phrase, image, link, or supported video player.
-2. The hand rises and highlights a locked target. Circle to confirm; shake or Escape to cancel.
-3. Content lands in a real vault note. A short undo opportunity makes the hand spit it back into a recoverable archive.
-4. Search locally or discover a related capture through a quiet ghost with source links.
+Model downloads happen during development, use pinned files and SHA-256 verification, and are bundled into the extension. Capturing and local inference need no AI provider key.
 
-The first complete slice is text capture → confirmed vault save → local semantic retrieval → a related-note ghost. Media follows: local image attachments with screenshot/link fallbacks, and YouTube moments with accessible timestamped transcripts. Gaze remains a planned demo feature. Cloud summaries, Jev judgments, OCR, chat, daily Resurrection, graph linking, and short clip recording are independently optional.
+1. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select this repository's `dist` directory.
+2. Open a separate Obsidian test vault and enable the official [Local REST API plugin](https://github.com/coddingtonbear/obsidian-local-rest-api).
+3. Open the extension's **Wake the hand** settings. Set the numeric loopback endpoint, application folder and plugin key. Keys use session storage by default; remembering a key is optional.
+4. Set up the plugin's HTTPS certificate using its documented procedure. The extension does not bypass TLS checks. For a deliberate local demo, the plugin's HTTP listener and the extension's loopback HTTP option can both be enabled explicitly instead.
+5. Choose **Test vault & sync queued captures**. The probe verifies conditional writes and attachment bytes, leaving small synthetic `_health` files under the selected application folder. A changed destination or key stays paused until this succeeds.
+6. Pin Zombie Hand, open an ordinary web page and click its toolbar button. Pause for roughly 800 ms over content, then draw a circle in either direction. **Alt+Shift+Z** or the hand's button provides an accessible capture action; **Escape** cancels an armed or pending capture.
 
-Saving a video moment preserves a timestamped reference and available transcript/preview; it does not promise a downloaded copy of streaming video. Every capture reports its actual outcome. Optional features can be disabled without losing saved data or preventing the basic capture loop.
+Only the explicit toolbar action activates a page. Restricted Chrome pages and editable fields are unsupported. For the first demo, use public text and a test vault.
 
-## Schedule
+## What works in this build
 
-[Yard 5](https://hackyard.tech/yards/yard-5) opens for coding at **20 October 2026, 05:00 AEDT** and closes submissions at **24 October 2026, 05:00 AEDT**. Target a finished demo and submission materials on Friday 23 October. Milestone checks determine readiness; a date is not evidence that a feature works.
+- **Text and links:** a durable local queue, acknowledged vault saves, visible failures, conflict-safe recovery, archive and Rebury. Spit-back retains vault files.
+- **Images:** original raster bytes when the hosting origin is authorized; otherwise a verified visible crop, then a labelled link fallback. Settings includes an exact image-origin grant/removal control. Crops require the target to remain fully visible and unchanged.
+- **YouTube moments:** confirmation-time video identity and timestamp, accessible native transcript cues, and search links back to cue times. Open YouTube's **Show transcript** panel before arming. Ads are rejected as video-clock sources. Successful native reads are labelled partial.
+- **Transcript fallback:** the graveyard accepts WebVTT, SRT and timestamped lines, with explicit import provenance. Untimed text cannot create invented cue times. Retained transcript text is bounded; this is not full-video archiving.
+- **Local recall:** packaged MiniLM embeddings, semantic or explicitly labelled keyword search, and related-note ghosts on pages where the hand is enabled.
+- **Gaze lab:** a separate experimental page with explicit camera Start/Stop, nine calibration points, five held-out targets and local diagnostics. Camera frames and calibration are not persisted. Gaze is not yet connected to page capture.
 
-## Engineering approach
+Video moments save references and transcript evidence, not downloaded streaming video. Direct PDF/file links are currently references. OCR, cloud providers, Jev, chat, recording, daily Resurrection and graph linking are not implemented.
 
-Use one small TypeScript extension, a pure domain layer, an explicit composition root, narrowly scoped adapters, and a closed feature registry. Durable capture state belongs to the core. Optional features consume versioned snapshots and return proposed enrichments; they cannot own the vault client or decide whether a user capture survives.
+## Verify and package
 
-Security requirements become executable checks during implementation. Browser storage, page text, transcripts, model responses, and downloaded assets are not assumed safe merely because they are local or user-selected.
+```sh
+npm run check
+npm run build:core
+node scripts/check-package.mjs --core
+npx playwright install chromium
+npm run test:browser
+npm run package
+```
 
-## Licensing and model declaration
+`npm run package` creates full/core zip archives with source and asset provenance in `.cache/packages`. Unzip and load the directory containing `manifest.json`; Chrome does not load the zip directly. `dist-core` omits image, YouTube and gaze runtime modules while retaining text capture, vault persistence and local search.
 
-Select a distribution license in milestone M0 before incorporating runtime dependencies. The planned [WebGazer dependency](https://webgazer.cs.brown.edu/) is GPLv3; an optional module boundary does not remove license obligations when code is distributed. Check the selected model weights and other dependencies at the same time. This public planning repository is not yet an open-source release with a selected license.
+The browser suite uses isolated profiles, synthetic pages and a vault protocol fixture. A separate real-plugin probe, `node scripts/probe-live-vault.mjs`, is deliberately scoped to `.local/test-vault`; see [TESTING.md](docs/TESTING.md) before running it. Its secrets and synthetic vault contents are ignored by Git.
 
-Record the development models actually used and the runtime model/version in the release materials. Earlier tool preferences are not evidence of what wrote the shipped implementation.
+## Development map
+
+- [Plan critique](docs/PLAN_REVIEW.md), [milestones](docs/BUILD_PLAN.md), and [current evidence](docs/STATUS.md).
+- [Architecture](docs/ARCHITECTURE.md) and [implementation guide](docs/IMPLEMENTATION.md) explain module ownership and how to remove or replace a feature.
+- [Security requirements](docs/SECURITY.md), [privacy and limitations](docs/PRIVACY.md), and [dependency decisions](docs/DEPENDENCIES.md).
+- [Contributor instructions](AGENTS.md). Jev review is disabled for this build; independent review and executable checks are used instead.
+
+Project source is **GPL-3.0-only**. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled dependencies and model licenses. Runtime models are pinned MiniLM and MediaPipe face-landmarker assets; no cloud model runs in the extension. Codex and explicitly authorized Codex subagents were used for development; an exact session model identifier is not available in the build evidence.
+
+[Yard 5](https://hackyard.tech/yards/yard-5) closes on **24 October 2026 at 05:00 AEDT**. The target remains a rehearsed demo on Friday 23 October.

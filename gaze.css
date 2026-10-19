@@ -1,0 +1,89 @@
+html,
+body {
+  min-height: 100%;
+}
+.gaze-panel {
+  max-width: 760px;
+  margin: 3rem auto 6rem;
+  padding: 2rem;
+}
+.gaze-panel h1 {
+  margin: 0.35em 0;
+}
+#gaze-video {
+  display: block;
+  width: 240px;
+  height: 180px;
+  object-fit: cover;
+  background: #0d1514;
+  border-radius: 12px;
+  transform: scaleX(-1);
+  margin: 1.5rem 0;
+}
+body[data-gaze-phase="stopped"] #gaze-video {
+  visibility: hidden;
+}
+#gaze-stop {
+  position: fixed;
+  bottom: 22px;
+  right: 24px;
+  z-index: 6;
+}
+#gaze-target {
+  position: fixed;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  width: 98px;
+  height: 98px;
+  padding: 12px;
+  border: 2px solid #afffc5;
+  background: #1b4834;
+  color: #f3fff5;
+  box-shadow: 0 0 40px #80e5a233;
+  cursor: pointer;
+}
+#gaze-target:disabled {
+  background: #25302c;
+  color: #b0b9b2;
+  border-color: #66756c;
+  cursor: wait;
+}
+#gaze-target:focus-visible {
+  outline: 4px solid #f0b8ff;
+  outline-offset: 7px;
+}
+#gaze-step {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  max-width: 65vw;
+  z-index: 4;
+  color: #d9efdf;
+}
+#gaze-dot {
+  position: fixed;
+  z-index: 20;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #c6a5ff;
+  background: #c6a5ff44;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+[hidden] {
+  display: none !important;
+}
+@media (max-width: 600px) {
+  .gaze-panel {
+    margin-top: 0;
+    padding: 1.25rem;
+  }
+  #gaze-stop {
+    left: 16px;
+    right: 16px;
+  }
+}
