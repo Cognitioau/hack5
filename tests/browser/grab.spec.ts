@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { configureVault, launchExtension, state, wake } from './helpers/extension-fixture';
@@ -16,10 +16,12 @@ async function dragSelect(page: Page, selector: string): Promise<string> {
   return page.evaluate(() => (getSelection()?.toString() ?? '').replace(/\s+/gu, ' ').trim());
 }
 
-async function frame(page: Page, name: string): Promise<void> {
+async function frame(page: Page, name: string, shot?: Buffer): Promise<void> {
   const directory = resolve('.cache/browser-artifacts');
   await mkdir(directory, { recursive: true });
-  await page.screenshot({ path: resolve(directory, `${name}.png`) });
+  const path = resolve(directory, `${name}.png`);
+  if (shot) await writeFile(path, shot);
+  else await page.screenshot({ path });
 }
 
 /**
@@ -27,43 +29,38 @@ async function frame(page: Page, name: string): Promise<void> {
  * ink, paper, plaster or the selection), or the page's blue selection highlight.
  */
 async function pixels(
-  fixture: Awaited<ReturnType<typeof launchExtension>>,
+  decoder: Page,
   shot: Buffer,
   region: { x: number; y: number; width: number; height: number },
   colour: 'skin' | 'selection' = 'skin',
 ): Promise<number> {
-  const decoder = await fixture.context.newPage();
-  try {
-    return await decoder.evaluate(
-      async ({ bytes, area, wanted }) => {
-        const bitmap = await createImageBitmap(
-          new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
-        );
-        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-        const context = canvas.getContext('2d');
-        if (!context) throw new Error('No 2D context');
-        context.drawImage(bitmap, 0, 0);
-        const { data } = context.getImageData(area.x, area.y, area.width, area.height);
-        let count = 0;
-        for (let i = 0; i < data.length; i += 4) {
-          const [r = 0, g = 0, b = 0] = [data[i], data[i + 1], data[i + 2]];
-          const luma = 0.3 * r + 0.59 * g + 0.11 * b;
-          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-          // Warm grey skin: plaster debris and cracks are near neutral, the selection is blue.
-          const skin = luma > 25 && luma < 200 && chroma >= 12 && r >= g + 5 && b <= g;
-          const selection = b - r > 25 && b > 120;
-          if (wanted === 'skin' ? skin : selection) count += 1;
-        }
-        return count;
-      },
-      { bytes: [...shot], area: region, wanted: colour },
-    );
-  } finally {
-    await decoder.close();
-  }
+  return decoder.evaluate(
+    async ({ bytes, area, wanted }) => {
+      const bitmap = await createImageBitmap(
+        new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
+      );
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('No 2D context');
+      context.drawImage(bitmap, 0, 0);
+      const { data } = context.getImageData(area.x, area.y, area.width, area.height);
+      let count = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const [r = 0, g = 0, b = 0] = [data[i], data[i + 1], data[i + 2]];
+        const luma = 0.3 * r + 0.59 * g + 0.11 * b;
+        const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+        // Warm grey skin: plaster debris and cracks are near neutral, the selection is blue.
+        const skin = luma > 25 && luma < 200 && chroma >= 12 && r >= g + 5 && b <= g;
+        const selection = b - r > 25 && b > 120;
+        if (wanted === 'skin' ? skin : selection) count += 1;
+      }
+      return count;
+    },
+    { bytes: [...shot], area: region, wanted: colour },
+  );
 }
 
-test('the rendered hand bursts through a page whose CSP forbids every image', async () => {
+test('the footage hand bursts through a page whose CSP forbids every image', async () => {
   test.setTimeout(60_000);
   const vault = await startVaultFixture();
   const fixture = await launchExtension('full');
@@ -102,24 +99,38 @@ test('the rendered hand bursts through a page whose CSP forbids every image', as
       width: 180,
       height: 200,
     };
-    const before = await strict.screenshot();
-    const quiet = await pixels(fixture, before, region);
-    const highlighted = await pixels(fixture, before, line, 'selection');
+    // One clip covers both, so each frame is quick to capture and decode.
+    const clip = {
+      x: Math.min(region.x, line.x),
+      y: Math.min(region.y, line.y),
+      width: Math.max(region.x + region.width, line.x + line.width) - Math.min(region.x, line.x),
+      height: Math.max(region.y + region.height, line.y + line.height) - Math.min(region.y, line.y),
+    };
+    const within = (area: typeof clip) => ({ ...area, x: area.x - clip.x, y: area.y - clip.y });
+    const before = await strict.screenshot({ clip });
     await strict.mouse.click(viewport.width - 35, viewport.height - 35);
+    // Film the whole grab: the hand is picked at random, and each reaches the
+    // words at its own pace.
     const clicked = Date.now();
-    await strict.waitForTimeout(640);
-    const shot = await strict.screenshot();
-    await frame(strict, 'grab-strict-csp');
-    const haunted = await pixels(fixture, shot, region);
+    const shots: Buffer[] = [];
+    while (Date.now() - clicked < 3_000) shots.push(await strict.screenshot({ clip }));
+    // Decode only now: opening a tab earlier would take focus from the page and cancel the grab.
+    const decoder = await fixture.context.newPage();
+    const quiet = await pixels(decoder, before, within(region));
+    const highlighted = await pixels(decoder, before, within(line), 'selection');
+    const haunted: number[] = [];
+    const left: number[] = [];
+    for (const shot of shots) {
+      haunted.push(await pixels(decoder, shot, within(region)));
+      left.push(await pixels(decoder, shot, within(line), 'selection'));
+    }
+    const peak = Math.max(...haunted);
+    await frame(strict, 'grab-strict-csp', shots[haunted.indexOf(peak)]);
     expect(quiet).toBeLessThan(60);
-    // Measured near 12,500 on this fixture; the cracks and debris alone count zero.
-    expect(haunted).toBeGreaterThan(3_000);
+    // Peaks measured 7,900 to 12,600 across the three hands; cracks and debris alone count zero.
+    expect(peak).toBeGreaterThan(3_000);
     // Once the hand has taken the words, none of the page's own highlight is left
     // showing around the blank where they were.
-    const shots: Buffer[] = [];
-    while (Date.now() - clicked < 3_000) shots.push(await strict.screenshot({ clip: line }));
-    const whole = { x: 0, y: 0, width: line.width, height: line.height };
-    const left = await Promise.all(shots.map((clip) => pixels(fixture, clip, whole, 'selection')));
     expect(highlighted).toBeGreaterThan(2_000);
     expect(Math.min(...left)).toBeLessThan(30);
     await expect
