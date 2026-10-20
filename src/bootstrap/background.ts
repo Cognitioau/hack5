@@ -120,6 +120,8 @@ const handActivation = createHandActivation({
 });
 let activationIntent = 0;
 let activationRequest: { id: string; intent: number } | null = null;
+/** An activation finished on Chrome's grant, after the popup that began it had closed. */
+let grantedActivation: string | null = null;
 let captureViewEpoch = 0;
 const ready = Promise.all([secureStorage(), handActivation.ready]).then(async () => {
   if (!__CORE_ONLY__) await reconcileMediaOrigins();
@@ -273,10 +275,6 @@ async function contentRequest(
   const message = contentMessageSchema.parse(raw);
   const context = await currentDocument(sender);
   switch (message.type) {
-    case 'PAUSE_HAND':
-      activationIntent += 1;
-      await handActivation.pause();
-      return { ok: true, activation: handActivation.getMode() };
     case 'OPEN_SETTINGS':
       await chrome.runtime.openOptionsPage();
       return { ok: true };
@@ -432,6 +430,12 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
       return { ok: true, activationRequest: activationRequest.id };
     case 'SET_ACTIVATION':
       if (message.enabled) {
+        if (
+          message.requestId !== undefined &&
+          message.requestId === grantedActivation &&
+          handActivation.getMode() === 'universal'
+        )
+          return { ok: true, activation: 'universal' };
         if (
           !activationRequest ||
           message.requestId !== activationRequest.id ||
@@ -624,6 +628,27 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
       void coordinator.drain(true);
       return { ok: true, message: 'Local semantic model is ready. No API key is used.' };
     }
+    case 'GRAB_ACTIVE_TAB': {
+      // Opening the popup was the toolbar gesture that granted activeTab here.
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (tab?.id === undefined) return { ok: false, error: 'There is no page to grab from.' };
+      if (handActivation.getMode() === 'paused')
+        return { ok: false, error: 'Zombie Hand is paused everywhere. Turn it on to grab.' };
+      await handActivation.wake(tab.id, true);
+      const reply = (await chrome.tabs
+        .sendMessage(tab.id, { v: 1, type: 'GRAB', kind: message.kind }, { frameId: 0 })
+        .catch(() => undefined)) as Partial<AppResponse> | undefined;
+      if (!reply)
+        return {
+          ok: false,
+          error:
+            'Zombie Hand cannot reach this page. Browser pages, the Web Store and excluded sites are off limits.',
+        };
+      // The page's copy of the script reports in its own words; they stay plain text.
+      return reply.ok === false && typeof reply.error === 'string'
+        ? { ok: false, error: reply.error.slice(0, 300) }
+        : { ok: true };
+    }
   }
 }
 chrome.runtime.onMessage.addListener(
@@ -632,7 +657,7 @@ chrome.runtime.onMessage.addListener(
       await ready;
       if (sender.id !== chrome.runtime.id || !boundedMessage(raw))
         throw new Error('Invalid message source or message too large');
-      const trustedPages = ['options.html', 'graveyard.html'].map((path) =>
+      const trustedPages = ['options.html', 'graveyard.html', 'popup.html'].map((path) =>
         chrome.runtime.getURL(path),
       );
       const trusted =
@@ -648,23 +673,22 @@ chrome.runtime.onMessage.addListener(
     return true;
   },
 );
-// A browser action is the user gesture for Chrome's one-time optional-site grant.
-chrome.action.onClicked.addListener((tab) => {
-  const intent = ++activationIntent;
-  if (handActivation.getMode() === 'universal') {
-    void handActivation.pause().catch(() => chrome.runtime.openOptionsPage());
-    return;
-  }
-  const permission = chrome.permissions.request({ origins: [...universalPageOrigins] });
-  void (async () => {
-    const granted = await permission;
-    await ready;
-    if (intent !== activationIntent) return;
-    // The worker may have been cold when this click began.
-    if (handActivation.getMode() === 'universal') await handActivation.pause();
-    else if (granted) await handActivation.enable();
-    else if (tab.id) await handActivation.wake(tab.id, true);
-  })().catch(() => chrome.runtime.openOptionsPage());
+// Chrome's site-access prompt can close the toolbar popup that asked for it, and
+// the popup's own SET_ACTIVATION with it. The grant finishes the activation it began.
+chrome.permissions.onAdded.addListener(() => {
+  const pending = activationRequest;
+  if (!pending) return;
+  const current = () => activationRequest === pending && pending.intent === activationIntent;
+  void ready
+    .then(async () => {
+      if (!current()) return;
+      if (!(await chrome.permissions.contains({ origins: [...universalPageOrigins] }))) return;
+      if (!current()) return;
+      activationRequest = null;
+      grantedActivation = pending.id;
+      await handActivation.enable();
+    })
+    .catch(() => undefined);
 });
 void ready.then(() => handActivation.refresh()).catch(() => undefined);
 chrome.tabs.onActivated.addListener(({ tabId }) => {

@@ -66,6 +66,8 @@ function activate(): () => void {
   let ghostEpoch = 0;
   let lastGhostAt = Number.NEGATIVE_INFINITY;
   let lastUndo: { captureId: string; until: number } | null = null;
+  /** Why the latest attempt took nothing; null once it was kept or the hand moved on. */
+  let failure: string | null = null;
   const ownedIds = new Set<string>();
   const cancellationRequested = new Set<string>();
   const acknowledgedSaves = new Set<string>();
@@ -110,11 +112,17 @@ function activate(): () => void {
 
   const showError = (detail: string, options: StateOptions = {}): void => {
     phase = 'error';
+    failure = options.kept ? null : detail;
     circle = null;
     trail = [];
     view.setTrail([]);
     view.setTarget(null);
-    view.setState('error', 'Still here. Still yours.', detail, options);
+    view.setState(
+      'error',
+      options.kept ? 'Kept on this device.' : 'The hand slipped.',
+      detail,
+      options,
+    );
   };
 
   const renderCapture = (capture: PublicCapture): void => {
@@ -194,12 +202,14 @@ function activate(): () => void {
     operationId = null;
     locked = null;
     view.setUndoAvailable(true);
+    const noVault = capture.lastError === noVaultMessage;
     showError(
       capture.persistence === 'conflict'
-        ? 'Kept locally. The vault contains a conflicting change; review it in the graveyard.'
-        : capture.lastError ||
-            'Kept locally, but the vault save failed. Check the connection in the graveyard.',
-      { kept: true, settings: capture.lastError === noVaultMessage },
+        ? 'The vault has a conflicting change; review it in the graveyard.'
+        : noVault
+          ? 'Connect a vault to bury it in Obsidian.'
+          : capture.lastError || 'The vault save failed. Check the connection in the graveyard.',
+      { kept: true, settings: noVault },
     );
   };
 
@@ -501,6 +511,21 @@ function activate(): () => void {
     else await grabPage();
   };
 
+  /** A grab asked for from the toolbar popup, which shows why nothing was taken. */
+  const grabFromToolbar = async (whole: boolean): Promise<AppResponse> => {
+    const selected = whole ? null : extractSelection(document);
+    if (!whole && !selected)
+      return { ok: false, error: 'Select some text on the page first, or grab the whole page.' };
+    if (phase === 'saving' || phase === 'arming')
+      return { ok: false, error: 'The hand is still holding the last grab.' };
+    failure = null;
+    // An armed lasso target is taken as it stands.
+    if (!(await beginManualGrab())) return { ok: true };
+    if (selected) await grabSelected(selected);
+    else await grabPage();
+    return phase === 'error' && failure ? { ok: false, error: failure } : { ok: true };
+  };
+
   const showSelectionChip = (): void => {
     chipTimer = undefined;
     if (disposed) return;
@@ -552,13 +577,6 @@ function activate(): () => void {
     },
     archive: () => {
       void archive();
-    },
-    page: () => {
-      void beginManualGrab().then((ready) => (ready ? grabPage() : undefined));
-    },
-    close: () => {
-      void request({ v: 1, type: 'PAUSE_HAND' });
-      dispose();
     },
     settings: () => {
       void request({ v: 1, type: 'OPEN_SETTINGS' });
@@ -779,6 +797,9 @@ function activate(): () => void {
         dispose();
         sendResponse({ ok: true });
         return false;
+      case 'GRAB':
+        void grabFromToolbar((message as { kind?: unknown }).kind === 'page').then(sendResponse);
+        return true;
       default:
         return false;
     }

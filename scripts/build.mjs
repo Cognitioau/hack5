@@ -64,6 +64,12 @@ const bundles = await Promise.all([
     outfile: resolve(destination, 'graveyard.js'),
     format: 'esm',
   }),
+  build({
+    ...common,
+    entryPoints: ['src/bootstrap/popup.ts'],
+    outfile: resolve(destination, 'popup.js'),
+    format: 'esm',
+  }),
   ...(!core
     ? [
         build({
@@ -81,6 +87,8 @@ await writeFile(resolve(destination, 'manifest.json'), `${JSON.stringify(manifes
 for (const name of [
   'options.html',
   'graveyard.html',
+  'popup.html',
+  'popup.css',
   'app.css',
   'ui.css',
   'LICENSE',

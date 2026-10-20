@@ -5,6 +5,7 @@ import {
   configureVault,
   isolatedMessage,
   launchExtension,
+  openPopup,
   state,
   wake,
 } from './helpers/extension-fixture';
@@ -67,6 +68,44 @@ async function pixels(
 }
 
 type Area = { x: number; y: number; width: number; height: number };
+
+/** The size of what the overlay paints over a page: every pixel that changed between two shots. */
+async function painted(decoder: Page, before: Buffer, after: Buffer): Promise<Area | null> {
+  return decoder.evaluate(
+    async ({ first, second }) => {
+      const read = async (bytes: number[]) => {
+        const bitmap = await createImageBitmap(
+          new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
+        );
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('No 2D context');
+        context.drawImage(bitmap, 0, 0);
+        return context.getImageData(0, 0, bitmap.width, bitmap.height);
+      };
+      const [a, b] = [await read(first), await read(second)];
+      let [left, top, right, bottom] = [Infinity, Infinity, -1, -1];
+      for (let y = 0; y < a.height; y += 1)
+        for (let x = 0; x < a.width; x += 1) {
+          const i = (y * a.width + x) * 4;
+          const change = Math.max(
+            Math.abs((a.data[i] ?? 0) - (b.data[i] ?? 0)),
+            Math.abs((a.data[i + 1] ?? 0) - (b.data[i + 1] ?? 0)),
+            Math.abs((a.data[i + 2] ?? 0) - (b.data[i + 2] ?? 0)),
+          );
+          if (change <= 24) continue;
+          left = Math.min(left, x);
+          top = Math.min(top, y);
+          right = Math.max(right, x);
+          bottom = Math.max(bottom, y);
+        }
+      return right < 0
+        ? null
+        : { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
+    },
+    { first: [...before], second: [...after] },
+  );
+}
 
 /** The live selection's bounds, and the area the browser paints it over (whole line boxes). */
 async function selectionArea(page: Page): Promise<{ bounds: Area; painted: Area }> {
@@ -210,6 +249,15 @@ test('with no vault connected the hand still climbs out, and the page can open s
     ]);
     expect(response.ok).toBe(true);
     expect(opened.url()).toBe(`chrome-extension://${fixture.id}/options.html`);
+    // The toolbar popup says where the capture is and how to finish burying it.
+    const popup = await openPopup(fixture, strict);
+    expect(await popup.evaluate<string>('document.getElementById("vault").textContent')).toBe(
+      'No vault yet; 1 capture is kept on this device. Connect vault',
+    );
+    expect(
+      await popup.evaluate<string>('document.querySelector("#vault a").getAttribute("href")'),
+    ).toBe('options.html');
+    await popup.close();
   } finally {
     await fixture.close();
     await pages.close();
@@ -256,6 +304,79 @@ for (const shape of ['two paragraphs', 'a translucent callout'] as const)
       await vault.close();
     }
   });
+
+test('the toolbar popup grabs the selection or the page and gets out of the way; the page keeps a slim hand', async () => {
+  test.setTimeout(120_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const article = await fixture.context.newPage();
+    await article.goto(`${vault.origin}/article`);
+    const viewport = article.viewportSize();
+    if (!viewport) throw new Error('No viewport');
+    // The dock's corner, clear of where a grab's paper sheet tumbles.
+    const corner = { x: viewport.width - 300, y: viewport.height - 64, width: 300, height: 64 };
+    const bare = await article.screenshot({ clip: corner });
+    const texts = async (): Promise<string[]> =>
+      (await state(fixture)).map((capture) => capture.candidate.text);
+
+    // Nothing selected: the popup says so where the click was, stays open and takes nothing.
+    let popup = await openPopup(fixture, article);
+    expect(await popup.evaluate<string>('document.getElementById("mode").textContent')).toBe(
+      'On request',
+    );
+    expect(await popup.evaluate<string>('document.getElementById("vault").textContent')).toBe(
+      'Vault connected. Grabs are buried in Obsidian.',
+    );
+    await popup.evaluate('document.getElementById("grab-selection").click()');
+    await expect
+      .poll(() => popup.evaluate<string>('document.getElementById("message").textContent'))
+      .toContain('Select some text on the page first');
+    expect(await popup.open()).toBe(true);
+    await popup.close();
+    expect(await state(fixture)).toHaveLength(0);
+
+    // A selection survives the popup taking focus; Grab selection takes exactly it.
+    const words = await dragSelect(article, '#dog');
+    expect(words.length).toBeGreaterThan(10);
+    popup = await openPopup(fixture, article);
+    await popup.evaluate('document.getElementById("grab-selection").click()');
+    await expect.poll(() => popup.open()).toBe(false);
+    await popup.close();
+    await expect.poll(texts).toContain(words);
+    expect((await state(fixture))[0]?.candidate.kind).toBe('text');
+
+    // Grab page takes the page, whatever is selected.
+    await article.waitForTimeout(6_300);
+    popup = await openPopup(fixture, article);
+    await popup.evaluate('document.getElementById("grab-page").click()');
+    await expect.poll(() => popup.open()).toBe(false);
+    await popup.close();
+    await expect
+      .poll(async () => (await state(fixture)).find((capture) => capture.candidate.kind === 'link'))
+      .toMatchObject({ candidate: { url: `${vault.origin}/article` } });
+    await expect
+      .poll(async () => (await state(fixture)).map((capture) => capture.persistence))
+      .toEqual(['saved-vault', 'saved-vault']);
+
+    // On the page, a save is one line beside the hand, then the hand alone.
+    const decoder = await fixture.context.newPage();
+    await article.bringToFront();
+    const saved = await painted(decoder, bare, await article.screenshot({ clip: corner }));
+    await frame(article, 'popup-grab-saved');
+    // A 42px bar and its soft shadow; the old receipt card stood about 150px tall.
+    expect(saved?.height).toBeLessThanOrEqual(50);
+    expect(saved?.width).toBeLessThanOrEqual(260);
+    await article.waitForTimeout(6_500);
+    const quiet = await painted(decoder, bare, await article.screenshot({ clip: corner }));
+    expect(quiet?.height).toBeLessThanOrEqual(50);
+    expect(quiet?.width).toBeLessThanOrEqual(50);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
 
 test('one click grabs a selection or the whole page, and a chip follows a settled selection', async () => {
   test.setTimeout(120_000);

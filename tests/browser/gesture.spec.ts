@@ -4,6 +4,7 @@ import {
   captureAt,
   drawCircle,
   launchExtension,
+  openPopup,
   screenshotArtifact,
   state,
   wake,
@@ -95,8 +96,15 @@ test('universal activation follows tabs, navigation and restart, respects exclus
     const first = await fixture.context.newPage();
     await first.goto(`${vault.origin}/article`);
     expect(await first.locator('[data-zombie-hand-ui]').count()).toBe(0);
-    await fixture.options.bringToFront();
-    await fixture.options.getByRole('button', { name: 'Enable across tabs', exact: true }).click();
+    // The toolbar popup's switch turns the hand on everywhere.
+    const turnOn = await openPopup(fixture, first);
+    await turnOn.evaluate('document.getElementById("activation").click()');
+    await expect
+      .poll(() => turnOn.evaluate<string>('document.getElementById("mode").textContent'))
+      .toBe('On everywhere');
+    await turnOn.close();
+    // The settings page, opened before, reads the switch when it loads.
+    await fixture.options.reload();
     await expect(fixture.options.locator('#activation-state')).toContainText(
       'On across your browser',
     );
@@ -149,9 +157,21 @@ test('universal activation follows tabs, navigation and restart, respects exclus
     const reopened = await fixture.context.newPage();
     await reopened.goto(`${vault.origin}/article?restarted`);
     await expect(reopened.locator('[data-zombie-hand-ui]')).toHaveCount(1);
-    await fixture.options.bringToFront();
-    await fixture.options.getByRole('button', { name: 'Pause everywhere', exact: true }).click();
-    await expect(fixture.options.locator('#activation-state')).toContainText('Paused everywhere');
+    const pause = await openPopup(fixture, reopened);
+    expect(await pause.evaluate<string>('document.getElementById("activation").textContent')).toBe(
+      'Pause everywhere',
+    );
+    await pause.evaluate('document.getElementById("activation").click()');
+    await expect
+      .poll(() => pause.evaluate<string>('document.getElementById("mode").textContent'))
+      .toBe('Paused');
+    // Paused means paused: the popup offers no grab until the hand is turned on again.
+    expect(
+      await pause.evaluate<boolean[]>(
+        '["grab-selection", "grab-page"].map((id) => document.getElementById(id).disabled)',
+      ),
+    ).toEqual([true, true]);
+    await pause.close();
     await expect(reopened.locator('[data-zombie-hand-ui]')).toHaveCount(0);
     await reopened.bringToFront();
     await reopened.reload();

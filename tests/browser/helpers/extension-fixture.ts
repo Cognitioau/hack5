@@ -106,10 +106,21 @@ export async function wake(fixture: ExtensionFixture, page: Page): Promise<numbe
     const { targetInfos } = await session.send('Target.getTargets', { filter: [{ type: 'tab' }] });
     const target = targetInfos.find((entry) => entry.url === page.url());
     if (!target) throw new Error('No tab target');
-    // Browser-level action grants Chrome's actual activeTab capability. Some
-    // headless builds do not dispatch action.onClicked, so inject the shipped
-    // content entry through the same production scripting API afterward.
+    // Opening the toolbar popup grants Chrome's actual activeTab capability.
+    // The test then dismisses it and injects the shipped content entry through
+    // the same production scripting API that the popup's grab uses.
     await session.send('Extensions.triggerAction', { id: fixture.id, targetId: target.targetId });
+    const popupUrl = `chrome-extension://${fixture.id}/popup.html`;
+    let popup: string | undefined;
+    await expect
+      .poll(async () => {
+        popup = (await session.send('Target.getTargets')).targetInfos.find(
+          (entry) => entry.url === popupUrl,
+        )?.targetId;
+        return popup !== undefined;
+      })
+      .toBe(true);
+    if (popup) await session.send('Target.closeTarget', { targetId: popup });
   } finally {
     await session.detach();
   }
@@ -121,6 +132,81 @@ export async function wake(fixture: ExtensionFixture, page: Page): Promise<numbe
   }, page.url());
   await expect(page.locator('[data-zombie-hand-ui]')).toBeAttached();
   return tabId;
+}
+
+export interface ToolbarPopup {
+  /** Runs an expression in the popup and returns its value. */
+  evaluate<T>(expression: string): Promise<T>;
+  /** Whether the popup is still open. */
+  open(): Promise<boolean>;
+  /** Dismisses the popup if it is still open. */
+  close(): Promise<void>;
+}
+
+/**
+ * Clicks the toolbar button over `page`, as a person does. Chrome opens the
+ * real popup, which Playwright does not list as a page, so it is driven over CDP.
+ */
+export async function openPopup(fixture: ExtensionFixture, page: Page): Promise<ToolbarPopup> {
+  await page.bringToFront();
+  const browser = fixture.context.browser();
+  if (!browser) throw new Error('No browser');
+  const session = await browser.newBrowserCDPSession();
+  const popupUrl = `chrome-extension://${fixture.id}/popup.html`;
+  const popupTarget = async () =>
+    (await session.send('Target.getTargets')).targetInfos.find((entry) => entry.url === popupUrl);
+  const { targetInfos } = await session.send('Target.getTargets', { filter: [{ type: 'tab' }] });
+  const tab = targetInfos.find((entry) => entry.url === page.url());
+  if (!tab) throw new Error('No tab target');
+  await session.send('Extensions.triggerAction', { id: fixture.id, targetId: tab.targetId });
+  await expect.poll(async () => (await popupTarget()) !== undefined).toBe(true);
+  const target = await popupTarget();
+  if (!target) throw new Error('The popup did not open');
+  // Playwright's CDP session carries no child session id, so the popup is
+  // reached through the browser target's message relay.
+  const { sessionId } = await session.send('Target.attachToTarget', {
+    targetId: target.targetId,
+    flatten: false,
+  });
+  type Reply = { id?: number; result?: { result?: { value?: unknown } }; error?: unknown };
+  let next = 0;
+  const replies = new Map<number, (reply: Reply) => void>();
+  session.on('Target.receivedMessageFromTarget', (event) => {
+    const reply = JSON.parse(event.message) as Reply;
+    if (reply.id !== undefined) replies.get(reply.id)?.(reply);
+  });
+  const popup: ToolbarPopup = {
+    async evaluate<T>(expression: string): Promise<T> {
+      const id = ++next;
+      const reply = await new Promise<Reply>((resolve) => {
+        replies.set(id, resolve);
+        void session.send('Target.sendMessageToTarget', {
+          sessionId,
+          message: JSON.stringify({
+            id,
+            method: 'Runtime.evaluate',
+            // A click a person makes: the popup may ask Chrome for site access.
+            params: { expression, awaitPromise: true, returnByValue: true, userGesture: true },
+          }),
+        });
+      });
+      if (reply.error) throw new Error(JSON.stringify(reply.error));
+      return reply.result?.result?.value as T;
+    },
+    async open() {
+      return (await popupTarget()) !== undefined;
+    },
+    async close() {
+      const open = await popupTarget();
+      if (open) await session.send('Target.closeTarget', { targetId: open.targetId });
+      await session.detach().catch(() => undefined);
+    },
+  };
+  // Wait until the popup has read the extension's state.
+  await expect
+    .poll(() => popup.evaluate<string>('document.getElementById("mode").textContent'))
+    .not.toBe('Checking…');
+  return popup;
 }
 
 export async function state(fixture: ExtensionFixture): Promise<PublicCapture[]> {

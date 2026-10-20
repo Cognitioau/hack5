@@ -12,8 +12,6 @@ const actions = {
   capture: vi.fn(),
   cancel: vi.fn(),
   archive: vi.fn(),
-  close: vi.fn(),
-  page: vi.fn(),
 };
 const rectangle = {
   x: 120,
@@ -137,21 +135,24 @@ afterEach(() => {
 });
 
 describe('target-local hand presentation', () => {
-  it('keeps ordinary cursor movement quiet and secondary controls explicitly expandable', () => {
+  it('keeps the page to the hand and a status line; the toolbar holds page, pause and help', () => {
+    const grab = vi.fn();
+    view.dispose();
+    view = new HandView(document, { ...actions, grab });
     view.move(180, 230);
     expect(element('.effect').hidden).toBe(true);
-    expect(element('.panel').hidden).toBe(true);
     expect(shadow.querySelector('.cursor')).toBeNull();
-    element('.toggle').click();
-    expect(element('.toggle').getAttribute('aria-expanded')).toBe('true');
-    expect(element('.panel').hidden).toBe(false);
-    const savePage = [...shadow.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent === 'Save page',
-    );
-    savePage?.click();
-    expect(actions.page).toHaveBeenCalledOnce();
-    element('.close').click();
-    expect(actions.close).toHaveBeenCalledOnce();
+    // Nothing on the page opens into a menu or card.
+    for (const gone of ['.toggle', '.panel', '.receipt', '.close', '.snippet'])
+      expect(shadow.querySelector(gone)).toBeNull();
+    const labels = [...shadow.querySelectorAll('button')].map((button) => button.textContent);
+    for (const moved of ['Grab selection', 'Save page', 'Settings', 'Pause everywhere'])
+      expect(labels).not.toContain(moved);
+    // The hand ends the bar, so a status growing beside it never moves it.
+    expect(element('.bar').lastElementChild).toBe(element('.grab'));
+    expect(element('.dock').dataset.state).toBe('idle');
+    element('.grab').click();
+    expect(grab).toHaveBeenCalledOnce();
   });
 
   it('renders untrusted snippet copies as text and never alters the source passage', () => {
@@ -171,7 +172,7 @@ describe('target-local hand presentation', () => {
       'Queued locally. Waiting for the vault response.',
     );
     expect(element('.effect').hidden).toBe(false);
-    expect(element('.title').textContent).not.toContain('Saved');
+    expect(element('.status').textContent).not.toContain('Saved');
   });
 
   it('preserves the capture animation after target removal but never hides a newer capture', async () => {
@@ -192,7 +193,7 @@ describe('target-local hand presentation', () => {
     view.setState('error', 'Still local.', 'The vault has not acknowledged this capture.');
     await vi.advanceTimersByTimeAsync(500);
     expect(element('.effect').hidden).toBe(true);
-    expect(element('.title').textContent).toBe('Still local.');
+    expect(element('.status').textContent).toBe('Still local.');
   });
 
   it('loads each hand once per page, plays its frames in order and never repeats a hand', async () => {
@@ -329,7 +330,6 @@ describe('target-local hand presentation', () => {
   it('keeps undo accessible while collapsed and suppresses it during a different pending capture', () => {
     view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
     view.setUndoAvailable(true);
-    expect(element('.panel').hidden).toBe(true);
     expect(element('.archive').hidden).toBe(false);
     element('.archive').click();
     expect(actions.archive).toHaveBeenCalledOnce();
@@ -346,7 +346,7 @@ describe('target-local hand presentation', () => {
     await vi.advanceTimersByTimeAsync(4_000);
     expect(element('.effect').hidden).toBe(true);
     expect(element('.dock').dataset.state).toBe('saving');
-    expect(element('.title').textContent).toBe('Queued locally.');
+    expect(element('.status').textContent).toBe('Queued locally.');
     expect(element('.detail').textContent).toBe('Waiting for the vault connection.');
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -361,7 +361,7 @@ describe('target-local hand presentation', () => {
     if (!hand) throw new Error('No hand was loaded');
     const grabEnd = grabEndFor(hand);
     await vi.advanceTimersByTimeAsync(40);
-    view.setState('error', 'Still here. Still yours.', 'Connect your vault in Settings.', {
+    view.setState('error', 'Kept on this device.', 'Connect a vault to bury it in Obsidian.', {
       kept: true,
     });
     // Still reaching for the words just before the fist closes on them.
@@ -381,31 +381,38 @@ describe('target-local hand presentation', () => {
     view.setTarget(rectangle, 'Never captured.');
     view.setState('saving', 'Taking hold…', 'Preparing a durable local capture.');
     await vi.advanceTimersByTimeAsync(40);
-    view.setState('error', 'Still here. Still yours.', 'The capture was refused.');
+    view.setState('error', 'The hand slipped.', 'The capture was refused.');
     await vi.advanceTimersByTimeAsync(0);
     expect(element('.effect').dataset.phase).toBe('release');
   });
 
-  it('offers settings from the panel, and from the receipt when the fix is there', () => {
+  it('offers Connect vault beside the hand only when a vault fixes it, then lets the error go quiet', async () => {
+    expect(shadow.querySelector('.connect')).toBeNull();
     const settings = vi.fn();
     view.dispose();
     view = new HandView(document, { ...actions, settings });
-    const receiptSettings = element<HTMLButtonElement>('.receipt .settings');
-    expect(receiptSettings.hidden).toBe(true);
-    view.setState('error', 'Still here. Still yours.', 'Connect your vault in Settings.', {
+    const connect = element<HTMLButtonElement>('.connect');
+    expect(connect.hidden).toBe(true);
+    view.setState('error', 'Kept on this device.', 'Connect a vault to bury it in Obsidian.', {
       kept: true,
       settings: true,
     });
-    expect(receiptSettings.hidden).toBe(false);
-    receiptSettings.click();
-    element('.toggle').click();
-    element<HTMLButtonElement>('.panel .settings').click();
-    expect(settings).toHaveBeenCalledTimes(2);
-    // Any later state takes the receipt's offer away again.
+    expect(connect.hidden).toBe(false);
+    expect(element('.status').textContent).toBe('Kept on this device.');
+    expect(element('.detail').textContent).toBe('Connect a vault to bury it in Obsidian.');
+    connect.click();
+    expect(settings).toHaveBeenCalledOnce();
+    // Readable for a while, then the hand alone keeps the warning colour.
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(element('.dock').dataset.quiet).toBe('false');
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(element('.dock').dataset.quiet).toBe('true');
+    // Any later state takes the offer away again.
     view.setState('idle', 'Ready when you are.', 'Select text or click the hand.');
-    expect(receiptSettings.hidden).toBe(true);
-    view.setState('error', 'Still here. Still yours.', 'Select some page text first.');
-    expect(receiptSettings.hidden).toBe(true);
+    expect(connect.hidden).toBe(true);
+    expect(element('.dock').dataset.quiet).toBe('false');
+    view.setState('error', 'The hand slipped.', 'Select some page text first.');
+    expect(connect.hidden).toBe(true);
   });
 
   it('does not grab an old passage again when archiving its completed capture', async () => {
@@ -420,6 +427,9 @@ describe('target-local hand presentation', () => {
   });
 
   it('hides every screenshot overlay and disposes pending animation work and listeners', async () => {
+    const grab = vi.fn();
+    view.dispose();
+    view = new HandView(document, { ...actions, grab });
     view.setTarget(rectangle, 'Synthetic screenshot target');
     view.setTrail([
       { x: 140, y: 210 },
@@ -432,17 +442,17 @@ describe('target-local hand presentation', () => {
     expect(view.host.style.getPropertyPriority('display')).toBe('important');
     view.setHidden(false);
     expect(view.host.style.getPropertyValue('display')).toBe('block');
-    const close = element('.close');
+    const hand = element('.grab');
     view.dispose();
     expect(view.host.isConnected).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
-    close.click();
-    expect(actions.close).not.toHaveBeenCalled();
+    hand.click();
+    expect(grab).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(element('.effect').hidden).toBe(true);
   });
 
-  it('keeps related notes behind the compact indicator and rejects executable links', () => {
+  it('keeps a related note behind its own small toggle and rejects executable links', () => {
     const ghost: SearchResult = {
       capture: {
         schemaVersion: 1,
@@ -468,15 +478,18 @@ describe('target-local hand presentation', () => {
       sourceUrl: 'https://example.org/note',
       mode: 'keyword',
     };
+    expect(element('.ghost-toggle').hidden).toBe(true);
     view.setGhost(ghost);
     expect(element('.ghost').hidden).toBe(true);
-    expect(element('.ghost-indicator').hidden).toBe(false);
-    element('.toggle').click();
+    expect(element('.ghost-toggle').hidden).toBe(false);
+    element('.ghost-toggle').click();
+    expect(element('.ghost-toggle').getAttribute('aria-expanded')).toBe('true');
     expect(element('.ghost').hidden).toBe(false);
     expect(element('.ghost a').textContent).toBe('<b>Source title</b>');
     expect(shadow.querySelector('img')).toBeNull();
     view.setGhost({ ...ghost, sourceUrl: 'javascript:alert(1)' });
     expect(element('.ghost').hidden).toBe(true);
+    expect(element('.ghost-toggle').hidden).toBe(true);
     expect(element('.ghost a').hasAttribute('href')).toBe(false);
   });
 });

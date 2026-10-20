@@ -6,14 +6,16 @@ type Rectangle = Pick<TargetRectangle, 'x' | 'y' | 'width' | 'height'>;
 type Point = Pick<Rectangle, 'x' | 'y'>;
 
 export type HandState = 'idle' | 'arming' | 'armed' | 'saving' | 'saved' | 'archived' | 'error';
+/**
+ * What the page overlay offers. Everything else (grab the page, pause, settings,
+ * help) lives in the toolbar popup, so the page carries a hand and a status line.
+ */
 export interface HandActions {
   /** Grab the current text selection. */
   capture: () => void;
   cancel: () => void;
   archive: () => void;
-  close: () => void;
-  page?: () => void;
-  /** The primary button: the selection when there is one, otherwise the page. */
+  /** The hand: the selection when there is one, otherwise the page. */
   grab?: () => void;
   /** Reads one grave hand's packaged frames; its grave opens without a hand until they arrive. */
   sprite?: (hand: number) => Promise<Uint8Array<ArrayBuffer> | null>;
@@ -23,7 +25,7 @@ export interface HandActions {
 export interface StateOptions {
   /** An error whose capture is kept on this device: its grab plays out and the copy is buried. */
   kept?: boolean;
-  /** The receipt offers the settings page, where the problem is put right. */
+  /** The status offers the settings page, where the problem is put right. */
   settings?: boolean;
 }
 export interface TargetPresentation {
@@ -38,31 +40,28 @@ export interface TargetPresentation {
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const HAND_PATH =
   'M8 25 5 20 1.5 15Q.5 13 2 12.5q1-.5 2 1L6 16 4.5 6Q4 3.8 6 3.7q1.5 0 1.8 2L9 12 9 3Q9 .7 11 .8q1.6 0 1.6 2L13 12l1-8q.3-2 2-1.7 1.8.3 1.5 2.2L17 14l2-6q.7-2 2.2-1.4 1.5.6.8 2.5L20 19l-3 6Z';
-/** A saved/archived receipt shrinks back to the bare icon after this long. */
+/** A saved/archived status shrinks back to the bare hand after this long. */
 const QUIET_AFTER_MS = 6_000;
+/** An error stays readable longer, then the hand alone keeps its warning colour. */
+const ERROR_QUIET_AFTER_MS = 12_000;
 const STYLE = `
 :host{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;color:#f4f4ed!important;--acid:#cff890;--ink:#171d1b;--muted:#b5bfb8}
 *{box-sizing:border-box}button,a{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid var(--acid);outline-offset:3px}[hidden]{display:none!important}
-.dock{position:fixed;right:14px;bottom:14px;max-width:calc(100vw - 20px);background:var(--ink);border:1px solid #475447;border-radius:21px;box-shadow:0 4px 14px #10201430;color:#f4f4ed;z-index:2147483647;transition:opacity .18s}
-.dock[data-expanded="false"][data-state="idle"],.dock[data-expanded="false"][data-quiet="true"]{opacity:.78;border-color:transparent}
-.dock[data-expanded="false"][data-state="idle"]:hover,.dock[data-expanded="false"][data-quiet="true"]:hover,.dock:focus-within{opacity:1}
+.dock{position:fixed;right:14px;bottom:14px;max-width:calc(100vw - 20px);background:var(--ink);border:1px solid #475447;border-radius:20px;box-shadow:0 4px 14px #10201430;color:#f4f4ed;z-index:2147483647;transition:opacity .18s}
+.dock:is([data-state="idle"],[data-quiet="true"]){opacity:.78;border-color:transparent}
+.dock:is([data-state="idle"],[data-quiet="true"]):hover,.dock:focus-within{opacity:1}
 .bar{display:flex;align-items:center;gap:2px;padding:2px}
 .grab{position:relative;display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:18px;background:transparent;padding:0;flex:none}.grab:hover{background:#ffffff12}.grab:disabled{cursor:default}
 .mark{width:19px;height:21px;fill:#aacc83;stroke:#e0f8c0;stroke-width:1.1}
-.status{font-size:11px;font-weight:640;color:#e7f4d9;white-space:nowrap;padding:0 6px 0 2px;max-width:190px;overflow:hidden;text-overflow:ellipsis}
-.dock[data-state="idle"] .status,.dock[data-expanded="false"][data-quiet="true"] .status,.dock[data-expanded="false"][data-quiet="true"] .archive{display:none}
-.toggle{display:grid;place-items:center;width:24px;height:30px;border:0;border-radius:15px;background:transparent;color:#a7b3a6;font-size:15px;line-height:1;padding:0}.toggle:hover{background:#ffffff12;color:#fff}
-.dock[data-expanded="false"]:is([data-state="idle"],[data-quiet="true"]) .toggle{position:absolute;right:100%;top:50%;transform:translateY(-50%);height:26px;border-radius:13px;background:var(--ink);opacity:0;pointer-events:none}
-.dock[data-expanded="false"]:is([data-state="idle"],[data-quiet="true"]):is(:hover,:focus-within) .toggle{opacity:1;pointer-events:auto}
-.button{border:1px solid #485d40;background:#29342a;color:#e7f1df;min-height:31px;padding:6px 10px;border-radius:8px;font-size:11px;font-weight:630}.button:hover{background:#344530}.button:disabled{opacity:.4;cursor:default}.button.primary{background:var(--acid);border-color:var(--acid);color:#1b2a10}.button.primary:hover{background:#dffaaf}
-.bar .button{border-radius:15px;min-height:28px;padding:4px 10px;font-size:10px;white-space:nowrap}.bar .cancel{border-color:transparent;background:#ffffff0b;color:#c7d0c3}
-.receipt{padding:2px 14px 12px;width:270px;max-width:calc(100vw - 26px)}.dock[data-expanded="false"]:not([data-state="error"]) .receipt{display:none}
-.title{font-size:13px;font-weight:680;letter-spacing:-.1px;line-height:1.35;margin:2px 0 5px}.detail{font-size:11px;line-height:1.5;color:var(--muted);margin:0;overflow-wrap:anywhere}.snippet{font-size:11px;line-height:1.45;margin:10px 0 0;padding:7px 9px;background:#ffffff04;border-left:2px solid #a9c985;color:#dce5d3;white-space:pre-wrap;overflow:hidden;max-height:48px;overflow-wrap:anywhere}
+.words{min-width:0;max-width:220px;padding:3px 6px 3px 10px}
+.status{display:block;font-size:11px;font-weight:640;line-height:1.35;color:#e7f4d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail{font-size:10px;line-height:1.35;color:var(--muted);margin:1px 0 0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.dock:not([data-state="error"]) .detail,.dock[data-state="idle"] .words,.dock[data-quiet="true"] :is(.words,.archive,.connect){display:none}
+.button{border:1px solid #485d40;background:#29342a;color:#e7f1df;border-radius:15px;min-height:28px;padding:4px 10px;font-size:10px;font-weight:630;white-space:nowrap;flex:none}.button:hover{background:#344530}.button.primary{background:var(--acid);border-color:var(--acid);color:#1b2a10}.button.primary:hover{background:#dffaaf}.cancel{border-color:transparent;background:#ffffff0b;color:#c7d0c3}
 .announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.dock[data-state="error"]{border-color:#b58a5b}.dock[data-state="error"] .title{color:#f1d4a5}.dock[data-state="error"] .mark{fill:#e2b36f}.dock[data-state="saving"] .mark{fill:#d3b779}.dock[data-state="arming"] .mark,.dock[data-state="armed"] .mark{fill:var(--acid)}
-.panel{border-top:1px solid #344132;padding:11px 14px 13px;width:270px;max-width:calc(100vw - 26px)}.controls{display:flex;gap:7px;flex-wrap:wrap}.key{font-size:10px;line-height:1.6;color:#a5b59e;margin:10px 0 0}.instruction{font-size:11px;color:#d7e2ce;line-height:1.5;margin:0 0 10px}.links{display:flex;gap:14px}.close,.link{margin-top:10px;border:0;background:none;color:#a7b3a6;font-size:10px;padding:2px 0;text-decoration:underline;text-underline-offset:2px}.close:hover,.link:hover{color:#fff}.receipt .settings{margin-top:9px}
-.ghost{border-top:1px solid #344132;padding:11px 14px 13px;width:270px;max-width:calc(100vw - 26px)}.ghost-label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#a7c78d;margin:0 0 6px}.ghost a{font-size:12px;font-weight:640;color:#e4f6d4;text-decoration:none;overflow-wrap:anywhere}.ghost a:hover{text-decoration:underline}.ghost p{font-size:11px;line-height:1.45;color:var(--muted);margin:6px 0 0;overflow-wrap:anywhere}.ghost-dismiss{float:right;border:0;background:none;color:var(--muted);font-size:10px;cursor:pointer;padding:0 0 4px 7px}
-.ghost-indicator{position:absolute;top:5px;right:5px;width:7px;height:7px;background:#cff890;border-radius:50%;box-shadow:0 0 6px #cff890a0}
+.dock[data-state="error"]{border-color:#b58a5b}.dock[data-state="error"] .status{color:#f1d4a5}.dock[data-state="error"] .mark{fill:#e2b36f}.dock[data-state="saving"] .mark{fill:#d3b779}.dock[data-state="arming"] .mark,.dock[data-state="armed"] .mark{fill:var(--acid)}
+.ghost-toggle{border:0;border-radius:13px;min-height:26px;padding:3px 9px;background:#cff89022;color:#dff6c6;font-size:10px;font-weight:640;white-space:nowrap;flex:none}.ghost-toggle:hover,.ghost-toggle[aria-expanded="true"]{background:#cff89040;color:#fff}
+.ghost{position:absolute;right:0;bottom:calc(100% + 8px);width:260px;max-width:calc(100vw - 26px);background:var(--ink);border:1px solid #475447;border-radius:14px;box-shadow:0 4px 14px #10201430;padding:11px 14px 13px}.ghost-label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#a7c78d;margin:0 0 6px}.ghost a{font-size:12px;font-weight:640;color:#e4f6d4;text-decoration:none;overflow-wrap:anywhere}.ghost a:hover{text-decoration:underline}.ghost p{font-size:11px;line-height:1.45;color:var(--muted);margin:6px 0 0;overflow-wrap:anywhere}.ghost-dismiss{float:right;border:0;background:none;color:var(--muted);font-size:10px;cursor:pointer;padding:0 0 4px 7px}
 .chip{position:fixed;z-index:2147483647;display:grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid #2c3a26;border-radius:15px;background:var(--acid);box-shadow:0 3px 10px #10201440;animation:chip-in .16s ease-out}.chip:hover{background:#dffaaf;transform:scale(1.08)}.chip .mark{width:15px;height:17px;fill:#24361a;stroke:none}
 @keyframes chip-in{from{opacity:0;transform:translateY(4px) scale(.8)}}
 .targets{pointer-events:none;position:fixed;inset:0;z-index:2147483644}.target{position:fixed;border:1px solid #789e32;border-radius:3px;background:#c4f77721;box-shadow:0 0 0 2px #efffd350;pointer-events:none}.targets[data-state="arming"] .target{border-style:dashed}.targets[data-state="saving"] .target{background:#c4f7770d;border-color:#8da56480}.trail{pointer-events:none;position:fixed;inset:0;width:100vw;height:100vh;overflow:visible;z-index:2147483645}.trail path{fill:none;stroke:#619c32;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 1px #f3ffdf)}.trail .trail-halo{stroke:#f0ffe7b0;stroke-width:5}.trail circle{fill:#cff890;stroke:#4d712b;stroke-width:1.5}
@@ -76,7 +75,7 @@ const STYLE = `
 .slip.text{padding:2px 6px;white-space:nowrap;max-width:12em}.slip.text p{text-overflow:ellipsis}
 .slip.page{width:168px;height:96px;padding:12px 14px;font-size:12px}
 .slip.page p{display:-webkit-box;-webkit-box-orient:vertical}.slip.page .grabbed{font-weight:700;font-size:14px;line-height:1.25;-webkit-line-clamp:2}.slip.page .host{margin-top:3px;font:10px/1.3 system-ui,sans-serif;opacity:.65;-webkit-line-clamp:1}.slip.page i{display:block;height:4px;margin-top:7px;border-radius:2px;background:currentColor;opacity:.14}.slip.page i:nth-of-type(2){width:86%}.slip.page i:nth-of-type(3){width:62%}
-@media(max-width:420px){.dock{right:10px;bottom:10px}.receipt,.panel,.ghost{width:250px}}
+@media(max-width:420px){.dock{right:10px;bottom:10px}.words{max-width:170px}.ghost{width:240px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 `;
 
@@ -90,29 +89,24 @@ export class HandView {
   private readonly trailStart: SVGCircleElement;
   private readonly effect: HTMLDivElement;
   private readonly grave: GraveEffect;
-  private readonly title: HTMLHeadingElement;
   private readonly announcement: HTMLSpanElement;
-  private readonly detail: HTMLParagraphElement;
-  private readonly snippet: HTMLParagraphElement;
-  private readonly grabButton: HTMLButtonElement;
+  private readonly words: HTMLDivElement;
   private readonly status: HTMLSpanElement;
-  private readonly toggle: HTMLButtonElement;
-  private readonly panel: HTMLDivElement;
-  private readonly captureButton: HTMLButtonElement;
-  private readonly pageButton: HTMLButtonElement | null;
+  private readonly detail: HTMLParagraphElement;
+  private readonly grabButton: HTMLButtonElement;
   private readonly cancelButton: HTMLButtonElement;
   private readonly archiveButton: HTMLButtonElement;
+  private readonly connectButton: HTMLButtonElement | null;
   private readonly chip: HTMLButtonElement;
+  private readonly ghostToggle: HTMLButtonElement;
   private readonly ghost: HTMLDivElement;
-  private readonly ghostIndicator: HTMLSpanElement;
   private readonly ghostLink: HTMLAnchorElement;
   private readonly ghostText: HTMLParagraphElement;
-  private readonly receiptSettings: HTMLButtonElement | null;
   private readonly listeners = new AbortController();
   private readonly effectTimers = new Set<number>();
   private quietTimer: number | undefined;
   private state: HandState = 'idle';
-  private expanded = false;
+  private ghostOpen = false;
   private ghostAvailable = false;
   private undoAvailable = false;
   private selectionAvailable = false;
@@ -185,18 +179,17 @@ export class HandView {
 
     this.dock = node('div', 'dock');
     this.dock.dataset.state = 'idle';
-    this.dock.dataset.expanded = 'false';
     this.dock.dataset.quiet = 'false';
     this.dock.setAttribute('role', 'region');
-    this.dock.setAttribute('aria-label', 'Zombie Hand capture controls');
+    this.dock.setAttribute('aria-label', 'Zombie Hand');
+    // The hand sits at the right end of the bar, so it never moves when the
+    // status beside it grows or goes quiet.
     const bar = node('div', 'bar');
-    this.grabButton = button('grab', '', '', () => (actions.grab ?? actions.capture)());
-    this.ghostIndicator = node('span', 'ghost-indicator');
-    this.ghostIndicator.hidden = true;
-    this.ghostIndicator.setAttribute('aria-hidden', 'true');
-    this.grabButton.append(mark(), this.ghostIndicator);
+    this.words = node('div', 'words');
+    this.words.setAttribute('aria-hidden', 'true');
     this.status = node('span', 'status');
-    this.status.setAttribute('aria-hidden', 'true');
+    this.detail = node('p', 'detail');
+    this.words.append(this.status, this.detail);
     this.cancelButton = button(
       'button cancel',
       'Cancel',
@@ -211,74 +204,38 @@ export class HandView {
       actions.archive,
     );
     this.archiveButton.hidden = true;
-    this.toggle = button('toggle', '⋯', 'More Zombie Hand controls', () =>
-      this.setExpanded(!this.expanded),
+    this.connectButton = actions.settings
+      ? button(
+          'button primary connect',
+          'Connect vault',
+          'Open Zombie Hand settings to connect your Obsidian vault',
+          actions.settings,
+        )
+      : null;
+    if (this.connectButton) this.connectButton.hidden = true;
+    this.ghostToggle = button('ghost-toggle', 'Related note', 'A related note came back', () =>
+      this.setGhostOpen(!this.ghostOpen),
     );
-    this.toggle.setAttribute('aria-expanded', 'false');
-    this.toggle.setAttribute('aria-controls', 'zombie-hand-secondary-controls');
-    bar.append(this.grabButton, this.status, this.cancelButton, this.archiveButton, this.toggle);
-
-    const receipt = node('div', 'receipt');
+    this.ghostToggle.hidden = true;
+    this.ghostToggle.setAttribute('aria-expanded', 'false');
+    this.ghostToggle.setAttribute('aria-controls', 'zombie-hand-ghost');
+    this.grabButton = button('grab', '', '', () => (actions.grab ?? actions.capture)());
+    this.grabButton.append(mark());
+    bar.append(
+      this.words,
+      this.cancelButton,
+      this.archiveButton,
+      ...(this.connectButton ? [this.connectButton] : []),
+      this.ghostToggle,
+      this.grabButton,
+    );
     this.announcement = node('span', 'announcement');
     this.announcement.setAttribute('role', 'status');
     this.announcement.setAttribute('aria-live', 'polite');
     this.announcement.setAttribute('aria-atomic', 'true');
-    this.title = node('h2', 'title', 'Ready when you are.');
-    this.detail = node('p', 'detail', 'Select text or click the hand to grab this page.');
-    this.snippet = node('p', 'snippet');
-    this.snippet.hidden = true;
-    receipt.append(this.title, this.detail, this.snippet);
-    this.receiptSettings = actions.settings
-      ? button('button settings', 'Open settings', 'Open Zombie Hand settings', actions.settings)
-      : null;
-    if (this.receiptSettings) {
-      this.receiptSettings.hidden = true;
-      receipt.append(this.receiptSettings);
-    }
 
-    this.panel = node('div', 'panel');
-    this.panel.id = 'zombie-hand-secondary-controls';
-    this.panel.hidden = true;
-    const controls = node('div', 'controls');
-    this.captureButton = button(
-      'button primary',
-      'Grab selection',
-      'Capture the selected text (Alt+Shift+Z)',
-      actions.capture,
-    );
-    controls.append(this.captureButton);
-    this.pageButton = actions.page
-      ? button(
-          'button',
-          'Save page',
-          'Save this page: title, link and a text excerpt',
-          actions.page,
-        )
-      : null;
-    if (this.pageButton) controls.append(this.pageButton);
-    const links = node('div', 'links');
-    if (actions.settings)
-      links.append(
-        button('link settings', 'Settings', 'Open Zombie Hand settings', actions.settings),
-      );
-    links.append(
-      button('close', 'Pause everywhere', 'Pause Zombie Hand everywhere', actions.close),
-    );
-    this.panel.append(
-      node(
-        'p',
-        'instruction',
-        'Select text and click the hand, or click it with nothing selected to grab the page. Hold Shift or Ctrl and circle a sentence, image or video.',
-      ),
-      controls,
-      node(
-        'p',
-        'key',
-        'Alt + Shift + Z: grab the selection or what the pointer is on · Escape: cancel',
-      ),
-      links,
-    );
     this.ghost = node('div', 'ghost');
+    this.ghost.id = 'zombie-hand-ghost';
     this.ghost.hidden = true;
     const dismiss = button('ghost-dismiss', 'Dismiss', 'Dismiss this related note', () =>
       this.setGhost(null),
@@ -293,14 +250,14 @@ export class HandView {
       this.ghostLink,
       this.ghostText,
     );
-    this.dock.append(bar, receipt, this.panel, this.ghost, this.announcement);
+    this.dock.append(this.ghost, bar, this.announcement);
 
     this.chip = button('chip', '', 'Grab selection (Alt+Shift+Z)', actions.capture);
     this.chip.setAttribute('aria-label', 'Grab the selected text');
     this.chip.append(mark());
     this.chip.hidden = true;
     // Pressing a grab control must not collapse the page selection it is about to take.
-    for (const control of [this.chip, this.grabButton, this.captureButton])
+    for (const control of [this.chip, this.grabButton])
       control.addEventListener('mousedown', (event) => event.preventDefault(), {
         signal: this.listeners.signal,
       });
@@ -359,8 +316,6 @@ export class HandView {
       // Load the next hand while the user confirms, so it is ready to burst through.
       this.loadSprite(this.nextHand);
     }
-    this.snippet.textContent = snippet.slice(0, 220);
-    this.snippet.hidden = snippet.length === 0;
   }
 
   setTrail(points: readonly Point[]): void {
@@ -411,34 +366,33 @@ export class HandView {
     this.state = state;
     this.dock.dataset.state = state;
     this.targets.dataset.state = state;
-    this.title.textContent = title;
+    // One line of status beside the hand; only an error adds its detail under it.
+    this.status.textContent = state === 'saved' ? 'Buried in Obsidian' : title;
     this.detail.textContent = detail;
+    // The whole message, for a status cut short by the bar's width.
+    this.words.title = `${title} ${detail}`;
     this.announcement.textContent = `${title} ${detail}`;
-    this.status.textContent =
-      state === 'saved' ? 'Buried in Obsidian' : state === 'error' ? 'Needs attention' : title;
-    const busy = state === 'saving' || state === 'arming';
-    this.captureButton.disabled = busy;
-    this.grabButton.disabled = busy;
-    if (this.pageButton) this.pageButton.disabled = busy;
-    this.captureButton.textContent = state === 'armed' ? 'Grab this' : 'Grab selection';
+    this.grabButton.disabled = state === 'saving' || state === 'arming';
     this.cancelButton.hidden = !['arming', 'armed', 'saving'].includes(state);
-    if (this.receiptSettings)
-      this.receiptSettings.hidden = !(state === 'error' && options.settings);
+    if (this.connectButton) this.connectButton.hidden = !(state === 'error' && options.settings);
     if (['arming', 'armed', 'saving'].includes(state)) this.chip.hidden = true;
     this.updateUndo();
     this.updateGrabLabel();
     this.setQuiet(false);
-    if (state === 'saved' || state === 'archived')
-      this.quietTimer = this.document.defaultView?.setTimeout(() => {
-        this.quietTimer = undefined;
-        if (!this.disposed) this.setQuiet(true);
-      }, QUIET_AFTER_MS);
+    if (state === 'saved' || state === 'archived' || state === 'error')
+      this.quietTimer = this.document.defaultView?.setTimeout(
+        () => {
+          this.quietTimer = undefined;
+          if (!this.disposed) this.setQuiet(true);
+        },
+        state === 'error' ? ERROR_QUIET_AFTER_MS : QUIET_AFTER_MS,
+      );
     if (state === 'saving' && previous !== 'saving') this.startEffect();
     else if (state === 'saved' && previous !== 'saved') this.retreatEffect(true);
     else if (['arming', 'armed'].includes(state) && state !== previous) this.hideEffect();
     // A capture kept on this device was taken, even when the vault refused it
     // before the hand surfaced: the grab plays out and the page heals over it.
-    // The receipt, not the animation, says where it is kept.
+    // The status, not the animation, says where it is kept.
     else if (state === 'error' && options.kept && state !== previous) this.retreatEffect(true);
     else if (['idle', 'archived', 'error'].includes(state) && state !== previous)
       this.retreatEffect(false);
@@ -469,9 +423,8 @@ export class HandView {
       this.ghostLink.textContent = '';
       this.ghostText.textContent = '';
     }
-    this.ghost.hidden = !this.ghostAvailable || !this.expanded;
-    this.ghostIndicator.hidden = !this.ghostAvailable || this.expanded;
-    this.updateToggleLabel();
+    this.ghostToggle.hidden = !this.ghostAvailable;
+    this.setGhostOpen(this.ghostOpen && this.ghostAvailable);
   }
 
   setHidden(hidden: boolean): void {
@@ -486,27 +439,16 @@ export class HandView {
     this.host.remove();
   }
 
-  private setExpanded(expanded: boolean): void {
-    this.expanded = expanded;
-    this.dock.dataset.expanded = String(expanded);
-    this.toggle.setAttribute('aria-expanded', String(expanded));
-    this.panel.hidden = !expanded;
-    this.ghost.hidden = !expanded || !this.ghostAvailable;
-    this.ghostIndicator.hidden = expanded || !this.ghostAvailable;
-    this.updateToggleLabel();
+  private setGhostOpen(open: boolean): void {
+    this.ghostOpen = open && this.ghostAvailable;
+    this.ghost.hidden = !this.ghostOpen;
+    this.ghostToggle.setAttribute('aria-expanded', String(this.ghostOpen));
   }
 
   private setQuiet(quiet: boolean): void {
     if (this.quietTimer !== undefined) this.document.defaultView?.clearTimeout(this.quietTimer);
     this.quietTimer = undefined;
     this.dock.dataset.quiet = String(quiet);
-  }
-
-  private updateToggleLabel(): void {
-    this.toggle.setAttribute(
-      'aria-label',
-      `${this.expanded ? 'Collapse' : 'Open'} Zombie Hand capture controls${this.ghostAvailable ? '; related note available' : ''}`,
-    );
   }
 
   private updateGrabLabel(): void {
@@ -556,7 +498,7 @@ export class HandView {
     if (this.reducedMotion()) this.grave.hold();
     this.effectStartedAt = this.document.defaultView?.performance.now() ?? 0;
     // The decorative hand must not obscure a passage while an offline queue waits.
-    // Its neutral fade changes presentation only; the receipt retains the real save state.
+    // Its neutral fade changes presentation only; the status retains the real save state.
     const linger = this.grave.grabEnd + 1_100;
     this.later(() => {
       this.effect.dataset.phase = 'fade';

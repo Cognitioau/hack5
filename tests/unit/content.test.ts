@@ -571,7 +571,9 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
       (chrome.runtime as { id?: string | undefined }).id = undefined;
       throw new Error('Extension context invalidated.');
     });
-    (shadow?.querySelector('.grab') as HTMLButtonElement).click();
+    const hand = shadow?.querySelector<HTMLButtonElement>('.grab');
+    if (!hand) throw new Error('No hand to click');
+    hand.click();
     await flush();
     expect(document.querySelectorAll('[data-zombie-hand-ui]')).toHaveLength(0);
   });
@@ -690,22 +692,73 @@ describe('one-click grabs (mocked browser boundary)', () => {
       // The vault answered before the hand surfaced; it is still reaching for the words.
       expect(control('.effect').hidden).toBe(false);
       expect(control('.effect').dataset.phase).toBe('reach');
-      expect(control('.receipt .settings').hidden).toBe(!offered);
+      expect(control('.status').textContent).toBe('Kept on this device.');
+      expect(control('.connect').hidden).toBe(!offered);
+      if (!offered) return;
+      expect(control('.detail').textContent).toBe('Connect a vault to bury it in Obsidian.');
+      control('.connect').click();
+      await flush();
+      expect(messages('OPEN_SETTINGS')).toHaveLength(1);
     },
   );
 
-  it('opens settings from the panel', async () => {
-    control('.toggle').click();
-    control('.panel .settings').click();
+  /** A grab asked for from the toolbar popup; returns what the page answered. */
+  async function toolbarGrab(kind: 'selection' | 'page'): Promise<unknown> {
+    const respond = vi.fn();
+    expect(runtimeListener?.({ v: 1, type: 'GRAB', kind }, { id: 'test-extension' }, respond)).toBe(
+      true,
+    );
     await flush();
-    expect(messages('OPEN_SETTINGS')).toHaveLength(1);
+    expect(respond).toHaveBeenCalledOnce();
+    return respond.mock.calls[0]?.[0];
+  }
+
+  it('tells the toolbar why nothing was taken, and takes the selection when there is one', async () => {
+    expect(await toolbarGrab('selection')).toEqual({
+      ok: false,
+      error: 'Select some text on the page first, or grab the whole page.',
+    });
+    expect(messages('ARM')).toHaveLength(0);
+    selectPassage();
+    expect(await toolbarGrab('selection')).toEqual({ ok: true });
+    expect(messages('ARM')[0]).toMatchObject({ candidate: { kind: 'text', text: passage } });
+    expect(messages('CAPTURE')).toHaveLength(1);
   });
 
-  it('asks for a selection instead of guessing when Grab selection has nothing to take', async () => {
-    control('.button.primary').click();
-    await flush();
-    expect(messages('ARM')).toHaveLength(0);
-    expect(shadow?.textContent).toContain('Select some page text first');
+  it('takes the page from the toolbar even with text selected', async () => {
+    selectPassage();
+    expect(await toolbarGrab('page')).toEqual({ ok: true });
+    expect(messages('ARM')[0]).toMatchObject({
+      candidate: { kind: 'link', url: 'https://example.org/article' },
+    });
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it('passes a refusal back to the toolbar, but counts a capture kept on the device as taken', async () => {
+    send.mockImplementation(async (message: ContentMessage) =>
+      message.type === 'ARM'
+        ? { ok: false, error: 'Zombie Hand is paused everywhere' }
+        : handleMessage(message),
+    );
+    selectPassage();
+    expect(await toolbarGrab('selection')).toEqual({
+      ok: false,
+      error: 'Zombie Hand is paused everywhere',
+    });
+    expect(messages('CAPTURE')).toHaveLength(0);
+    send.mockImplementation(async (message: ContentMessage) =>
+      message.type === 'CAPTURE'
+        ? {
+            ok: true,
+            capture: {
+              ...record(message.operationId, 'active', 'failed'),
+              lastError: noVaultMessage,
+            },
+          }
+        : handleMessage(message),
+    );
+    expect(await toolbarGrab('selection')).toEqual({ ok: true });
+    expect(control('.status').textContent).toBe('Kept on this device.');
   });
 
   it('offers a selection chip once a selection settles, never mid-drag or for a grabbed selection', async () => {
