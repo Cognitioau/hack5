@@ -1,4 +1,10 @@
-import type { AppResponse, ContentMessage, Features, PublicCapture } from '../core/contracts/index';
+import {
+  type AppResponse,
+  type ContentMessage,
+  type Features,
+  noVaultMessage,
+  type PublicCapture,
+} from '../core/contracts/index';
 import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core/domain/gestures';
 import {
   extractCandidate,
@@ -182,7 +188,7 @@ function activate(): () => void {
         ? 'Kept locally. The vault contains a conflicting change; review it in the graveyard.'
         : capture.lastError ||
             'Kept locally, but the vault save failed. Check the connection in the graveyard.',
-      { kept: true, settings: capture.persistence !== 'conflict' },
+      { kept: true, settings: capture.lastError === noVaultMessage },
     );
   };
 

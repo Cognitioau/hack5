@@ -7,6 +7,7 @@ import type {
   SearchResult,
   VaultRepository,
 } from '../core/contracts';
+import { noVaultMessage } from '../core/contracts';
 import {
   contentHash,
   cosine,
@@ -40,11 +41,7 @@ export function createCoordinator(deps: CoordinatorDependencies) {
         const vault = await deps.vault();
         const saved = vault
           ? await vault.ensureCapture(record)
-          : {
-              status: 'failed' as const,
-              message:
-                'Connect your Obsidian test vault in Settings. Your capture is retained locally.',
-            };
+          : { status: 'failed' as const, message: noVaultMessage };
         const latest = notify(await deps.store.settle(id, record.lifecycleRevision, saved));
         if (latest.lifecycleRevision !== record.lifecycleRevision) continue;
         if (saved.status === 'saved-vault' && latest.lifecycle === 'active') void index(id);

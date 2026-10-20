@@ -230,6 +230,9 @@ export const defaultSettings: Settings = {
   features: { images: true, youtube: true, haunting: true, semantic: true, gaze: false },
   excludedOrigins: [],
 };
+/** Why a capture failed when no vault is connected: the one failure Settings puts right. */
+export const noVaultMessage =
+  'Connect your Obsidian test vault in Settings. Your capture is retained locally.';
 export const contentMessageSchema = z.discriminatedUnion('type', [
   z.object({ v: z.literal(1), type: z.literal('CONTENT_STATUS') }).strict(),
   z.object({ v: z.literal(1), type: z.literal('PAUSE_HAND') }).strict(),

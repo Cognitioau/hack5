@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://example.org/article","pretendToBeVisual":true}
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppResponse, ContentMessage, PublicCapture } from '../../src/core/contracts/index';
+import {
+  type AppResponse,
+  type ContentMessage,
+  noVaultMessage,
+  type PublicCapture,
+} from '../../src/core/contracts/index';
 
 type RuntimeListener = (
   message: unknown,
@@ -625,6 +630,42 @@ describe('one-click grabs (mocked browser boundary)', () => {
     });
     expect(messages('CAPTURE')).toHaveLength(1);
     expect(shadow?.textContent).toContain('The link and its readable text are saved.');
+  });
+
+  it.each([
+    ['no vault is connected', 'failed', noVaultMessage, true],
+    ['the vault refused the note', 'failed', 'Capture note is too large.', false],
+    ['the vault holds a conflicting change', 'conflict', undefined, false],
+  ] as const)(
+    'lets the hand finish a capture kept when %s, offering settings only where they fix it',
+    async (_, persistence, lastError, offered) => {
+      send.mockImplementation(async (message: ContentMessage) =>
+        message.type === 'CAPTURE'
+          ? {
+              ok: true,
+              capture: {
+                ...record(message.operationId, 'active', persistence),
+                ...(lastError ? { lastError } : {}),
+              },
+            }
+          : handleMessage(message),
+      );
+      selectPassage();
+      control('.grab').click();
+      await flush();
+      expect(control('.dock').dataset.state).toBe('error');
+      // The vault answered before the hand surfaced; it is still reaching for the words.
+      expect(control('.effect').hidden).toBe(false);
+      expect(control('.effect').dataset.phase).toBe('reach');
+      expect(control('.receipt .settings').hidden).toBe(!offered);
+    },
+  );
+
+  it('opens settings from the panel', async () => {
+    control('.toggle').click();
+    control('.panel .settings').click();
+    await flush();
+    expect(messages('OPEN_SETTINGS')).toHaveLength(1);
   });
 
   it('asks for a selection instead of guessing when Grab selection has nothing to take', async () => {
