@@ -512,7 +512,11 @@ function activate(): () => void {
   const loadSprite = async (hand: number): Promise<Uint8Array<ArrayBuffer> | null> => {
     const response = await request({ v: 1, type: 'HAND_SPRITE', hand });
     if (!response.ok || !response.sprite) return null;
-    return Uint8Array.from(atob(response.sprite), (character) => character.charCodeAt(0));
+    // An indexed loop: Uint8Array.from with a mapper stalls the page ~60 ms per hand.
+    const text = atob(response.sprite);
+    const bytes = new Uint8Array(text.length);
+    for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index);
+    return bytes;
   };
 
   const view = new HandView(document, {

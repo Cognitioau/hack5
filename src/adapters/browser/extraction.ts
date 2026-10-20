@@ -303,6 +303,7 @@ function selectionCandidate(
   const span = boundedSpan(map.text, 0, map.text.length, MAX_TEXT);
   const selectedRange = mappedRange(document, map, span);
   if (span.text.length < 2 || !selectedRange) return null;
+  const highlight = selectionHighlight(document, map, targetRectangle(target, document));
   const geometry = textGeometry(document, target, selectedRange);
   return {
     candidate: {
@@ -313,18 +314,91 @@ function selectionCandidate(
     },
     target,
     ...geometry,
-    ...(boxes.length
-      ? {
-          highlight: boxes.slice(0, 64).map((box) => ({
-            ...geometry.rectangle,
-            x: box.x,
-            y: box.y,
-            width: box.width,
-            height: box.height,
-          })),
-        }
-      : {}),
+    ...(highlight.length ? { highlight } : {}),
   };
+}
+
+/**
+ * Where the browser paints a live selection, line by line. Chrome highlights a
+ * text fragment over its whole line box, so each fragment grows to its own
+ * element's line height; fragments of one line (bold words, links) merge, and
+ * only lines inside the viewport are kept. Where the selection runs on past a
+ * line's end, Chrome also paints the line break, about a space wide.
+ */
+function selectionHighlight(
+  document: Document,
+  map: TextMap,
+  frame: TargetRectangle,
+): TargetRectangle[] {
+  const window = document.defaultView;
+  const lineHeights = new Map<Element, number>();
+  const boxes: { left: number; top: number; right: number; bottom: number; glyph: number }[] = [];
+  for (const piece of map.pieces) {
+    const range = document.createRange();
+    range.setStart(piece.node, piece.nodeOffset);
+    range.setEnd(piece.node, piece.nodeOffset + piece.end - piece.start);
+    if (typeof range.getClientRects !== 'function') return [];
+    const parent = piece.node.parentElement;
+    let lineHeight = parent ? lineHeights.get(parent) : 0;
+    if (parent && lineHeight === undefined) {
+      // Browsers compute line-height to px, or leave it 'normal' (about the glyph box).
+      const value = window?.getComputedStyle(parent).lineHeight ?? '';
+      lineHeight = value.endsWith('px') ? Number.parseFloat(value) || 0 : 0;
+      lineHeights.set(parent, lineHeight);
+    }
+    for (const box of range.getClientRects()) {
+      if (
+        ![box.x, box.y, box.width, box.height].every(Number.isFinite) ||
+        box.width <= 0 ||
+        box.height <= 0
+      )
+        continue;
+      // An outsized line height inherited from a container never blanks the page around the words.
+      const height = Math.min(Math.max(box.height, lineHeight ?? 0), box.height * 2);
+      const top = box.y + (box.height - height) / 2;
+      if (
+        box.right <= 0 ||
+        top + height <= 0 ||
+        box.left >= frame.viewportWidth ||
+        top >= frame.viewportHeight
+      )
+        continue;
+      boxes.push({
+        left: box.left,
+        top,
+        right: box.right,
+        bottom: top + height,
+        glyph: box.height,
+      });
+    }
+  }
+  boxes.sort((a, b) => a.top - b.top || a.left - b.left);
+  const lines: typeof boxes = [];
+  for (const box of boxes) {
+    const line = lines.find((other) => {
+      const overlap = Math.min(other.bottom, box.bottom) - Math.max(other.top, box.top);
+      const shorter = Math.min(other.bottom - other.top, box.bottom - box.top);
+      const gap = Math.max(other.left, box.left) - Math.min(other.right, box.right);
+      // Same line, and close enough that nothing unselected sits between them.
+      return overlap > shorter / 2 && gap <= shorter;
+    });
+    if (!line) lines.push({ ...box });
+    else {
+      line.left = Math.min(line.left, box.left);
+      line.right = Math.max(line.right, box.right);
+      line.top = Math.min(line.top, box.top);
+      line.bottom = Math.max(line.bottom, box.bottom);
+      line.glyph = Math.max(line.glyph, box.glyph);
+    }
+  }
+  const last = lines.at(-1);
+  return lines.slice(0, 128).map((line) => ({
+    ...frame,
+    x: line.left,
+    y: line.top,
+    width: line.right - line.left + (line === last ? 0 : line.glyph / 4),
+    height: line.bottom - line.top,
+  }));
 }
 
 /** Return one sentence around the actual caret; never expand to the whole page. */
@@ -503,12 +577,13 @@ export function extractPage(document: Document): ExtractedCandidate | null {
 export function readingStyle(
   element: Element,
   document: Document,
-):
-  | { fontFamily: string; color: string; background: string; fontSize: number; lineHeight?: number }
-  | undefined {
+): { fontFamily: string; color: string; background: string; fontSize: number } | undefined {
   const window = document.defaultView;
   if (!window) return undefined;
   const style = window.getComputedStyle(element);
+  // A translucent tint (a callout, a hover wash) is mixed over whatever lies
+  // beneath it, so the patches and the paper copy come out solid.
+  const tints: [number, number, number, number][] = [];
   let background = '';
   for (
     let current: Element | null = element;
@@ -516,19 +591,41 @@ export function readingStyle(
     current = current.parentElement
   ) {
     const value = window.getComputedStyle(current).backgroundColor;
-    if (value && value !== 'transparent' && !/^rgba\(.*,\s*0\s*\)$/u.test(value))
-      background = value;
+    const colour = rgba(value);
+    if (!colour) {
+      if (value && value !== 'transparent') background = value;
+    } else if (colour[3] >= 1) background = value;
+    else if (colour[3] > 0) tints.push(colour);
+  }
+  if (tints.length && (!background || rgba(background))) {
+    const [red, green, blue] = tints.reduceRight<[number, number, number]>(
+      (under, [r, g, b, a]) => [
+        r * a + under[0] * (1 - a),
+        g * a + under[1] * (1 - a),
+        b * a + under[2] * (1 - a),
+      ],
+      (rgba(background) ?? [255, 255, 255]).slice(0, 3) as [number, number, number],
+    );
+    background = `rgb(${Math.round(red)}, ${Math.round(green)}, ${Math.round(blue)})`;
   }
   const fontSize = Number.parseFloat(style.fontSize);
-  // Browsers compute line-height to px, or leave it 'normal' (about the glyph box).
-  const lineHeight = style.lineHeight.endsWith('px')
-    ? Number.parseFloat(style.lineHeight)
-    : Number.NaN;
   return {
     fontFamily: style.fontFamily,
     color: style.color,
     background: background || 'rgb(255, 255, 255)',
     fontSize: Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16,
-    ...(Number.isFinite(lineHeight) && lineHeight > 0 ? { lineHeight } : {}),
   };
+}
+
+/** A computed `rgb()`/`rgba()` colour as [r, g, b, alpha]; null for any other form. */
+function rgba(value: string | undefined): [number, number, number, number] | null {
+  const match = /^rgba?\(([^)]*)\)$/u.exec(value?.trim() ?? '');
+  const parts =
+    match?.[1]
+      ?.split(/[\s,/]+/u)
+      .filter(Boolean)
+      .map(Number) ?? [];
+  if (parts.length < 3 || parts.length > 4 || !parts.every(Number.isFinite)) return null;
+  const [red = 0, green = 0, blue = 0, alpha = 1] = parts;
+  return [red, green, blue, alpha];
 }

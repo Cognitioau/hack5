@@ -285,6 +285,57 @@ describe('bounded untrusted page extraction', () => {
     expect(capture?.highlight).toEqual([expect.objectContaining({ x: 10, width: 17 * 8 })]);
   });
 
+  it("grows each highlighted fragment to its own paragraph's line box, one box per line", () => {
+    fixture(
+      '<div id="text"><p style="line-height: 32px">First <b>bold</b> line</p><p style="line-height: 20px">Second para</p></div>',
+      '#text',
+    );
+    const [first, second] = target.querySelectorAll('p');
+    const range = document.createRange();
+    range.setStart(first?.firstChild as Node, 0);
+    range.setEnd(second?.firstChild as Node, 11);
+    document.getSelection()?.addRange(range);
+    // Glyph boxes: 24px tall in the first paragraph, 16px in the second.
+    const glyphs: Record<string, DOMRect> = {
+      'First ': new DOMRect(10, 100, 48, 24),
+      bold: new DOMRect(58, 100, 32, 24),
+      ' line': new DOMRect(90, 100, 40, 24),
+      'Second para': new DOMRect(10, 140, 88, 16),
+    };
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      const own = glyphs[this.toString()];
+      return (own ? [own] : Object.values(glyphs)) as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true });
+    expect(capture?.highlight?.map(({ x, y, width, height }) => ({ x, y, width, height }))).toEqual(
+      [
+        // The first line also covers its line break, which the selection runs on past.
+        { x: 10, y: 96, width: 120 + 24 / 4, height: 32 },
+        { x: 10, y: 138, width: 88, height: 20 },
+      ],
+    );
+  });
+
+  it('highlights only the lines on screen', () => {
+    fixture('<p id="text">Above the fold <b>and inside it</b></p>', '#text');
+    const range = document.createRange();
+    range.setStart(target.firstChild as Node, 0);
+    range.setEnd(target.lastChild?.firstChild as Node, 13);
+    document.getSelection()?.addRange(range);
+    const glyphs: Record<string, DOMRect> = {
+      'Above the fold ': new DOMRect(10, -200, 120, 24),
+      'and inside it': new DOMRect(10, 100, 104, 24),
+    };
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      const own = glyphs[this.toString()];
+      return (own ? [own] : Object.values(glyphs)) as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true });
+    expect(capture?.highlight).toEqual([
+      expect.objectContaining({ x: 10, y: 100, width: 104, height: 24 }),
+    ]);
+  });
+
   it('captures the actual loaded image URL, context and viewport rectangle', () => {
     fixture(
       '<figure><img id="image" src="/fallback.png" alt="A fern"><figcaption>Forest floor</figcaption></figure>',
@@ -405,13 +456,17 @@ describe('explicit selection and whole-page grabs', () => {
     });
   });
 
-  it('reads a pixel line height and leaves out one it cannot measure', () => {
-    fixture('<p id="text" style="line-height: 30px">Words</p>', '#text');
-    expect(readingStyle(target, document)?.lineHeight).toBe(30);
-    fixture('<p id="text" style="line-height: normal">Words</p>', '#text');
-    expect(readingStyle(target, document)).not.toHaveProperty('lineHeight');
-    fixture('<p id="text" style="line-height: 1.5">Words</p>', '#text');
-    expect(readingStyle(target, document)).not.toHaveProperty('lineHeight');
+  it('mixes a translucent background over what lies beneath it', () => {
+    fixture(
+      '<div style="background-color: rgb(200, 220, 240)"><div style="background-color: rgba(0, 0, 0, 0.05)"><p id="text">Words</p></div></div>',
+      '#text',
+    );
+    expect(readingStyle(target, document)?.background).toBe('rgb(190, 209, 228)');
+    fixture(
+      '<div style="background-color: rgba(0, 0, 0, 0.5)"><p id="text">Words</p></div>',
+      '#text',
+    );
+    expect(readingStyle(target, document)?.background).toBe('rgb(128, 128, 128)');
   });
 });
 

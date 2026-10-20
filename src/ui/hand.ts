@@ -332,7 +332,7 @@ export class HandView {
         rectangles: (presentation.highlight?.length
           ? presentation.highlight
           : targetRectangles
-        ).slice(0, 64),
+        ).slice(0, 128),
         viewport: { width: rectangle.viewportWidth, height: rectangle.viewportHeight },
         text: snippet,
         ...(presentation.detail === undefined ? {} : { detail: presentation.detail }),

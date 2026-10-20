@@ -60,6 +60,57 @@ async function pixels(
   );
 }
 
+type Area = { x: number; y: number; width: number; height: number };
+
+/** The live selection's bounds, and the area the browser paints it over (whole line boxes). */
+async function selectionArea(page: Page): Promise<{ bounds: Area; painted: Area }> {
+  const bounds = await page.evaluate(() => {
+    const rectangle = getSelection()?.getRangeAt(0).getBoundingClientRect();
+    return rectangle
+      ? { x: rectangle.x, y: rectangle.y, width: rectangle.width, height: rectangle.height }
+      : null;
+  });
+  if (!bounds) throw new Error('No selection rectangle');
+  const painted = {
+    x: Math.round(bounds.x - 8),
+    y: Math.round(bounds.y - 10),
+    width: Math.round(bounds.width + 16),
+    height: Math.round(bounds.height + 20),
+  };
+  return { bounds, painted };
+}
+
+/**
+ * Clicks the corner hand and films the grab for three seconds, clipped to
+ * `clip`: the hand is picked at random, and each reaches the words at its own
+ * pace. Decoding waits until filming ends, because opening a tab earlier would
+ * take focus from the page and cancel the grab.
+ */
+async function filmGrab(
+  fixture: Awaited<ReturnType<typeof launchExtension>>,
+  page: Page,
+  clip: Area,
+): Promise<{
+  before: Buffer;
+  shots: Buffer[];
+  count: (shot: Buffer, area: Area, colour?: 'skin' | 'selection') => Promise<number>;
+}> {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error('No viewport');
+  const before = await page.screenshot({ clip });
+  await page.mouse.click(viewport.width - 35, viewport.height - 35);
+  const clicked = Date.now();
+  const shots: Buffer[] = [];
+  while (Date.now() - clicked < 3_000) shots.push(await page.screenshot({ clip }));
+  const decoder = await fixture.context.newPage();
+  return {
+    before,
+    shots,
+    count: (shot, area, colour) =>
+      pixels(decoder, shot, { ...area, x: area.x - clip.x, y: area.y - clip.y }, colour),
+  };
+}
+
 test('the footage hand bursts through a page whose CSP forbids every image', async () => {
   test.setTimeout(60_000);
   const vault = await startVaultFixture();
@@ -69,60 +120,34 @@ test('the footage hand bursts through a page whose CSP forbids every image', asy
     const strict = await fixture.context.newPage();
     await strict.goto(`${vault.origin}/strict`);
     await wake(fixture, strict);
-    const viewport = strict.viewportSize();
-    if (!viewport) throw new Error('No viewport');
     const words = await dragSelect(strict, '#strict');
-    const selected = await strict.evaluate(() => {
-      const rectangle = getSelection()?.getRangeAt(0).getBoundingClientRect();
-      return rectangle
-        ? {
-            x: rectangle.x + rectangle.width / 2,
-            left: rectangle.left,
-            top: rectangle.top,
-            width: rectangle.width,
-            bottom: rectangle.bottom,
-          }
-        : null;
-    });
-    if (!selected) throw new Error('No selection rectangle');
-    // The browser paints the selection over the whole line box, past the glyphs.
-    const line = {
-      x: Math.round(selected.left - 8),
-      y: Math.round(selected.top - 10),
-      width: Math.round(selected.width + 16),
-      height: Math.round(selected.bottom - selected.top + 20),
-    };
+    const { bounds, painted } = await selectionArea(strict);
     // The grave tears open just below the passage and the hand climbs out over it.
     const region = {
-      x: Math.round(selected.x - 90),
-      y: Math.round(selected.bottom - 150),
+      x: Math.round(bounds.x + bounds.width / 2 - 90),
+      y: Math.round(bounds.y + bounds.height - 150),
       width: 180,
       height: 200,
     };
     // One clip covers both, so each frame is quick to capture and decode.
     const clip = {
-      x: Math.min(region.x, line.x),
-      y: Math.min(region.y, line.y),
-      width: Math.max(region.x + region.width, line.x + line.width) - Math.min(region.x, line.x),
-      height: Math.max(region.y + region.height, line.y + line.height) - Math.min(region.y, line.y),
+      x: Math.min(region.x, painted.x),
+      y: Math.min(region.y, painted.y),
+      width:
+        Math.max(region.x + region.width, painted.x + painted.width) -
+        Math.min(region.x, painted.x),
+      height:
+        Math.max(region.y + region.height, painted.y + painted.height) -
+        Math.min(region.y, painted.y),
     };
-    const within = (area: typeof clip) => ({ ...area, x: area.x - clip.x, y: area.y - clip.y });
-    const before = await strict.screenshot({ clip });
-    await strict.mouse.click(viewport.width - 35, viewport.height - 35);
-    // Film the whole grab: the hand is picked at random, and each reaches the
-    // words at its own pace.
-    const clicked = Date.now();
-    const shots: Buffer[] = [];
-    while (Date.now() - clicked < 3_000) shots.push(await strict.screenshot({ clip }));
-    // Decode only now: opening a tab earlier would take focus from the page and cancel the grab.
-    const decoder = await fixture.context.newPage();
-    const quiet = await pixels(decoder, before, within(region));
-    const highlighted = await pixels(decoder, before, within(line), 'selection');
+    const { before, shots, count } = await filmGrab(fixture, strict, clip);
+    const quiet = await count(before, region);
+    const highlighted = await count(before, painted, 'selection');
     const haunted: number[] = [];
     const left: number[] = [];
     for (const shot of shots) {
-      haunted.push(await pixels(decoder, shot, within(region)));
-      left.push(await pixels(decoder, shot, within(line), 'selection'));
+      haunted.push(await count(shot, region));
+      left.push(await count(shot, painted, 'selection'));
     }
     const peak = Math.max(...haunted);
     await frame(strict, 'grab-strict-csp', shots[haunted.indexOf(peak)]);
@@ -141,6 +166,47 @@ test('the footage hand bursts through a page whose CSP forbids every image', asy
     await vault.close();
   }
 });
+
+for (const shape of ['two paragraphs', 'a translucent callout'] as const)
+  test(`taking a selection across ${shape} leaves none of its highlight showing`, async () => {
+    test.setTimeout(60_000);
+    const vault = await startVaultFixture();
+    const fixture = await launchExtension('full');
+    try {
+      await configureVault(fixture, vault, false);
+      const article = await fixture.context.newPage();
+      await article.goto(`${vault.origin}/article`);
+      // A 4% wash: patches that borrowed it unmixed would let the words show through.
+      if (shape === 'a translucent callout')
+        await article.addStyleTag({ content: '#dog{background:rgba(0,0,0,0.04)}' });
+      await wake(fixture, article);
+      if (shape === 'two paragraphs') {
+        // The selection's common ancestor is the page's main column, whose line
+        // height and size are not the paragraphs'.
+        const from = await article.locator('#dog').boundingBox();
+        const to = await article.locator('#database').boundingBox();
+        if (!from || !to) throw new Error('Missing paragraphs');
+        await article.mouse.move(from.x + 1, from.y + 14);
+        await article.mouse.down();
+        await article.mouse.move(to.x + to.width * 0.5, to.y + 14, { steps: 10 });
+        await article.mouse.up();
+      } else await dragSelect(article, '#dog');
+      const { painted } = await selectionArea(article);
+      const { before, shots, count } = await filmGrab(fixture, article, painted);
+      const left: number[] = [];
+      for (const shot of shots) left.push(await count(shot, painted, 'selection'));
+      await frame(
+        article,
+        `grab-highlight-${shape.replaceAll(' ', '-')}`,
+        shots[left.indexOf(Math.min(...left))],
+      );
+      expect(await count(before, painted, 'selection')).toBeGreaterThan(2_000);
+      expect(Math.min(...left)).toBeLessThan(30);
+    } finally {
+      await fixture.close();
+      await vault.close();
+    }
+  });
 
 test('one click grabs a selection or the whole page, and a chip follows a settled selection', async () => {
   test.setTimeout(120_000);

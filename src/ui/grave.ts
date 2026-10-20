@@ -27,8 +27,6 @@ export interface ScrapStyle {
   background: string;
   /** Computed size of the reading text, in px; the hand is sized from it. */
   fontSize?: number;
-  /** Computed line height in px, when it is not 'normal'. */
-  lineHeight?: number;
 }
 export interface GraveScene {
   kind: GraveKind;
@@ -184,11 +182,12 @@ export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
   const display = Math.min(clamp(fontSize * DISPLAY_PER_FONT_PX, 180, 320), width * 0.75);
   let scale = display / hand.source;
   const source = scene.source;
+  // The fist closes on the part of the passage that is on screen.
   const word = page
     ? { x: width / 2, y: Math.max(height / 2, height - 48 - below * scale) }
     : {
-        x: clamp(source.x + source.width / 2, 0, width),
-        y: clamp(source.y + source.height / 2, 0, height),
+        x: (clamp(source.x, 0, width) + clamp(source.x + source.width, 0, width)) / 2,
+        y: (clamp(source.y, 0, height) + clamp(source.y + source.height, 0, height)) / 2,
       };
   // The hole opens below the words: near the foot of the viewport the hand
   // shrinks to fit, and if it still cannot, it reaches up from lower down.
@@ -289,21 +288,15 @@ export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
   );
 
   const lines = page ? [] : scene.rectangles?.length ? scene.rectangles : [source];
-  // The browser paints a live selection over the whole line box, not just the
-  // glyphs; a patch that stopped at the glyphs would leave it showing as bands.
-  const lineHeight = scene.style?.lineHeight ?? 0;
   const patches = lines
-    .slice(0, 64)
+    .slice(0, 128)
     .filter((area) => [area.x, area.y, area.width, area.height].every(Number.isFinite))
-    .map((area) => {
-      const height = Math.min(Math.max(area.height, lineHeight), area.height * 2) + 2;
-      return {
-        x: area.x - 2,
-        y: area.y + (area.height - height) / 2,
-        width: area.width + 4,
-        height,
-      };
-    });
+    .map((area) => ({
+      x: area.x - 2,
+      y: area.y - 1,
+      width: area.width + 4,
+      height: area.height + 2,
+    }));
   const rgb = parseColor(scene.style?.background) ?? [255, 255, 255];
   return {
     kind: scene.kind,
