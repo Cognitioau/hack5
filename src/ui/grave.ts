@@ -899,7 +899,7 @@ export class GraveEffect {
         context.lineTo(x1 + 0.7, y1 + 0.8);
         context.stroke();
         context.globalAlpha = fade * 0.7;
-        context.strokeStyle = 'rgb(40,36,32)';
+        context.strokeStyle = `rgb(${onPaper(layout, 40, 36, 32)})`;
         context.lineWidth = Math.max(0.35, thickness);
         context.beginPath();
         context.moveTo(x0, y0);

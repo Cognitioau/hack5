@@ -47,12 +47,22 @@ function packedHand(count: number): Uint8Array<ArrayBuffer> {
  */
 function fakeCanvas() {
   const drawImage = vi.fn();
+  // Every colour stroked, filled or put in a gradient on the effect's canvases.
+  const colours: string[] = [];
   const context = new Proxy<Record<string | symbol, unknown>>(
     { drawImage },
     {
       get: (target, key) => {
-        target[key] ??= vi.fn(() => ({ addColorStop: vi.fn() }));
+        target[key] ??= vi.fn(() => ({
+          addColorStop: (_offset: number, colour: string) => colours.push(colour),
+        }));
         return target[key];
+      },
+      set: (target, key, value) => {
+        if ((key === 'strokeStyle' || key === 'fillStyle') && typeof value === 'string')
+          colours.push(value);
+        target[key] = value;
+        return true;
       },
     },
   );
@@ -95,7 +105,7 @@ function fakeCanvas() {
     }
   }
   Object.defineProperty(window, 'OffscreenCanvas', { configurable: true, value: Layers });
-  return { drawImage, decode, packed, laid };
+  return { drawImage, decode, packed, laid, colours };
 }
 
 function element<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -233,7 +243,7 @@ describe('target-local hand presentation', () => {
   });
 
   it('tints the wall behind the hand to a dark page, never the hand', async () => {
-    const { laid } = fakeCanvas();
+    const { laid, colours } = fakeCanvas();
     const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
     view.dispose();
     view = new HandView(document, { ...actions, sprite });
@@ -253,6 +263,20 @@ describe('target-local hand presentation', () => {
       200,
     ];
     for (const steps of laid) expect(steps).toEqual(['wall', tinted, 'hand']);
+    // Nothing drawn around it reads lighter than the page: cracks, dust and
+    // debris are the page's own plaster. Only a faint lit edge may be lighter.
+    view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
+    await vi.advanceTimersByTimeAsync(5_000);
+    const lightness = (red: number, green: number, blue: number) =>
+      0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    const drawn = colours.map((colour) => {
+      const [red = 0, green = 0, blue = 0, alpha = 1] = (colour.match(/[\d.]+/g) ?? []).map(Number);
+      return { colour, alpha, lightness: lightness(red, green, blue) };
+    });
+    expect(drawn.length).toBeGreaterThan(20);
+    expect(
+      drawn.filter(({ alpha, lightness: value }) => alpha >= 0.3 && value > lightness(29, 33, 38)),
+    ).toEqual([]);
   });
 
   it('covers where the page highlights a selection, not only the trimmed evidence', () => {
