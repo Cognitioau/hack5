@@ -11,7 +11,9 @@
  * (scripts/hand), one of several takes picked per grab, with the heal matted
  * onto each. Its frames arrive as bytes and are decoded a few at a time around
  * the one on screen, so the page's CSP never sees a URL and only a handful of
- * frames are ever held decoded. Each frame carries the hand and the wall apart,
+ * frames are ever held decoded. Between two footage frames the display mixes
+ * one into the next, so the hand moves on every refresh rather than in the
+ * footage's own steps. Each frame carries the hand and the wall apart,
  * and the wall is tinted to the page's own colour under the hand, so a dark
  * page gets dark plaster rather than a pale glow. The cracks, the torn hole,
  * the debris and dust of the break-in and the paper copy are drawn here around
@@ -369,6 +371,28 @@ export function footageFrame(layout: GraveLayout, step: number): number | null {
   return frame < 0 ? null : Math.min(frame, layout.hand.frames + layout.hand.heal - 1);
 }
 
+export interface FootageBlend {
+  frame: number;
+  /** The frame the step is moving toward, mixed in by `amount`; null on a whole step or the last frame. */
+  next: number | null;
+  amount: number;
+}
+
+/**
+ * The frames on screen at a step: the footage frame, with the next one mixed in
+ * as far as the step has come toward it. The footage runs at 29 frames a second;
+ * mixing them moves the hand on every display frame instead of in jumps held for
+ * two or three of them.
+ */
+export function footageBlend(layout: GraveLayout, step: number): FootageBlend | null {
+  const frame = footageFrame(layout, step);
+  if (frame === null) return null;
+  const amount = step - Math.floor(step);
+  return frame < layout.hand.frames + layout.hand.heal - 1 && amount > 0
+    ? { frame, next: frame + 1, amount }
+    : { frame, next: null, amount: 0 };
+}
+
 /** How far the heal has played: 0 at its first frame, 1 once the wall is whole. */
 export function healAt(layout: GraveLayout, step: number): number {
   return progress(step - PRE - layout.hand.frames, 0, layout.hand.heal - 1);
@@ -422,13 +446,19 @@ export function scrapAt(layout: GraveLayout, step: number): ScrapPose {
   }
   const grip = frame < hand.frames ? hand.grip[frame] : null;
   if (!grip) return { ...resting, visible: false };
+  // It rides the fist between frames too, as the footage is mixed from one to the next.
+  const after = frame + 1 < hand.frames ? hand.grip[frame + 1] : null;
+  const between = step - Math.floor(step);
+  const fist = after
+    ? { x: lerp(grip.x, after.x, between), y: lerp(grip.y, after.y, between) }
+    : grip;
   const taken = step - PRE - hand.beats.take;
   const k = Math.min(1, taken / 4);
   return {
     ...resting,
     // A crumpled end of the copy shows past the thumb.
-    x: lerp(word.x, layout.place.x + grip.x * scale, k) - 21 * scale * k,
-    y: lerp(word.y, layout.place.y + grip.y * scale, k),
+    x: lerp(word.x, layout.place.x + fist.x * scale, k) - 21 * scale * k,
+    y: lerp(word.y, layout.place.y + fist.y * scale, k),
     rotation: (layout.kind === 'page' ? -4 : 0) - 14 * k,
     // Torn free at once, then balled up as the fingers close into the fist.
     lift: Math.min(1, taken / 1.5),
@@ -508,6 +538,11 @@ class Footage {
       if (bitmap) return bitmap;
     }
     return null;
+  }
+
+  /** The decoded frame at `index` itself, or null. */
+  exact(index: number): ImageBitmap | null {
+    return this.decoded.get(index) ?? null;
   }
 
   release(): void {
@@ -738,9 +773,9 @@ export class GraveEffect {
     }
   }
 
-  private current(): GraveState | null {
+  private current(time = this.now()): GraveState | null {
     if (!this.state || this.held) return this.state;
-    const elapsed = this.now() - this.startedAt;
+    const elapsed = time - this.startedAt;
     return this.state.phase === 'grab'
       ? { phase: 'grab', t: elapsed }
       : { ...this.state, u: elapsed };
@@ -762,10 +797,12 @@ export class GraveEffect {
     const view = this.document.defaultView;
     if (!view || this.frame !== undefined || typeof view.requestAnimationFrame !== 'function')
       return;
-    this.frame = view.requestAnimationFrame(() => {
+    // Poses are taken at the display frame's own time, not whenever the callback
+    // gets to run, so the steps and the mix between frames advance evenly.
+    this.frame = view.requestAnimationFrame((time) => {
       this.frame = undefined;
       if (!this.layout) return;
-      this.render();
+      this.render(time);
       this.loop();
     });
   }
@@ -775,8 +812,8 @@ export class GraveEffect {
     this.frame = undefined;
   }
 
-  private render(): void {
-    const state = this.current();
+  private render(time?: number): void {
+    const state = this.current(time);
     if (!this.layout || !state) return;
     const pose = poseAt(this.layout, state);
     const last = this.painted;
@@ -929,35 +966,53 @@ export class GraveEffect {
     if (!context) return;
     const { hand } = layout;
     const { width, height } = hand.size;
-    const frame = footageFrame(layout, pose.step);
+    const blend = footageBlend(layout, pose.step);
     const footage = this.footage.get(layout.index);
     const scale = this.dpr() * layout.scale;
     context.setTransform(scale, 0, 0, scale, 0, 0);
-    // Nothing shows before the wall gives way.
-    if (frame === null) {
+    // Nothing shows before the wall gives way; meanwhile its first frames decode,
+    // so the hand is there the moment it breaks through.
+    if (blend === null) {
       context.clearRect(0, 0, width, height);
+      if (pose.forward) footage?.want(0, true);
       return;
     }
+    const { frame } = blend;
     footage?.want(frame, pose.forward);
     const image = footage?.get(frame, pose.forward);
     // A frame still decoding keeps the last one drawn rather than blinking out.
     if (!image) return;
+    // Only a frame shown on time is mixed toward the next, and only once that has decoded.
+    const next =
+      blend.next !== null && footage?.exact(frame) === image ? footage.exact(blend.next) : null;
+    const mix = next ? blend.amount : 0;
+    // Both layers are added at complementary strengths, an exact mix of their
+    // colour and cover: where both frames are solid the hand stays solid.
+    const lay = (alpha: number) => {
+      context.globalAlpha = alpha * (1 - mix);
+      context.drawImage(image, 0, 0, width, height);
+      if (next) {
+        context.globalCompositeOperation = 'lighter';
+        context.globalAlpha = alpha * mix;
+        context.drawImage(next, 0, 0, width, height);
+        context.globalCompositeOperation = 'source-over';
+      }
+      context.globalAlpha = 1;
+    };
     context.clearRect(0, 0, width, height);
     const reach = hand.hole.radius * 1.5; // the crater's outer edge
-    const opened = Math.floor(pose.step) - PRE;
+    const opened = pose.step - PRE;
     if (opened < OPEN) {
       // The wall tears open: only what is inside the growing tear shows.
       context.save();
-      this.ragged(context, hand, reach * (0.35 + (0.65 * (opened + 1)) / OPEN));
+      this.ragged(context, hand, reach * (0.35 + 0.65 * Math.min(1, (opened + 1) / OPEN)));
       context.clip();
-      context.drawImage(image, 0, 0, width, height);
+      lay(1);
       context.restore();
       return;
     }
     // The heal's last cracks fade into the page, so hiding the layer leaves nothing behind.
-    context.globalAlpha = 1 - progress(healAt(layout, pose.step), 0.85, 1);
-    context.drawImage(image, 0, 0, width, height);
-    context.globalAlpha = 1;
+    lay(1 - progress(healAt(layout, pose.step), 0.85, 1));
   }
 
   private drawFx(layout: GraveLayout, pose: GravePose): void {

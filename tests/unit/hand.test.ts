@@ -24,6 +24,9 @@ const rectangle = {
   viewportHeight: 600,
 };
 
+/** Steps of cracks before the first footage frame. */
+const PRE = 5;
+
 interface FakeFrame {
   frame: number;
   close: () => void;
@@ -47,26 +50,34 @@ function packedHand(count: number): Uint8Array<ArrayBuffer> {
  * its size, and the offscreen canvas that lays each one's hand over its wall.
  */
 function fakeCanvas() {
-  const drawImage = vi.fn();
+  const drawn: Record<string | symbol, unknown> = {};
+  // Each image laid on a canvas: its frame, how it was composited, and when.
+  const layers: { frame: number; mode: string; alpha: number; at: number }[] = [];
+  const drawImage = vi.fn((image: FakeFrame) => {
+    layers.push({
+      frame: image.frame,
+      mode: String(drawn.globalCompositeOperation ?? 'source-over'),
+      alpha: Number(drawn.globalAlpha ?? 1),
+      at: performance.now(),
+    });
+  });
+  drawn.drawImage = drawImage;
   // Every colour stroked, filled or put in a gradient on the effect's canvases.
   const colours: string[] = [];
-  const context = new Proxy<Record<string | symbol, unknown>>(
-    { drawImage },
-    {
-      get: (target, key) => {
-        target[key] ??= vi.fn(() => ({
-          addColorStop: (_offset: number, colour: string) => colours.push(colour),
-        }));
-        return target[key];
-      },
-      set: (target, key, value) => {
-        if ((key === 'strokeStyle' || key === 'fillStyle') && typeof value === 'string')
-          colours.push(value);
-        target[key] = value;
-        return true;
-      },
+  const context = new Proxy<Record<string | symbol, unknown>>(drawn, {
+    get: (target, key) => {
+      target[key] ??= vi.fn(() => ({
+        addColorStop: (_offset: number, colour: string) => colours.push(colour),
+      }));
+      return target[key];
     },
-  );
+    set: (target, key, value) => {
+      if ((key === 'strokeStyle' || key === 'fillStyle') && typeof value === 'string')
+        colours.push(value);
+      target[key] = value;
+      return true;
+    },
+  });
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
     () => context as unknown as CanvasRenderingContext2D,
   );
@@ -106,7 +117,22 @@ function fakeCanvas() {
     }
   }
   Object.defineProperty(window, 'OffscreenCanvas', { configurable: true, value: Layers });
-  return { drawImage, decode, packed, laid, colours };
+  return { drawImage, decode, packed, laid, colours, layers };
+}
+
+/**
+ * The footage as painted: each paint's frame and, when the next frame is mixed
+ * in, that frame and the strengths the two were laid at.
+ */
+function paints(layers: ReturnType<typeof fakeCanvas>['layers']) {
+  const result: { frame: number; alpha: number; at: number; next?: number; mix?: number }[] = [];
+  for (const layer of layers) {
+    const last = result.at(-1);
+    if (layer.mode === 'lighter' && last && last.next === undefined)
+      Object.assign(last, { next: layer.frame, mix: layer.alpha });
+    else result.push({ frame: layer.frame, alpha: layer.alpha, at: layer.at });
+  }
+  return result;
 }
 
 function element<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -196,7 +222,7 @@ describe('target-local hand presentation', () => {
   });
 
   it('loads each hand once per page, plays its frames in order and never repeats a hand', async () => {
-    const { drawImage, decode, packed, laid } = fakeCanvas();
+    const { drawImage, decode, packed, laid, layers } = fakeCanvas();
     const sprite = vi
       .fn<(hand: number) => Promise<Uint8Array<ArrayBuffer> | null>>()
       .mockRejectedValueOnce(new Error('Synthetic interrupted read'))
@@ -215,12 +241,15 @@ describe('target-local hand presentation', () => {
     // The plaster cracks before any footage shows.
     expect(drawImage).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(900);
-    const drawn = drawImage.mock.calls.map(([image]) => (image as unknown as FakeFrame).frame);
+    // The frames on screen play in order; any mixed in is the one after.
+    const shown = paints(layers);
+    const drawn = shown.map(({ frame }) => frame);
     expect(drawn[0]).toBe(0);
     expect(drawn.length).toBeGreaterThan(5);
     expect(drawn.every((frame, index) => index === 0 || frame >= (drawn[index - 1] ?? 0))).toBe(
       true,
     );
+    for (const { frame, next } of shown) if (next !== undefined) expect(next).toBe(frame + 1);
     // Only a handful of frames are ever held decoded at once.
     const open = frames.filter((frame) => !vi.mocked(frame.close).mock.calls.length);
     expect(open.length).toBeGreaterThan(0);
@@ -278,6 +307,92 @@ describe('target-local hand presentation', () => {
     expect(
       drawn.filter(({ alpha, lightness: value }) => alpha >= 0.3 && value > lightness(29, 33, 38)),
     ).toEqual([]);
+  });
+
+  it('mixes each footage frame into the next as the display frame’s own time passes', async () => {
+    const { layers } = fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    // A busy page gets to the callback late: the display frame began 10 ms earlier.
+    const late = window.requestAnimationFrame;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) =>
+      late((time) => callback(time - 10)),
+    );
+    view.setTarget(rectangle, 'Words that move on every display frame');
+    await vi.advanceTimersByTimeAsync(0);
+    const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+    if (!hand) throw new Error('No hand was requested');
+    const step = grabEndFor(hand) / (PRE + hand.beats.fist + 1);
+    const started = performance.now();
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    await vi.advanceTimersByTimeAsync(900);
+    const shown = paints(layers);
+    expect(shown.length).toBeGreaterThan(30);
+    // Nearly every display frame mixes the next footage frame in, so the hand
+    // moves on each of them rather than every second or third.
+    expect(shown.filter(({ next }) => next !== undefined).length).toBeGreaterThan(
+      shown.length * 0.9,
+    );
+    for (const { frame, alpha, at, next, mix } of shown) {
+      const pose = (at - 10 - started) / step;
+      expect(frame).toBe(Math.floor(pose) - PRE);
+      if (next === undefined || mix === undefined) continue;
+      // Laid at complementary strengths, set by how far that frame's time has come.
+      expect(mix).toBeCloseTo(pose - Math.floor(pose), 6);
+      expect(alpha + mix).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('decodes the first footage frames while the plaster cracks', async () => {
+    const { decode, layers } = fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'Words the hand is ready for');
+    await vi.advanceTimersByTimeAsync(0);
+    const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+    if (!hand) throw new Error('No hand was requested');
+    const step = grabEndFor(hand) / (PRE + hand.beats.fist + 1);
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    // Still cracking: no footage is on screen, but its first frames are decoding.
+    await vi.advanceTimersByTimeAsync(PRE * step - 40);
+    expect(layers).toHaveLength(0);
+    const asked = decode.mock.calls.map(([blob]) => ((blob as Blob).size - 12) / 2);
+    expect(asked).toContain(0);
+    expect(asked.length).toBeLessThanOrEqual(8);
+    await vi.advanceTimersByTimeAsync(80);
+    expect(paints(layers)[0]?.frame).toBe(0);
+  });
+
+  it('keeps only the frames around a still fist decoded', async () => {
+    fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({ matches: true }),
+    });
+    try {
+      view.dispose();
+      view = new HandView(document, { ...actions, sprite });
+      view.setTarget(rectangle, 'Words for a still grab');
+      await vi.advanceTimersByTimeAsync(0);
+      const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+      if (!hand) throw new Error('No hand was requested');
+      // The grab starts cracking, asking for the first frames, then holds the fist at once.
+      view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+      await vi.advanceTimersByTimeAsync(0);
+      const open = frames.filter((frame) => !vi.mocked(frame.close).mock.calls.length);
+      expect(open.length).toBeGreaterThan(0);
+      expect(open.length).toBeLessThanOrEqual(8);
+      const { fist } = hand.beats;
+      for (const { frame } of open) {
+        expect(frame).toBeGreaterThanOrEqual(fist - 1);
+        expect(frame).toBeLessThanOrEqual(fist + 6);
+      }
+    } finally {
+      Reflect.deleteProperty(window, 'matchMedia');
+    }
   });
 
   it('covers where the page highlights a selection, not only the trimmed evidence', () => {

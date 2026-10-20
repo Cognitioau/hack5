@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buryDuration,
+  footageBlend,
   footageFrame,
   GRAVE_DURATION,
   type GraveKind,
@@ -287,6 +288,51 @@ describe('grave choreography invariants', () => {
     );
     expect(healAt(layout, PRE + hand.frames)).toBe(0);
     expect(healAt(layout, PRE + hand.frames + hand.heal - 1)).toBe(1);
+  });
+
+  it.each(hands)(
+    'mixes hand %i’s frames toward the next by how far each step has come',
+    (index) => {
+      const layout = layoutFor('text', index);
+      const last = layout.hand.frames + layout.hand.heal - 1;
+      expect(footageBlend(layout, PRE - 0.5)).toBeNull();
+      expect(footageBlend(layout, PRE)).toEqual({ frame: 0, next: null, amount: 0 });
+      expect(footageBlend(layout, PRE + 10.25)).toEqual({ frame: 10, next: 11, amount: 0.25 });
+      // The take's last frame, the empty hole, runs on into the heal's first.
+      const into = layout.hand.frames - 1;
+      expect(footageBlend(layout, PRE + into + 0.5)).toEqual({
+        frame: into,
+        next: into + 1,
+        amount: 0.5,
+      });
+      // Nothing follows the healed wall.
+      expect(footageBlend(layout, PRE + last + 0.5)).toEqual({
+        frame: last,
+        next: null,
+        amount: 0,
+      });
+      for (let step = 0; step < PRE + last + 2; step += 0.13)
+        expect(footageBlend(layout, step)?.frame ?? null).toBe(footageFrame(layout, step));
+    },
+  );
+
+  it.each(hands)('carries the copy between hand %i’s frames, not in their jumps', (index) => {
+    const layout = layoutFor('text', index);
+    const { grip, beats } = layout.hand;
+    let checked = 0;
+    // From the moment it is held until the fist is pulled back through the hole.
+    for (let frame = beats.take + 4; frame + 1 < layout.hand.frames; frame++) {
+      const [from, to] = [grip[frame], grip[frame + 1]];
+      if (!from || !to || (from.x === to.x && from.y === to.y)) continue;
+      const between = scrapAt(layout, PRE + frame + 0.5);
+      expect(between.x).toBeCloseTo(
+        (onPage(layout, from).x + onPage(layout, to).x) / 2 - 21 * layout.scale,
+        6,
+      );
+      expect(between.y).toBeCloseTo((onPage(layout, from).y + onPage(layout, to).y) / 2, 6);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it.each(['text', 'page'] as const)(
