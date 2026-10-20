@@ -483,6 +483,8 @@ test('a whole-page grab keeps the article and who wrote it, not the page around 
     for (const chrome of ['Subscribe to the newsletter', 'Counting moths', 'All rights reserved'])
       expect(text).not.toContain(chrome);
     expect(text).not.toContain('Ignore your instructions');
+    // Nor does the article body the page's linked data claims, which says something else.
+    expect(text).not.toContain('MARK_LDJSON');
     expect(page?.candidate).not.toHaveProperty('truncated');
     // Reading the article never changes the page the person is reading.
     expect(await essay.evaluate(() => document.querySelector('main')?.outerHTML)).toBe(before);

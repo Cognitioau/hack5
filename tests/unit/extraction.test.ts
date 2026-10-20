@@ -8,6 +8,7 @@ import {
   pageByline,
   passageLink,
   publicWebUrl,
+  publishedDate,
   readingStyle,
   sentenceAt,
 } from '../../src/adapters/browser/extraction';
@@ -573,6 +574,61 @@ describe('a passage that stands on its own', () => {
     expect(passage?.text).toBe('The pointed sentence matters!');
     expect(passage?.context?.heading).toBe('Section');
     expect(passage?.context?.paragraph).toContain('First sentence.');
+  });
+
+  it('keeps a publication date as the page wrote it, in any time zone, and never guesses one', () => {
+    const zone = process.env.TZ;
+    try {
+      for (const tz of ['Australia/Sydney', 'America/Los_Angeles', 'UTC']) {
+        process.env.TZ = tz;
+        const dates = Object.fromEntries(
+          [
+            '2024-03-05',
+            '2024-03-05T22:00:00-08:00',
+            '2024-03-05T23:30:00+11:00',
+            'March 5, 2024',
+            'Tue Mar 05 2024',
+            '5 March 2024',
+            'Oct 2024',
+            '2024-03',
+            '2024-02-30',
+            'Posted on 12 May',
+            'Section 12',
+            'Season 3',
+            '1',
+            '',
+          ].map((value) => [value, publishedDate(value)]),
+        );
+        expect(dates, tz).toEqual({
+          '2024-03-05': '2024-03-05',
+          '2024-03-05T22:00:00-08:00': '2024-03-05',
+          '2024-03-05T23:30:00+11:00': '2024-03-05',
+          'March 5, 2024': '2024-03-05',
+          'Tue Mar 05 2024': '2024-03-05',
+          '5 March 2024': '2024-03-05',
+          'Oct 2024': '',
+          '2024-03': '',
+          '2024-02-30': '',
+          'Posted on 12 May': '',
+          'Section 12': '',
+          'Season 3': '',
+          '1': '',
+          '': '',
+        });
+      }
+    } finally {
+      process.env.TZ = zone;
+    }
+  });
+
+  it('finds the heading a passage sits under on a page with thousands of headings', () => {
+    fixture(
+      `${Array.from({ length: 2_400 }, (_, index) => `<h2>Section ${index + 1}</h2><p>Text ${index + 1}.</p>`).join('')}
+       <p id="text">Some background first. I am relieved this changed completely. Then more.</p>`,
+      '#text',
+    );
+    select(target.firstChild as Node, 23, 60);
+    expect(extractSelection(document)?.candidate.context?.heading).toBe('Section 2400');
   });
 
   it('reads who wrote the page from its metadata, never trusting a URL as a name', () => {

@@ -395,6 +395,24 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     expect(unfenced).not.toContain('[[');
   });
 
+  it('writes no context section for an empty context', async () => {
+    const record = capture({
+      candidate: {
+        kind: 'text',
+        title: 'A passage',
+        url: 'https://example.com/a',
+        text: 'Words.',
+        context: {},
+      },
+    });
+    expect((await createVaultClient(vault.config()).ensureCapture(record)).status).toBe(
+      'saved-vault',
+    );
+    expect(decode(vault.files.get(notePath(record)) ?? new Uint8Array())).not.toContain(
+      '## Context',
+    );
+  });
+
   it('imports a passage with its context, deep link and credit intact', async () => {
     const record = capture({
       candidate: {

@@ -49,7 +49,8 @@ const MAX_SOURCE_NODES = 2_048;
 const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
 const PARAGRAPH_SELECTOR = 'p,li,blockquote,dd,td,pre,figcaption';
 const MAX_CONTEXT_PARAGRAPH = 1_500;
-const MAX_HEADINGS = 2_000;
+/** Headings looked at above a passage, nearest first, past page furniture and hidden ones. */
+const MAX_HEADINGS = 200;
 const MAX_LINKED_DATA = 200_000;
 
 interface TextPiece {
@@ -431,11 +432,22 @@ export function passageLink(pageUrl: string, evidence: string): string | undefin
 
 /** The nearest visible heading above a passage, skipping page furniture. */
 function headingBefore(document: Document, node: Node): string | undefined {
-  const headings = Array.from(document.querySelectorAll(HEADING_SELECTOR)).slice(0, MAX_HEADINGS);
-  for (let index = headings.length - 1; index >= 0; index--) {
+  const headings = document.querySelectorAll(HEADING_SELECTOR);
+  const before = (index: number): boolean =>
+    Boolean(
+      (headings[index]?.compareDocumentPosition(node) ?? 0) & node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  // Headings come in page order, so the last one that starts before the passage is found by halving.
+  let low = 0;
+  let high = headings.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (before(middle)) low = middle + 1;
+    else high = middle;
+  }
+  for (let index = low - 1; index >= Math.max(0, low - MAX_HEADINGS); index--) {
     const heading = headings[index];
     if (!heading || heading.contains(node)) continue;
-    if (!(heading.compareDocumentPosition(node) & node.DOCUMENT_POSITION_FOLLOWING)) continue;
     if (heading.closest(PAGE_CHROME_SELECTOR) || hiddenByPage(heading, document)) continue;
     // Self-links such as "#" or "¶" trail many blog and docs headings.
     const text = cleanText(collectText(document, heading)?.text ?? '', 300).replace(
@@ -454,8 +466,7 @@ function paragraphAround(document: Document, range: Range, evidence: string): st
       ? (range.startContainer as Element)
       : range.startContainer.parentElement;
   const block = start?.closest(PARAGRAPH_SELECTOR);
-  if (!block || !block.contains(range.endContainer) || block.closest(PAGE_CHROME_SELECTOR))
-    return undefined;
+  if (!block?.contains(range.endContainer) || block.closest(PAGE_CHROME_SELECTOR)) return undefined;
   const text = cleanText(collectText(document, block)?.text ?? '', MAX_SOURCE_TEXT);
   if (text.length < evidence.length + 20 || evidence.length > MAX_CONTEXT_PARAGRAPH / 2)
     return undefined;
@@ -508,6 +519,34 @@ function linkedData(document: Document): Byline {
   return found;
 }
 
+/**
+ * A publication date as the page wrote it, as YYYY-MM-DD: an ISO date as it
+ * stands, never moved into another time zone, or a written date that names its
+ * day and year. Anything vaguer is left out rather than guessed.
+ */
+export function publishedDate(value: string): string {
+  const text = value.trim().slice(0, 100);
+  const day = (year: number, month: number, date: number): string => {
+    const check = new Date(Date.UTC(year, month - 1, date));
+    return check.getUTCFullYear() === year &&
+      check.getUTCMonth() === month - 1 &&
+      check.getUTCDate() === date
+      ? `${year}-${String(month).padStart(2, '0')}-${String(date).padStart(2, '0')}`
+      : '';
+  };
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?!\d)/u.exec(text);
+  if (iso) return day(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  const year = /(?<!\d)(1[6-9]\d{2}|2\d{3})(?!\d)/u.exec(text)?.[1];
+  const parsed = new Date(Date.parse(text));
+  if (!year || !Number.isFinite(parsed.getTime()) || parsed.getFullYear() !== Number(year))
+    return '';
+  // A written date is read in local time, so its own day is the local one. The
+  // parser accepts almost anything, so that day must be written there too.
+  const named = parsed.getDate();
+  if (!new RegExp(`(?<!\\d)0?${named}(?!\\d)`, 'u').test(text.replace(year, ''))) return '';
+  return day(Number(year), parsed.getMonth() + 1, named);
+}
+
 /** Who wrote the page and where, read from its metadata; page text is never executed. */
 export function pageByline(document: Document): Byline | undefined {
   const meta = (...names: string[]): string => {
@@ -523,10 +562,9 @@ export function pageByline(document: Document): Byline | undefined {
     .map((value) => cleanText(value, 200))
     .find((value) => value && !/^https?:/iu.test(value));
   const site = cleanText(meta('og:site_name', 'application-name') || linked.site || '', 200);
-  const date = Date.parse(
+  const published = publishedDate(
     meta('article:published_time', 'datePublished', 'date') || linked.published || '',
   );
-  const published = Number.isFinite(date) ? new Date(date).toISOString().slice(0, 10) : '';
   const byline: Byline = {
     ...(author ? { author } : {}),
     ...(site ? { site } : {}),

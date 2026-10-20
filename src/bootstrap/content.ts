@@ -473,9 +473,12 @@ function activate(): () => void {
 
   /** The page's readable article, from the reader the background loads on demand. */
   const readArticle = async (): Promise<Article | null> => {
-    const reader = () =>
-      (globalThis as { zombieHandReadArticle?: (page: Document) => Article | null })
-        .zombieHandReadArticle;
+    // Only what page-reader.js set: a page element with that id shows through
+    // the window's named properties, never as its own property.
+    const reader = (): ((page: Document) => Article | null) | undefined => {
+      const own = Object.getOwnPropertyDescriptor(globalThis, 'zombieHandReadArticle')?.value;
+      return typeof own === 'function' ? own : undefined;
+    };
     try {
       if (!reader() && !(await request({ v: 1, type: 'READ_PAGE' })).ok) return null;
       return reader()?.(document) ?? null;
@@ -486,12 +489,14 @@ function activate(): () => void {
   };
 
   const grabPage = async (): Promise<void> => {
-    const page = extractPage(document);
-    if (!page) {
+    const refuse = (): void =>
       showError('This page cannot be grabbed. Only public http(s) pages are captured.');
-      return;
-    }
+    if (!extractPage(document)) return refuse();
     const article = await readArticle();
+    // Taken after the wait, with the reader's read: a page that moved on
+    // meanwhile is the one both describe, and the one its link points to.
+    const page = extractPage(document);
+    if (!page) return refuse();
     const { truncated: _excerptCut, ...excerpt } = page.candidate;
     const candidate = article
       ? { ...excerpt, ...article, wholePage: true as const }

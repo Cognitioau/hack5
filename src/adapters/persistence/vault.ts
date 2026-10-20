@@ -232,7 +232,7 @@ function renderNote(
     const path = attachmentPath(config, record.id, asset.extension);
     lines.push(asset.extension === 'pdf' ? `[[${path}|Saved PDF]]` : `![[${path}]]`, '');
   }
-  if (context) {
+  if (context?.heading || context?.paragraph) {
     lines.push('## Context', '');
     if (context.heading) lines.push(`Under the heading “${escapeMarkdown(context.heading)}”.`, '');
     if (context.paragraph) lines.push(quoteEvidence(context.paragraph), '');

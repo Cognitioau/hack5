@@ -2,7 +2,7 @@
 name: ask
 description: Answer a question from the graveyard wiki and its captures, with citations, and file answers worth keeping. Use when the person asks what their captures or graveyard say about something.
 argument-hint: "<question>"
-allowed-tools: Read Glob Grep Edit(./wiki/**)
+allowed-tools: Read(./**) Edit(./wiki/**)
 ---
 
 Question: $ARGUMENTS

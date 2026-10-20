@@ -1,10 +1,16 @@
 import Defuddle from 'defuddle';
 import type { CaptureCandidate } from '../../core/contracts/index';
-import { cleanText } from './extraction';
+import { cleanText, publishedDate } from './extraction';
 
 export const MAX_ARTICLE_TEXT = 32_000;
 /** Below this the reader is assumed to have missed the article, and the page excerpt is kept. */
 const MIN_ARTICLE_TEXT = 200;
+/**
+ * The reader runs before the hand appears and cannot be interrupted. Past this
+ * many elements it takes about half a second and keeps growing (four seconds
+ * at 100,000), so a larger page keeps its excerpt.
+ */
+const MAX_READ_ELEMENTS = 25_000;
 const BLOCK_TAGS = new Set([
   'address',
   'article',
@@ -69,15 +75,35 @@ function unseen(element: Element): boolean {
   return element.ownerDocument.defaultView?.getComputedStyle(element).display !== 'contents';
 }
 
+/** Linked data without the article text it can carry; null when it does not parse. */
+function withoutArticleText(json: string): string | null {
+  const strip = (value: unknown, depth: number): unknown => {
+    if (!value || typeof value !== 'object') return value;
+    if (depth > 32) return undefined;
+    if (Array.isArray(value)) return value.map((item) => strip(item, depth + 1));
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => key !== 'text' && key !== 'articleBody')
+        .map(([key, item]) => [key, strip(item, depth + 1)]),
+    );
+  };
+  try {
+    return JSON.stringify(strip(JSON.parse(json), 0));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A copy of the page without what its reader cannot see, so hidden text never
- * becomes evidence. The live page is never changed.
+ * becomes evidence. The live page is never changed. Null when the copy cannot
+ * be matched to the page element for element, as nothing could then be left out.
  */
-function visibleCopy(document: Document): Document {
+function visibleCopy(document: Document): Document | null {
   const copy = document.cloneNode(true) as Document;
   const live = document.body ? Array.from(document.body.getElementsByTagName('*')) : [];
   const copied = copy.body ? Array.from(copy.body.getElementsByTagName('*')) : [];
-  if (live.length !== copied.length) return copy;
+  if (live.length !== copied.length) return null;
   const removed: Element[] = [];
   let hiddenRoot: Element | null = null;
   for (const [index, element] of live.entries()) {
@@ -89,6 +115,17 @@ function visibleCopy(document: Document): Document {
     if (twin) removed.push(twin);
   }
   for (const element of removed) element.remove();
+  // Scripts never show, yet the reader would take an article body from the
+  // page's linked data, or a post from a site's script data, over the words on
+  // screen. Linked data keeps what it says about the page: title, author, date.
+  for (const script of Array.from(copy.getElementsByTagName('script'))) {
+    const linked =
+      script.getAttribute('type') === 'application/ld+json'
+        ? withoutArticleText(script.textContent ?? '')
+        : null;
+    if (linked === null) script.remove();
+    else script.textContent = linked;
+  }
   // The reader drops empty inline elements, and with them the only space
   // between two words, as in `stopped<strong> </strong>all`.
   for (const element of copied)
@@ -161,16 +198,15 @@ export function articleText(html: string, maximum: number): { text: string; trun
     if (text.length + separator.length + entry.text.length > maximum) {
       const room = maximum - text.length - separator.length - 1;
       const cut = room > 0 ? entry.text.slice(0, room).replace(/\s+\S*$/u, '') : '';
-      return { text: cut ? `${text}${separator}${cut}…` : `${text}…`, truncated: true };
+      if (cut) return { text: `${text}${separator}${cut}…`, truncated: true };
+      // No room for the next line: the mark that it was cut takes the last word's place.
+      const kept =
+        text.length < maximum ? text : text.slice(0, maximum - 1).replace(/\s+\S*$/u, '');
+      return { text: `${kept}…`, truncated: true };
     }
     text += separator + entry.text;
   }
   return { text, truncated: false };
-}
-
-function isoDate(value: string): string {
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? new Date(date).toISOString().slice(0, 10) : '';
 }
 
 /**
@@ -179,7 +215,10 @@ function isoDate(value: string): string {
  * its own excerpt. Runs only on a whole-page grab, in the page's isolated world.
  */
 export function readArticle(document: Document, maximum = MAX_ARTICLE_TEXT): Article | null {
-  const parsed = new Defuddle(visibleCopy(document), {
+  if (document.getElementsByTagName('*').length > MAX_READ_ELEMENTS) return null;
+  const copy = visibleCopy(document);
+  if (!copy) return null;
+  const parsed = new Defuddle(copy, {
     url: document.location.href,
     useAsync: false,
     removeImages: true,
@@ -188,7 +227,7 @@ export function readArticle(document: Document, maximum = MAX_ARTICLE_TEXT): Art
   if (text.length < MIN_ARTICLE_TEXT) return null;
   const author = cleanText(parsed.author ?? '', 200);
   const site = cleanText(parsed.site ?? '', 200);
-  const published = isoDate(parsed.published ?? '');
+  const published = publishedDate(parsed.published ?? '');
   const byline = {
     ...(author && !/^https?:/iu.test(author) ? { author } : {}),
     ...(site ? { site } : {}),
