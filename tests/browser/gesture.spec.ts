@@ -179,6 +179,8 @@ test('reloading the extension leaves one working hand on a page that was already
     );
     await page.bringToFront();
     await expect(page.locator('[data-zombie-hand-ui]')).toHaveCount(1);
+    const original = await page.locator('[data-zombie-hand-ui]').elementHandle();
+    if (!original) throw new Error('No hand');
     // As after a rebuild and Reload in chrome://extensions: the page keeps the
     // old content script, cut off from the extension, and is given a new one.
     const browser = fixture.context.browser();
@@ -192,6 +194,9 @@ test('reloading the extension leaves one working hand on a page that was already
       await session.detach();
     }
     await restarted;
+    // Before anything is touched, the new copy has replaced the old hand.
+    await expect.poll(() => original.evaluate((node) => node.isConnected)).toBe(false);
+    await expect(page.locator('[data-zombie-hand-ui]')).toHaveCount(1);
     const options = await fixture.context.newPage();
     await options.goto(`chrome-extension://${fixture.id}/options.html`);
     await page.bringToFront();
