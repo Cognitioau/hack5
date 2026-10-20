@@ -119,9 +119,17 @@ const handActivation = createHandActivation({
   },
 });
 let activationIntent = 0;
-let activationRequest: { id: string; intent: number } | null = null;
+let activationRequest: {
+  id: string;
+  intent: number;
+  at: number;
+  /** Whether site access was already held, so no prompt could stand in for the popup. */
+  held: Promise<boolean>;
+} | null = null;
+/** Chrome's site-access prompt is answered within this, or its request has lapsed. */
+const ACTIVATION_PROMPT_MS = 120_000;
 /** An activation finished on Chrome's grant, after the popup that began it had closed. */
-let grantedActivation: string | null = null;
+let grantedActivation: { id: string; enabled: Promise<void> } | null = null;
 let captureViewEpoch = 0;
 const ready = Promise.all([secureStorage(), handActivation.ready]).then(async () => {
   if (!__CORE_ONLY__) await reconcileMediaOrigins();
@@ -426,16 +434,22 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
         captures: (await store.list()).map(publicCapture),
       };
     case 'BEGIN_ACTIVATION':
-      activationRequest = { id: crypto.randomUUID(), intent: ++activationIntent };
+      activationRequest = {
+        id: crypto.randomUUID(),
+        intent: ++activationIntent,
+        at: Date.now(),
+        held: chrome.permissions.contains({ origins: [...universalPageOrigins] }).catch(() => true),
+      };
       return { ok: true, activationRequest: activationRequest.id };
     case 'SET_ACTIVATION':
       if (message.enabled) {
-        if (
-          message.requestId !== undefined &&
-          message.requestId === grantedActivation &&
-          handActivation.getMode() === 'universal'
-        )
-          return { ok: true, activation: 'universal' };
+        // A popup that survived the prompt waits for the grant's own activation to finish.
+        const granted = grantedActivation;
+        if (message.requestId !== undefined && message.requestId === granted?.id) {
+          await granted.enabled;
+          if (handActivation.getMode() === 'universal')
+            return { ok: true, activation: 'universal' };
+        }
         if (
           !activationRequest ||
           message.requestId !== activationRequest.id ||
@@ -681,12 +695,15 @@ chrome.permissions.onAdded.addListener(() => {
   const current = () => activationRequest === pending && pending.intent === activationIntent;
   void ready
     .then(async () => {
-      if (!current()) return;
+      // Only a recent prompt for access not already held can have been answered by this grant.
+      if (!current() || Date.now() - pending.at > ACTIVATION_PROMPT_MS) return;
+      if (await pending.held) return;
       if (!(await chrome.permissions.contains({ origins: [...universalPageOrigins] }))) return;
       if (!current()) return;
       activationRequest = null;
-      grantedActivation = pending.id;
-      await handActivation.enable();
+      const enabled = handActivation.enable();
+      grantedActivation = { id: pending.id, enabled };
+      await enabled;
     })
     .catch(() => undefined);
 });

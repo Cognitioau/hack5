@@ -563,8 +563,11 @@ function activate(): () => void {
   };
 
   // A copy injected before the extension was reloaded leaves its hand behind,
-  // cut off from the extension; the page keeps one hand, this one.
-  for (const stale of document.querySelectorAll('[data-zombie-hand-ui]')) stale.remove();
+  // cut off from the extension; the page keeps one hand, this one. Another build
+  // installed alongside keeps its own (hands from before owners were marked go too).
+  const owner = chrome.runtime.id;
+  for (const stale of document.querySelectorAll<HTMLElement>('[data-zombie-hand-ui]'))
+    if ((stale.dataset.zombieHandOwner ?? owner) === owner) stale.remove();
   const view = new HandView(document, {
     capture: () => {
       void captureSelection();
@@ -583,6 +586,7 @@ function activate(): () => void {
     },
     sprite: loadSprite,
   });
+  if (owner) view.host.dataset.zombieHandOwner = owner;
 
   // A modifier hold owns exactly one lasso. Its release never cancels a
   // completed circle that is already crossing the asynchronous message boundary.

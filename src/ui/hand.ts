@@ -56,7 +56,7 @@ const STYLE = `
 .words{min-width:0;max-width:220px;padding:3px 6px 3px 10px}
 .status{display:block;font-size:11px;font-weight:640;line-height:1.35;color:#e7f4d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .detail{font-size:10px;line-height:1.35;color:var(--muted);margin:1px 0 0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
-.dock:not([data-state="error"]) .detail,.dock[data-state="idle"] .words,.dock[data-quiet="true"] :is(.words,.archive,.connect){display:none}
+.dock:not([data-state="error"]) .detail,.dock[data-state="idle"] .words,.dock[data-quiet="true"]:not(:has(:focus-visible)) :is(.words,.archive,.connect){display:none}
 .button{border:1px solid #485d40;background:#29342a;color:#e7f1df;border-radius:15px;min-height:28px;padding:4px 10px;font-size:10px;font-weight:630;white-space:nowrap;flex:none}.button:hover{background:#344530}.button.primary{background:var(--acid);border-color:var(--acid);color:#1b2a10}.button.primary:hover{background:#dffaaf}.cancel{border-color:transparent;background:#ffffff0b;color:#c7d0c3}
 .announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .dock[data-state="error"]{border-color:#b58a5b}.dock[data-state="error"] .status{color:#f1d4a5}.dock[data-state="error"] .mark{fill:#e2b36f}.dock[data-state="saving"] .mark{fill:#d3b779}.dock[data-state="arming"] .mark,.dock[data-state="armed"] .mark{fill:var(--acid)}

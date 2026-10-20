@@ -680,8 +680,11 @@ describe('production background capability boundary', () => {
   });
 
   it("finishes a toolbar activation on Chrome's grant when the prompt closed the popup", async () => {
+    let granted = false;
+    context.contains.mockImplementation(async () => granted);
     const started = await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
     if (!started.ok || !started.activationRequest) throw new Error('Missing activation intent');
+    granted = true;
     context.permissionAdded.listeners[0]?.({ origins: ['<all_urls>'] });
     await vi.waitFor(() => expect(context.local.values.handActivation).toBe('universal'));
     // A popup that did survive the prompt finishes the same activation harmlessly.
@@ -691,6 +694,51 @@ describe('production background capability boundary', () => {
         popup(),
       ),
     ).toMatchObject({ ok: true, activation: 'universal' });
+  });
+
+  it('answers a popup that survived the prompt while the grant is still turning the hand on', async () => {
+    let granted = false;
+    context.contains.mockImplementation(async () => granted);
+    const started = await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+    if (!started.ok || !started.activationRequest) throw new Error('Missing activation intent');
+    granted = true;
+    const writing = context.local.deferWrite('handActivation');
+    context.permissionAdded.listeners[0]?.({ origins: ['<all_urls>'] });
+    await writing.entered;
+    const reply = context.send(
+      { v: 1, type: 'SET_ACTIVATION', enabled: true, requestId: started.activationRequest },
+      popup(),
+    );
+    writing.release();
+    expect(await reply).toMatchObject({ ok: true, activation: 'universal' });
+  });
+
+  it('leaves a paused hand alone when site access was already held and another origin is granted', async () => {
+    await context.send({ v: 1, type: 'SET_ACTIVATION', enabled: false }, popup());
+    // Access already held needs no prompt, so this request can only be finished by its own popup.
+    await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+    context.permissionAdded.listeners[0]?.({ origins: ['https://images.example.org/*'] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(context.local.values.handActivation).toBe('paused');
+  });
+
+  it('ignores a grant that arrives long after the prompt began', async () => {
+    await context.send({ v: 1, type: 'SET_ACTIVATION', enabled: false }, popup());
+    let granted = false;
+    context.contains.mockImplementation(async () => granted);
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(1_000_000);
+      await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+      // Denied, say, then granted much later from chrome://extensions.
+      now.mockReturnValue(1_000_000 + 10 * 60_000);
+      granted = true;
+      context.permissionAdded.listeners[0]?.({ origins: ['<all_urls>'] });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(context.local.values.handActivation).toBe('paused');
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it.each([
