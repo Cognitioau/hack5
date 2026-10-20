@@ -19,11 +19,11 @@ TypeScript is strict. Biome checks formatting/lint. AST checks enforce layer and
 
 | Suite | Evidence | Limit |
 | --- | --- | --- |
-| Unit | Gestures, extraction, captions/imports, queue/lifecycle races, model disposal, calibration math, grave-hand frame order, clip winding and the forearm's cut end staying underground | Synthetic DOM, fake IndexedDB or injected ports |
+| Unit | Gestures, extraction, captions/imports, queue/lifecycle races, model disposal, calibration math, grave-hand packs, timing and placement (the hole on screen and the fist on the passage for every hand) | Synthetic DOM, fake IndexedDB or injected ports |
 | Vault contracts | Paths, malicious content, preconditions, conflicts, uncertain writes, attachments and recovery | Protocol fixture, not a running plugin |
 | Security | Real background listener authorization and revocation interleavings; message/media policies | Synthetic Chrome and transport APIs |
 | Capture browser | Bundled extension, trusted inputs, crop pixels, storage isolation, fixture captions, semantic retrieval, archive/restart and core | Synthetic sites/vault; scoped test-only pregrants |
-| Grab browser | Trusted drag selection, hand click keeps the selection, collapsed dock does not shift under the pointer, whole-page grab excerpt, selection chip, rendered hand pixels on a page whose CSP forbids every image | Synthetic site/vault; a colour predicate, not a visual judgement |
+| Grab browser | Trusted drag selection, hand click keeps the selection, collapsed dock does not shift under the pointer, whole-page grab excerpt, selection chip, the footage hand's skin pixels on a page whose CSP forbids every image | Synthetic site/vault; a colour predicate, not a visual judgement |
 | Inference browser | Real packaged model/WASM, semantic ordering, normalization, determinism and cold restart | Isolated model host |
 | Gaze browser | Explicit startup, local model, no outgoing requests/persisted samples, actual camera track stop | Chromium fake camera; no human accuracy claim |
 
