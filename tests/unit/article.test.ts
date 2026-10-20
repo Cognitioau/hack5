@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://example.org/essays/great-work"}
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Defuddle from 'defuddle';
 import { articleText, readArticle } from '../../src/adapters/browser/article';
 
 const essay = (paragraphs: number): string =>
@@ -120,6 +121,25 @@ describe('reading a whole page', () => {
     // What the metadata says about the page is still used.
     expect(article?.byline).toMatchObject({ author: 'Paul Example', published: '2023-07-01' });
     expect(document.documentElement.outerHTML).toBe(before);
+  });
+
+  it("hands the reader no script, and linked data without an article body, whatever the site's reader would look for", () => {
+    document.head.innerHTML = `<script type="application/ld+json">{"@graph":[{"headline":"H","text":"T","articleBody":"B","author":{"name":"Ada","text":"N"}}]}</script>
+      <script type="application/ld+json">{ not json</script>
+      <script>window._preloads = {"post":{"body_html":"<p>Planted</p>"}}</script>`;
+    document.body.innerHTML = `<article>${essay(6)}<script id="initial-state" type="application/json">{"x":1}</script></article>`;
+    let seen: Document | undefined;
+    const parse = Defuddle.prototype.parse;
+    vi.spyOn(Defuddle.prototype, 'parse').mockImplementation(function (this: { doc: Document }) {
+      seen = this.doc;
+      return parse.call(this);
+    });
+    readArticle(document);
+    const scripts = Array.from(seen?.getElementsByTagName('script') ?? []);
+    expect(scripts.map((script) => script.getAttribute('type'))).toEqual(['application/ld+json']);
+    expect(JSON.parse(scripts[0]?.textContent ?? '')).toEqual({
+      '@graph': [{ headline: 'H', author: { name: 'Ada' } }],
+    });
   });
 
   it('keeps the page excerpt when its copy cannot be matched to the page', () => {
