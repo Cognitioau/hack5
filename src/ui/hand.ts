@@ -21,7 +21,7 @@ export interface HandActions {
   settings?: () => void;
 }
 export interface StateOptions {
-  /** An error whose capture is kept on this device: its grab plays out and fades, as a queued save does. */
+  /** An error whose capture is kept on this device: its grab plays out and the copy is buried. */
   kept?: boolean;
   /** The receipt offers the settings page, where the problem is put right. */
   settings?: boolean;
@@ -436,9 +436,11 @@ export class HandView {
     if (state === 'saving' && previous !== 'saving') this.startEffect();
     else if (state === 'saved' && previous !== 'saved') this.retreatEffect(true);
     else if (['arming', 'armed'].includes(state) && state !== previous) this.hideEffect();
-    // A capture kept on this device is held like a queued save: the vault can
-    // refuse before the hand has surfaced, and its grab still plays out.
-    else if (['idle', 'archived', 'error'].includes(state) && state !== previous && !options.kept)
+    // A capture kept on this device was taken, even when the vault refused it
+    // before the hand surfaced: the grab plays out and the page heals over it.
+    // The receipt, not the animation, says where it is kept.
+    else if (state === 'error' && options.kept && state !== previous) this.retreatEffect(true);
+    else if (['idle', 'archived', 'error'].includes(state) && state !== previous)
       this.retreatEffect(false);
   }
 

@@ -351,7 +351,7 @@ describe('target-local hand presentation', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('finishes the grab of a capture kept on this device even when the vault refuses at once', async () => {
+  it('finishes the grab of a capture kept on this device, then buries it and heals the page', async () => {
     const sprite = vi.fn(async (_hand: number) => null);
     view.dispose();
     view = new HandView(document, { ...actions, sprite });
@@ -368,10 +368,11 @@ describe('target-local hand presentation', () => {
     await vi.advanceTimersByTimeAsync(grabEnd - 140);
     expect(element('.effect').hidden).toBe(false);
     expect(element('.effect').dataset.phase).toBe('reach');
-    // Then it fades as a queued save does; it never buries what the vault has not confirmed.
-    await vi.advanceTimersByTimeAsync(1_300);
-    expect(element('.effect').dataset.phase).toBe('fade');
-    await vi.advanceTimersByTimeAsync(500);
+    // Kept is taken: the hand pulls the copy under and the page heals, while the
+    // receipt still says the vault has not got it.
+    await vi.advanceTimersByTimeAsync(300);
+    expect(element('.effect').dataset.phase).toBe('bury');
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(element('.effect').hidden).toBe(true);
     expect(element('.dock').dataset.state).toBe('error');
   });
