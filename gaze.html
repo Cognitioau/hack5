@@ -14,18 +14,24 @@
     <p class="eyebrow">ZOMBIE HAND / EXPERIMENTAL</p>
     <h1>Gaze lab</h1>
     <p>Try a local camera calibration. This lab does not arm or capture content on other pages.</p>
-    <p class="hint">Camera images and calibration stay in memory on this device. Nothing is uploaded or saved. Hiding or closing this page stops the camera and clears the session.</p>
+    <p class="hint">Camera images and calibration stay in memory on this device. Nothing is uploaded, and nothing is saved unless you choose Download session diagnostics. Hiding or closing this page stops the camera and clears the session.</p>
     <video id="gaze-video" autoplay muted playsinline aria-label="Local camera preview"></video>
     <p id="gaze-status" role="status" aria-live="polite">Camera is off. Start only when you are ready.</p>
     <div class="actions">
       <button id="gaze-start" type="button">Start local camera</button>
       <button id="gaze-calibrate" type="button" disabled>Begin calibration</button>
+      <button id="gaze-export" type="button" hidden>Download session diagnostics</button>
+    </div>
+    <div class="checks">
+      <label><input id="gaze-auto" type="checkbox">Advance automatically once each point is captured</label>
     </div>
     <p id="gaze-diagnostics" class="hint">Nine calibration points are followed by five separate checks. Results describe this session only; they do not establish capture accuracy.</p>
-    <p class="hint">Keep the window, your seat and lighting steady. Look directly at each target, wait for “Click”, then click it. Moving or resizing the window requires recalibration.</p>
+    <p id="gaze-export-status" class="hint" role="status" aria-live="polite"></p>
+    <p class="hint">Keep the window, your seat and lighting steady. Look at the small dot in the centre of each target until it shrinks away, then click the target or press Space. Moving or resizing the window requires recalibration.</p>
+    <p class="hint">After the checks, Download session diagnostics saves one JSON file to your downloads, and only when you click it. It contains: the file format, creation time and extension version; the lab’s tuning settings; the page size, window position and pixel ratio; the target positions; for each processed camera frame during calibration and checks, its time and ten geometric eye measurements (iris offsets within each eye, the eye-centre position and inter-eye distance in the camera image, and head-turn ratios), or a blank marker when no face or open eyes were found; which frames each target used and how steady they were; the chosen model and its error table; each check’s estimated point, error and head-movement measure; and the live dot’s duration, update counts and movement statistics. It contains no camera images, video frames or face-mesh landmark arrays. Nothing is uploaded.</p>
   </main>
   <p id="gaze-step" hidden aria-live="polite"></p>
-  <button id="gaze-target" type="button" hidden disabled>Look here</button>
+  <button id="gaze-target" type="button" hidden disabled aria-label="Keep looking at the centre dot"><span id="gaze-fixation" aria-hidden="true"></span><span id="gaze-target-label" aria-hidden="true"></span></button>
   <span id="gaze-dot" hidden aria-hidden="true"></span>
   <button id="gaze-stop" type="button" disabled>Stop and clear camera session</button>
   <script type="module" src="gaze.js"></script>

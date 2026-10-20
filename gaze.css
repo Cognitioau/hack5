@@ -36,18 +36,53 @@ body[data-gaze-phase="stopped"] #gaze-video {
   border-radius: 50%;
   width: 98px;
   height: 98px;
-  padding: 12px;
+  padding: 0;
   border: 2px solid #afffc5;
   background: #1b4834;
   color: #f3fff5;
   box-shadow: 0 0 40px #80e5a233;
   cursor: pointer;
+  --gaze-progress: 0;
 }
 #gaze-target:disabled {
   background: #25302c;
   color: #b0b9b2;
   border-color: #66756c;
   cursor: wait;
+  /* The base button style dims disabled controls; the fixation dot must stay crisp. */
+  opacity: 1;
+}
+/* The fixation point is the exact target centre. It shrinks as steady samples are collected. */
+#gaze-fixation {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: #f3fff5;
+  transform: scale(calc(1 - 0.75 * var(--gaze-progress)));
+  transition: transform 80ms linear;
+}
+#gaze-target[data-state="settling"] #gaze-fixation {
+  background: #ffffff;
+}
+#gaze-target[data-state="captured"] #gaze-fixation {
+  transform: scale(0);
+}
+#gaze-target-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 16px;
+  font-size: 12px;
+  text-align: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  #gaze-fixation {
+    transition: none;
+  }
 }
 #gaze-target:focus-visible {
   outline: 4px solid #f0b8ff;

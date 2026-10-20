@@ -10,7 +10,19 @@ Page-access permission does not itself authorize downloading original image byte
 
 The plugin key is available only to trusted extension contexts. Session storage is the default; browser restart requires re-entering it. Remembered keys are stored locally in the browser profile, not an encrypted password vault. Forget key stops further credential use without erasing captures. Chrome host permissions cover more than a URL's port; the vault client separately enforces the configured numeric loopback endpoint and port.
 
-The gaze lab starts its camera only from Start, uses packaged local models, and blocks external connections. Frames, samples and calibration are not persisted. Stop, hiding/closing the lab or track termination releases resources and clears calibration. Human accuracy and gaze capture integration remain unverified.
+The gaze lab starts its camera only from Start, uses packaged local models, and blocks external connections. Camera frames are never stored. Samples and calibration live only in the page's memory and are never persisted automatically. Stop, hiding/closing the lab or track termination releases resources and clears calibration. Human accuracy and gaze capture integration remain unverified.
+
+After the five checks, **Download session diagnostics** saves one JSON file to your downloads for offline tuning. The file is created only when you click that button; nothing is written otherwise, and the download makes no network request. It contains:
+
+- its format name and version, creation time, the extension version and the tuning constants in use;
+- the window's size, screen position and device pixel ratio;
+- the calibration and check target positions;
+- for each processed camera frame while a target was shown (about 12 per second, at most 75 per target): the time since the target appeared and ten derived measurements — horizontal and vertical iris offset within each eye, the eye-centre position and inter-eye distance in the camera image, two nose-offset ratios and a depth-based head-turn ratio — or an empty marker when no face or open eyes could be measured (a blink, for example);
+- which frames each target was captured from (their times, measurements and averages), how steady they were, how far the eyes had moved from where they were when the target appeared, and how far the head had moved during each check;
+- the chosen model, its cross-validation error table, each check's predicted point and error, and the checks' median and largest error;
+- the live phase's duration, its update counts by outcome (estimated, face lost, moved, outside the window) and frame-to-frame movement statistics for the live dot.
+
+It contains no camera images, video frames, face-mesh landmark arrays or page content. Treat it as private: the measurements describe your head position and eye movements during that session. Files are named `zombie-hand-gaze-diagnostics-<time>.json`; the repository ignores that pattern so a copy placed in a checkout is not committed by accident. A unit test pins the file's exact set of fields to this list.
 
 ## Retention and recovery
 

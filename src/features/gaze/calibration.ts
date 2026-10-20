@@ -1,3 +1,5 @@
+import { GAZE_TUNING } from './tuning';
+
 export type Landmark = { x: number; y: number; z: number };
 export type Sample = { features: number[]; target: { x: number; y: number } };
 export type ViewportGeometry = {
@@ -9,7 +11,51 @@ export type ViewportGeometry = {
   outerHeight: number;
   pixelRatio: number;
 };
+
+/** The ten geometric values eyeFeatures returns, in order. No image or identity data. */
+export const FEATURE_NAMES = [
+  'leftIrisHorizontal',
+  'leftIrisVertical',
+  'rightIrisHorizontal',
+  'rightIrisVertical',
+  'eyeCentreX',
+  'eyeCentreY',
+  'interEyeDistance',
+  'noseOffsetX',
+  'noseOffsetY',
+  'eyeDepthYaw',
+] as const;
+export const FEATURE_INDEX = { centreX: 4, centreY: 5, distance: 6 } as const;
+
+/** Candidate feature maps, simplest first; model selection prefers earlier entries on near-ties. */
+export const GAZE_VARIANTS = ['iris', 'iris-quadratic', 'iris-head', 'full'] as const;
+export type GazeVariant = (typeof GAZE_VARIANTS)[number];
+export const VARIANT_LABELS: Record<GazeVariant, string> = {
+  iris: 'iris only, linear',
+  'iris-quadratic': 'iris with quadratic terms',
+  'iris-head': 'iris plus head-rotation terms',
+  full: 'all ten features, linear',
+};
+
+/** Maps raw features into a variant's regression inputs; full keeps any raw vector as given. */
+export function variantFeatures(
+  variant: GazeVariant,
+  raw: readonly number[],
+): number[] | undefined {
+  if (variant === 'full') return [...raw];
+  if (raw.length !== FEATURE_NAMES.length) return undefined;
+  const [leftH = 0, leftV = 0, rightH = 0, rightV = 0] = raw;
+  if (variant === 'iris') return [leftH, leftV, rightH, rightV];
+  if (variant === 'iris-head') return [leftH, leftV, rightH, rightV, raw[7] ?? 0, raw[8] ?? 0];
+  const h = (leftH + rightH) / 2;
+  const v = (leftV + rightV) / 2;
+  return [h, v, h * h, v * v, h * v];
+}
+
 export type GazeModel = {
+  variant: GazeVariant;
+  lambda: number;
+  zLimit: number;
   means: number[];
   scales: number[];
   weightsX: number[];
@@ -120,20 +166,45 @@ function solve(matrix: number[][], rhs: number[]): number[] {
   return rows.map((row) => row[n] ?? 0);
 }
 
-export function fitGaze(samples: readonly Sample[], regularization = 0.5): GazeModel {
-  const dimensions = samples[0]?.features.length ?? 0;
+const targetKey = (target: { x: number; y: number }) => `${target.x},${target.y}`;
+const standardise = (value: number, mean: number, scale: number, limit: number) =>
+  Math.max(-limit, Math.min(limit, (value - mean) / scale));
+
+/**
+ * Ridge regression on standardised variant features. Each distinct target carries a total weight
+ * of one however many frames it contributed, so lambda means the same thing in every session
+ * (the original lab weighted every frame equally with lambda 0.5, roughly 0.05 on this scale).
+ * Standardised inputs are clipped so a feature that barely varied during calibration cannot
+ * produce unbounded extrapolation later.
+ */
+export function fitGaze(
+  samples: readonly Sample[],
+  regularization = 1,
+  options: {
+    variant?: GazeVariant;
+    minimumTargets?: number;
+    zLimit?: number;
+    /** False reproduces the original per-frame weighting; only the offline legacy row uses it. */
+    equalTargetWeights?: boolean;
+  } = {},
+): GazeModel {
+  const variant = options.variant ?? 'full';
+  const minimumTargets = options.minimumTargets ?? 9;
+  const zLimit = options.zLimit ?? GAZE_TUNING.model.zLimit;
+  const raw = samples[0]?.features.length ?? 0;
   if (
-    samples.length < 9 ||
-    !dimensions ||
-    dimensions > 32 ||
+    samples.length < minimumTargets ||
+    !raw ||
+    raw > 32 ||
     regularization <= 0 ||
-    !Number.isFinite(regularization)
+    !Number.isFinite(regularization) ||
+    !(zLimit > 0)
   )
     throw new Error('Complete all calibration points first');
   if (
     samples.some(
       (sample) =>
-        sample.features.length !== dimensions ||
+        sample.features.length !== raw ||
         ![...sample.features, sample.target.x, sample.target.y].every(Number.isFinite) ||
         sample.target.x < 0 ||
         sample.target.x > 1 ||
@@ -142,53 +213,84 @@ export function fitGaze(samples: readonly Sample[], regularization = 0.5): GazeM
     )
   )
     throw new Error('Invalid calibration sample');
-  if (new Set(samples.map((sample) => `${sample.target.x},${sample.target.y}`)).size < 9)
-    throw new Error('Calibration needs nine distinct targets');
+  const counts = new Map<string, number>();
+  for (const sample of samples)
+    counts.set(targetKey(sample.target), (counts.get(targetKey(sample.target)) ?? 0) + 1);
+  if (counts.size < minimumTargets)
+    throw new Error(
+      `Calibration needs ${minimumTargets === 9 ? 'nine' : minimumTargets} distinct targets`,
+    );
+  const inputs = samples.map((sample) => variantFeatures(variant, sample.features));
+  if (inputs.some((input) => !input)) throw new Error(`Variant ${variant} needs all eye features`);
+  const features = inputs as number[][];
+  const equal = options.equalTargetWeights ?? true;
+  const weights = samples.map((sample) =>
+    equal ? 1 / (counts.get(targetKey(sample.target)) ?? 1) : 1,
+  );
+  const total = equal ? counts.size : samples.length;
+  const dimensions = features[0]?.length ?? 0;
   const means = Array.from(
     { length: dimensions },
     (_, index) =>
-      samples.reduce((sum, sample) => sum + (sample.features[index] ?? 0), 0) / samples.length,
+      features.reduce((sum, row, sample) => sum + (weights[sample] ?? 0) * (row[index] ?? 0), 0) /
+      total,
   );
   const scales = means.map((mean, index) =>
     Math.max(
       1e-4,
       Math.sqrt(
-        samples.reduce((sum, sample) => sum + ((sample.features[index] ?? 0) - mean) ** 2, 0) /
-          samples.length,
+        features.reduce(
+          (sum, row, sample) => sum + (weights[sample] ?? 0) * ((row[index] ?? 0) - mean) ** 2,
+          0,
+        ) / total,
       ),
     ),
   );
-  const rows = samples.map((sample) => [
+  const rows = features.map((row) => [
     1,
-    ...sample.features.map((value, index) => (value - (means[index] ?? 0)) / (scales[index] ?? 1)),
+    ...row.map((value, index) => standardise(value, means[index] ?? 0, scales[index] ?? 1, zLimit)),
   ]);
   const matrix = Array.from({ length: dimensions + 1 }, (_, i) =>
     Array.from(
       { length: dimensions + 1 },
       (_, j) =>
-        rows.reduce((sum, row) => sum + (row[i] ?? 0) * (row[j] ?? 0), 0) +
-        (i === j ? (i === 0 ? 1e-6 : regularization) : 0),
+        rows.reduce(
+          (sum, row, sample) => sum + (weights[sample] ?? 0) * (row[i] ?? 0) * (row[j] ?? 0),
+          0,
+        ) + (i === j ? (i === 0 ? 1e-6 : regularization) : 0),
     ),
   );
   const rhs = (coordinate: 'x' | 'y') =>
     Array.from({ length: dimensions + 1 }, (_, index) =>
       rows.reduce(
-        (sum, row, sample) => sum + (row[index] ?? 0) * (samples[sample]?.target[coordinate] ?? 0),
+        (sum, row, sample) =>
+          sum +
+          (weights[sample] ?? 0) * (row[index] ?? 0) * (samples[sample]?.target[coordinate] ?? 0),
         0,
       ),
     );
-  return { means, scales, weightsX: solve(matrix, rhs('x')), weightsY: solve(matrix, rhs('y')) };
+  return {
+    variant,
+    lambda: regularization,
+    zLimit,
+    means,
+    scales,
+    weightsX: solve(matrix, rhs('x')),
+    weightsY: solve(matrix, rhs('y')),
+  };
 }
 
 export function predictGaze(
   model: GazeModel,
   features: readonly number[],
 ): { x: number; y: number } | undefined {
-  if (features.length !== model.means.length || !features.every(Number.isFinite)) return undefined;
+  if (!features.every(Number.isFinite)) return undefined;
+  const input = variantFeatures(model.variant, features);
+  if (!input || input.length !== model.means.length) return undefined;
   const row = [
     1,
-    ...features.map(
-      (value, index) => (value - (model.means[index] ?? 0)) / (model.scales[index] ?? 1),
+    ...input.map((value, index) =>
+      standardise(value, model.means[index] ?? 0, model.scales[index] ?? 1, model.zLimit),
     ),
   ];
   const dot = (weights: readonly number[]) =>

@@ -25,11 +25,21 @@ TypeScript is strict. Biome checks formatting/lint. AST checks enforce layer and
 | Capture browser | Bundled extension, trusted inputs, crop pixels, storage isolation, fixture captions, semantic retrieval, archive/restart and core | Synthetic sites/vault; scoped test-only pregrants |
 | Grab browser | Trusted drag selection, hand click keeps the selection, collapsed dock does not shift under the pointer, whole-page grab excerpt, selection chip, the footage hand's skin pixels on a page whose CSP forbids every image, and none of the page's selection highlight left around the taken words, whether one line, two paragraphs or inside a translucent callout | Synthetic site/vault; a colour predicate, not a visual judgement, read with text drawn in greyscale (`--disable-lcd-text`) because Linux's subpixel fringes match both colours |
 | Inference browser | Real packaged model/WASM, semantic ordering, normalization, determinism and cold restart | Isolated model host |
-| Gaze browser | Explicit startup, local model, no outgoing requests/persisted samples, actual camera track stop | Chromium fake camera; no human accuracy claim |
+| Gaze browser | Explicit startup, local model, no outgoing requests/persisted samples, actual camera track stop. A test-only harness composes the real lab controller with synthetic eye landmarks to exercise settling before Click enables, keyboard and auto-advance, One Euro smoothing of the live dot, the head-movement warning, and the diagnostics download's contents and evaluator round trip | Chromium fake camera and synthetic eyes; no human accuracy claim |
 
 The capture harness separately tests denied host access with the unmodified production manifest. Most flows use a copied manifest with exact fixture/loopback grants. Chromium's extension action debugging API grants activeTab for those flows, then the harness injects the production content entrypoint. The universal-activation test instead uses a separate disposable full-profile copy with an all-sites grant, enables through Settings, and exercises automatic injection and visible image crops in a new tab without a toolbar action. Headless tests cannot complete the native optional-permission dialog; native toolbar/permission approval remains a manual check. Shipped code contains no testing backdoor.
 
 Background regressions hold image/arming operations open while switching tabs or window focus away and back. They verify stale bytes are discarded, delayed arms are rejected, and already recorded source-link captures remain active and sync.
+
+## Gaze session evaluation
+
+The gaze lab's **Download session diagnostics** file (contents in [PRIVACY](PRIVACY.md)) can be re-evaluated offline with the lab's own TypeScript, bundled in memory:
+
+```sh
+node scripts/gaze-eval.mjs ~/Downloads/zombie-hand-gaze-diagnostics-*.json
+```
+
+For each file it prints, per model variant, leave-one-target-out error on the nine calibration targets and error on the five checks, an approximate pre-tuning reference, how steady and how far moved the live captures were, and settling-time, window-length and steadiness-range sweeps replayed from the recorded frames. `--json` prints the raw report. Keep these files out of Git; `.gitignore` excludes the default file name.
 
 ## Live Obsidian probe
 
