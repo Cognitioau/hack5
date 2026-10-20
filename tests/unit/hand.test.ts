@@ -2,6 +2,7 @@
 // @vitest-environment-options {"url":"https://example.org/article","pretendToBeVisual":true}
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '../../src/core/contracts/index';
+import { GRAVE_HANDS } from '../../src/ui/grave-sprite';
 import { HandView } from '../../src/ui/hand';
 
 let shadow: ShadowRoot;
@@ -21,6 +22,91 @@ const rectangle = {
   viewportWidth: 800,
   viewportHeight: 600,
 };
+
+interface FakeFrame {
+  frame: number;
+  close: () => void;
+}
+let frames: FakeFrame[] = [];
+
+/** A synthetic packaged hand: frame `n` is a bare RIFF WEBP chunk of 12 + 2n bytes. */
+function packedHand(count: number): Uint8Array<ArrayBuffer> {
+  const parts = Array.from({ length: count }, (_, index) => {
+    const bytes = new Uint8Array(12 + index * 2);
+    bytes.set([82, 73, 70, 70]);
+    new DataView(bytes.buffer).setUint32(4, 4 + index * 2, true);
+    bytes.set([87, 69, 66, 80], 8);
+    return [...bytes];
+  });
+  return new Uint8Array(parts.flat());
+}
+
+/**
+ * 2D contexts that record drawImage, a decoder that names each packed frame by
+ * its size, and the offscreen canvas that lays each one's hand over its wall.
+ */
+function fakeCanvas() {
+  const drawImage = vi.fn();
+  // Every colour stroked, filled or put in a gradient on the effect's canvases.
+  const colours: string[] = [];
+  const context = new Proxy<Record<string | symbol, unknown>>(
+    { drawImage },
+    {
+      get: (target, key) => {
+        target[key] ??= vi.fn(() => ({
+          addColorStop: (_offset: number, colour: string) => colours.push(colour),
+        }));
+        return target[key];
+      },
+      set: (target, key, value) => {
+        if ((key === 'strokeStyle' || key === 'fillStyle') && typeof value === 'string')
+          colours.push(value);
+        target[key] = value;
+        return true;
+      },
+    },
+  );
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+    () => context as unknown as CanvasRenderingContext2D,
+  );
+  frames = [];
+  const packed: FakeFrame[] = [];
+  const decode = vi.fn(async (blob: Blob) => {
+    const frame = { frame: (blob.size - 12) / 2, close: vi.fn(), width: 2, height: 1 };
+    packed.push(frame);
+    return frame as unknown as ImageBitmap;
+  });
+  Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: decode });
+  // What each laid frame was made of, in order: the wall half, its pixels read
+  // back and tinted (to these values, from a wall of 200s), then the hand half.
+  const laid: (string | number[])[][] = [];
+  class Layers {
+    private last = -1;
+    private steps: (string | number[])[] = [];
+    getContext() {
+      return {
+        clearRect: vi.fn(),
+        drawImage: (image: FakeFrame, sx: number) => {
+          this.last = image.frame;
+          this.steps.push(sx === 0 ? 'hand' : 'wall');
+        },
+        getImageData: () => ({ data: new Uint8ClampedArray([200, 200, 200, 200]) }),
+        putImageData: ({ data }: { data: Uint8ClampedArray }) => {
+          this.steps.push([...data]);
+        },
+      };
+    }
+    transferToImageBitmap() {
+      const frame = { frame: this.last, close: vi.fn() };
+      frames.push(frame);
+      laid.push(this.steps);
+      this.steps = [];
+      return frame;
+    }
+  }
+  Object.defineProperty(window, 'OffscreenCanvas', { configurable: true, value: Layers });
+  return { drawImage, decode, packed, laid, colours };
+}
 
 function element<T extends HTMLElement = HTMLElement>(selector: string): T {
   const result = shadow.querySelector<T>(selector);
@@ -108,6 +194,137 @@ describe('target-local hand presentation', () => {
     expect(element('.title').textContent).toBe('Still local.');
   });
 
+  it('loads each hand once per page, plays its frames in order and never repeats a hand', async () => {
+    const { drawImage, decode, packed, laid } = fakeCanvas();
+    const sprite = vi
+      .fn<(hand: number) => Promise<Uint8Array<ArrayBuffer> | null>>()
+      .mockRejectedValueOnce(new Error('Synthetic interrupted read'))
+      .mockImplementation(async (hand) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'A failed read is retried');
+    await vi.advanceTimersByTimeAsync(0);
+    view.setTarget(rectangle, 'Read while the user confirms');
+    await vi.advanceTimersByTimeAsync(0);
+    view.setTarget(rectangle, 'Never read twice');
+    expect(sprite).toHaveBeenCalledTimes(2);
+    const first = sprite.mock.calls[0]?.[0] ?? -1;
+    expect(sprite.mock.calls[1]?.[0]).toBe(first);
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    // The plaster cracks before any footage shows.
+    expect(drawImage).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(900);
+    const drawn = drawImage.mock.calls.map(([image]) => (image as unknown as FakeFrame).frame);
+    expect(drawn[0]).toBe(0);
+    expect(drawn.length).toBeGreaterThan(5);
+    expect(drawn.every((frame, index) => index === 0 || frame >= (drawn[index - 1] ?? 0))).toBe(
+      true,
+    );
+    // Only a handful of frames are ever held decoded at once.
+    const open = frames.filter((frame) => !vi.mocked(frame.close).mock.calls.length);
+    expect(open.length).toBeGreaterThan(0);
+    expect(open.length).toBeLessThanOrEqual(8);
+    expect(decode.mock.calls.length).toBeGreaterThan(open.length);
+    // Each packed frame is let go as soon as its layers are laid together.
+    expect(packed.length).toBe(decode.mock.calls.length);
+    for (const frame of packed) expect(frame.close).toHaveBeenCalledOnce();
+    // On a white page the wall is the footage as filmed: no pixels are read back.
+    expect(laid.length).toBe(packed.length);
+    for (const steps of laid) expect(steps).toEqual(['wall', 'hand']);
+    view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(element('.effect').hidden).toBe(true);
+    for (const frame of frames) expect(frame.close).toHaveBeenCalledOnce();
+    view.setTarget(rectangle, 'The next grab plays a different hand');
+    await vi.advanceTimersByTimeAsync(0);
+    const second = sprite.mock.lastCall?.[0];
+    expect(second).not.toBe(first);
+    expect(GRAVE_HANDS[second ?? -1]).toBeDefined();
+  });
+
+  it('tints the wall behind the hand to a dark page, never the hand', async () => {
+    const { laid, colours } = fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'Words on a dark page', undefined, {
+      style: { background: 'rgb(29, 33, 38)', color: 'rgb(217, 220, 214)', fontFamily: 'serif' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    await vi.advanceTimersByTimeAsync(900);
+    expect(laid.length).toBeGreaterThan(5);
+    // The wall goes down first and is multiplied by the page's colour, its
+    // alpha kept; the hand is laid over it as filmed.
+    const tinted = [
+      Math.round((200 * 29) / 255),
+      Math.round((200 * 33) / 255),
+      Math.round((200 * 38) / 255),
+      200,
+    ];
+    for (const steps of laid) expect(steps).toEqual(['wall', tinted, 'hand']);
+    // Nothing drawn around it reads lighter than the page: cracks, dust and
+    // debris are the page's own plaster. Only a faint lit edge may be lighter.
+    view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
+    await vi.advanceTimersByTimeAsync(5_000);
+    const lightness = (red: number, green: number, blue: number) =>
+      0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    const drawn = colours.map((colour) => {
+      const [red = 0, green = 0, blue = 0, alpha = 1] = (colour.match(/[\d.]+/g) ?? []).map(Number);
+      return { colour, alpha, lightness: lightness(red, green, blue) };
+    });
+    expect(drawn.length).toBeGreaterThan(20);
+    expect(
+      drawn.filter(({ alpha, lightness: value }) => alpha >= 0.3 && value > lightness(29, 33, 38)),
+    ).toEqual([]);
+  });
+
+  it('covers where the page highlights a selection, not only the trimmed evidence', () => {
+    view.setTarget(rectangle, 'Grab these words', [{ x: 10, y: 20, width: 128, height: 18 }], {
+      highlight: [{ x: 10, y: 20, width: 136, height: 18 }],
+    });
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    expect(element('.grave-patches div').style.width).toBe(`${136 + 4}px`);
+  });
+
+  it('holds the closed fist when the frames arrive after a reduced-motion grab', async () => {
+    const { drawImage } = fakeCanvas();
+    let deliver: (value: Uint8Array<ArrayBuffer>) => void = () => {};
+    const sprite = vi.fn<(hand: number) => Promise<Uint8Array<ArrayBuffer> | null>>(
+      () =>
+        new Promise((done) => {
+          deliver = done;
+        }),
+    );
+    // jsdom has no matchMedia; this view prefers reduced motion.
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({ matches: true }),
+    });
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'The first grab on a page');
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    expect(drawImage).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60);
+    const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+    if (!hand) throw new Error('No hand was requested');
+    deliver(packedHand(hand.frames));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(drawImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ frame: hand.beats.fist }),
+      0,
+      0,
+      hand.size.width,
+      hand.size.height,
+    );
+    // A still pose runs no animation loop.
+    const calls = drawImage.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(drawImage.mock.calls.length).toBe(calls);
+    Reflect.deleteProperty(window, 'matchMedia');
+  });
+
   it('keeps undo accessible while collapsed and suppresses it during a different pending capture', () => {
     view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
     view.setUndoAvailable(true);
@@ -124,7 +341,8 @@ describe('target-local hand presentation', () => {
   it('uncovers the source while an offline save remains truthfully queued', async () => {
     view.setTarget(rectangle, 'The saved copy is still only local.');
     view.setState('saving', 'Queued locally.', 'Waiting for the vault connection.');
-    await vi.advanceTimersByTimeAsync(2_200);
+    // The grab takes about two seconds, then the hand lingers a second before it fades.
+    await vi.advanceTimersByTimeAsync(4_000);
     expect(element('.effect').hidden).toBe(true);
     expect(element('.dock').dataset.state).toBe('saving');
     expect(element('.title').textContent).toBe('Queued locally.');

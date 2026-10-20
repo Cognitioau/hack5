@@ -236,6 +236,13 @@ export const contentMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
       v: z.literal(1),
+      type: z.literal('HAND_SPRITE'),
+      hand: z.number().int().min(0).max(15),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(1),
       type: z.literal('ARM'),
       candidate: candidateSchema,
       pageUrl: safeUrlSchema,
@@ -338,6 +345,8 @@ export type AppResponse =
       features?: Features;
       activation?: 'manual' | 'universal' | 'paused';
       activationRequest?: string;
+      /** One packaged grave hand: its WebP frames back to back, base64-encoded. */
+      sprite?: string;
     }
   | { ok: false; error: string };
 export type FocusPoint = {

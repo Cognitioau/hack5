@@ -30,6 +30,7 @@ import { cropSnapshot, downloadImage } from '../adapters/browser/media';
 import { preserveImage } from '../features/image/preserve';
 import { createCoordinator } from '../application/coordinator';
 import { parseImportedTranscript, youtubeVideoId } from '../features/youtube/transcript';
+import { GRAVE_HANDS } from '../ui/grave-sprite';
 
 type Arm = {
   token: string;
@@ -238,6 +239,30 @@ async function executeCapture(arm: Arm): Promise<void> {
   }
 }
 
+const handSprites = new Map<number, Promise<string>>();
+/** A packaged hand's frames, read from the extension origin so they never need to be web accessible. */
+function readHandSprite(hand: number): Promise<string> {
+  const known = handSprites.get(hand);
+  if (known) return known;
+  const entry = GRAVE_HANDS[hand];
+  if (!entry) return Promise.reject(new Error('There is no such hand in the package.'));
+  const read = fetch(chrome.runtime.getURL(entry.path))
+    .then(async (response) => {
+      if (!response.ok) throw new Error('The hand sprite is missing from the package.');
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 16384)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 16384));
+      return btoa(binary);
+    })
+    .catch((error: unknown) => {
+      handSprites.delete(hand);
+      throw error;
+    });
+  handSprites.set(hand, read);
+  return read;
+}
+
 async function contentRequest(
   raw: unknown,
   sender: chrome.runtime.MessageSender,
@@ -252,6 +277,8 @@ async function contentRequest(
       activationIntent += 1;
       await handActivation.pause();
       return { ok: true, activation: handActivation.getMode() };
+    case 'HAND_SPRITE':
+      return { ok: true, sprite: await readHandSprite(message.hand) };
     case 'CONTENT_STATUS': {
       const settings = await readSettings();
       const features = __CORE_ONLY__

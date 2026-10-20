@@ -47,6 +47,10 @@ export async function launchExtension(
       viewport: { width: 1280, height: 900 },
       deviceScaleFactor: 1,
       args: [
+        // Greyscale text on every platform, as macOS draws it: Linux's subpixel
+        // fringes are blue and warm, which the pixel counts would read as a
+        // selection highlight or the hand's skin.
+        '--disable-lcd-text',
         '--enable-unsafe-extension-debugging',
         `--disable-extensions-except=${extension}`,
         `--load-extension=${extension}`,

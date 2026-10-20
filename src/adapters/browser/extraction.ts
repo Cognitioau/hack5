@@ -19,6 +19,8 @@ export interface ExtractedCandidate {
   rectangle: TargetRectangle;
   /** Visible text fragments for an exact highlight; media keeps its original rectangle. */
   rectangles?: TargetRectangle[];
+  /** Where the browser paints a live selection, which can run past the trimmed evidence. */
+  highlight?: TargetRectangle[];
   target: Element;
 }
 
@@ -34,6 +36,13 @@ const CONTROL_SELECTOR =
   'button,summary,nav,[inert],[role="button"],[role="checkbox"],[role="radio"],[role="switch"],[role="slider"],[role="spinbutton"],[role="combobox"],[role="menuitem"],[role="tab"],[role="option"]';
 const OMITTED_SELECTOR =
   'script,style,noscript,template,[hidden],[aria-hidden="true"],[data-zombie-hand-ui]';
+/** Page furniture never belongs in a whole-page excerpt. */
+const PAGE_CHROME_SELECTOR =
+  'nav,aside,form,dialog,footer,[role="navigation"],[role="complementary"],[role="contentinfo"],[role="search"],[role="dialog"]';
+const PAGE_BANNER_SELECTOR = 'header,[role="banner"]';
+const PAGE_ROOT_SELECTOR = 'article,main,[role="main"]';
+const MAX_PAGE_EXCERPT = 4_000;
+const MAX_PAGE_BLOCKS = 400;
 const MAX_TEXT = 12_000;
 const MAX_SOURCE_TEXT = 64_000;
 const MAX_SOURCE_NODES = 2_048;
@@ -294,6 +303,8 @@ function selectionCandidate(
   const span = boundedSpan(map.text, 0, map.text.length, MAX_TEXT);
   const selectedRange = mappedRange(document, map, span);
   if (span.text.length < 2 || !selectedRange) return null;
+  const highlight = selectionHighlight(document, map, targetRectangle(target, document));
+  const geometry = textGeometry(document, target, selectedRange);
   return {
     candidate: {
       kind: 'text',
@@ -302,8 +313,92 @@ function selectionCandidate(
       text: span.text,
     },
     target,
-    ...textGeometry(document, target, selectedRange),
+    ...geometry,
+    ...(highlight.length ? { highlight } : {}),
   };
+}
+
+/**
+ * Where the browser paints a live selection, line by line. Chrome highlights a
+ * text fragment over its whole line box, so each fragment grows to its own
+ * element's line height; fragments of one line (bold words, links) merge, and
+ * only lines inside the viewport are kept. Where the selection runs on past a
+ * line's end, Chrome also paints the line break, about a space wide.
+ */
+function selectionHighlight(
+  document: Document,
+  map: TextMap,
+  frame: TargetRectangle,
+): TargetRectangle[] {
+  const window = document.defaultView;
+  const lineHeights = new Map<Element, number>();
+  const boxes: { left: number; top: number; right: number; bottom: number; glyph: number }[] = [];
+  for (const piece of map.pieces) {
+    const range = document.createRange();
+    range.setStart(piece.node, piece.nodeOffset);
+    range.setEnd(piece.node, piece.nodeOffset + piece.end - piece.start);
+    if (typeof range.getClientRects !== 'function') return [];
+    const parent = piece.node.parentElement;
+    let lineHeight = parent ? lineHeights.get(parent) : 0;
+    if (parent && lineHeight === undefined) {
+      // Browsers compute line-height to px, or leave it 'normal' (about the glyph box).
+      const value = window?.getComputedStyle(parent).lineHeight ?? '';
+      lineHeight = value.endsWith('px') ? Number.parseFloat(value) || 0 : 0;
+      lineHeights.set(parent, lineHeight);
+    }
+    for (const box of range.getClientRects()) {
+      if (
+        ![box.x, box.y, box.width, box.height].every(Number.isFinite) ||
+        box.width <= 0 ||
+        box.height <= 0
+      )
+        continue;
+      // An outsized line height inherited from a container never blanks the page around the words.
+      const height = Math.min(Math.max(box.height, lineHeight ?? 0), box.height * 2);
+      const top = box.y + (box.height - height) / 2;
+      if (
+        box.right <= 0 ||
+        top + height <= 0 ||
+        box.left >= frame.viewportWidth ||
+        top >= frame.viewportHeight
+      )
+        continue;
+      boxes.push({
+        left: box.left,
+        top,
+        right: box.right,
+        bottom: top + height,
+        glyph: box.height,
+      });
+    }
+  }
+  boxes.sort((a, b) => a.top - b.top || a.left - b.left);
+  const lines: typeof boxes = [];
+  for (const box of boxes) {
+    const line = lines.find((other) => {
+      const overlap = Math.min(other.bottom, box.bottom) - Math.max(other.top, box.top);
+      const shorter = Math.min(other.bottom - other.top, box.bottom - box.top);
+      const gap = Math.max(other.left, box.left) - Math.min(other.right, box.right);
+      // Same line, and close enough that nothing unselected sits between them.
+      return overlap > shorter / 2 && gap <= shorter;
+    });
+    if (!line) lines.push({ ...box });
+    else {
+      line.left = Math.min(line.left, box.left);
+      line.right = Math.max(line.right, box.right);
+      line.top = Math.min(line.top, box.top);
+      line.bottom = Math.max(line.bottom, box.bottom);
+      line.glyph = Math.max(line.glyph, box.glyph);
+    }
+  }
+  const last = lines.at(-1);
+  return lines.slice(0, 128).map((line) => ({
+    ...frame,
+    x: line.left,
+    y: line.top,
+    width: line.right - line.left + (line === last ? 0 : line.glyph / 4),
+    height: line.bottom - line.top,
+  }));
 }
 
 /** Return one sentence around the actual caret; never expand to the whole page. */
@@ -369,6 +464,11 @@ export function extractCandidate(
 ): ExtractedCandidate | null {
   const pageUrl = publicWebUrl(document.location.href, document.location.href);
   if (!pageUrl || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  // An explicit selection does not depend on where the pointer happens to rest.
+  if (options.preferSelection) {
+    const selected = selectionCandidate(document, point, true, pageUrl);
+    if (selected) return selected;
+  }
   const target = document.elementFromPoint(point.x, point.y);
   if (
     !target ||
@@ -377,7 +477,9 @@ export function extractCandidate(
     target.closest(OMITTED_SELECTOR)
   )
     return null;
-  const selected = selectionCandidate(document, point, options.preferSelection ?? false, pageUrl);
+  const selected = options.preferSelection
+    ? null
+    : selectionCandidate(document, point, false, pageUrl);
   if (selected) return selected;
   const rectangle = targetRectangle(target, document);
   const special = options.special?.(document, target);
@@ -424,4 +526,106 @@ export function extractCandidate(
 
   const block = target.closest(BLOCK_SELECTOR);
   return block ? textCandidate(document, point, block, pageUrl) : null;
+}
+
+/** The current explicit page selection, wherever the pointer is. */
+export function extractSelection(document: Document): ExtractedCandidate | null {
+  const pageUrl = publicWebUrl(document.location.href, document.location.href);
+  return pageUrl ? selectionCandidate(document, { x: 0, y: 0 }, true, pageUrl) : null;
+}
+
+/**
+ * The page itself: its title and link plus a bounded excerpt of visible reading
+ * text. Navigation, forms, editable regions and hidden content are skipped.
+ */
+export function extractPage(document: Document): ExtractedCandidate | null {
+  const pageUrl = publicWebUrl(document.location.href, document.location.href);
+  const body = document.body;
+  if (!pageUrl || !body) return null;
+  const title = cleanText(document.title || pageUrl, 300);
+  const root = document.querySelector(PAGE_ROOT_SELECTOR) ?? body;
+  const skipped =
+    root === body ? `${PAGE_CHROME_SELECTOR},${PAGE_BANNER_SELECTOR}` : PAGE_CHROME_SELECTOR;
+  const paragraphs: string[] = [];
+  let length = 0;
+  for (const block of Array.from(root.querySelectorAll(BLOCK_SELECTOR)).slice(0, MAX_PAGE_BLOCKS)) {
+    if (block.closest(skipped)) continue;
+    const text = cleanText(collectText(document, block)?.text ?? '', MAX_PAGE_EXCERPT);
+    if (text.length < 2) continue;
+    const separator = paragraphs.length ? 2 : 0;
+    const room = MAX_PAGE_EXCERPT - length - separator;
+    if (text.length > room) {
+      const cut = text.slice(0, Math.max(0, room - 1)).replace(/\s+\S*$/u, '');
+      if (cut) paragraphs.push(`${cut}…`);
+      else if (paragraphs.length) paragraphs.push(`${paragraphs.pop()}…`);
+      break;
+    }
+    paragraphs.push(text);
+    length += separator + text.length;
+  }
+  const window = document.defaultView;
+  const width = window?.innerWidth ?? document.documentElement.clientWidth;
+  const height = window?.innerHeight ?? document.documentElement.clientHeight;
+  return {
+    candidate: { kind: 'link', url: pageUrl, title, text: paragraphs.join('\n\n') || title },
+    target: body,
+    rectangle: { x: 0, y: 0, width, height, viewportWidth: width, viewportHeight: height },
+  };
+}
+
+/** The type face, size and colours a grabbed copy (and the hand's scale) borrow from its source. */
+export function readingStyle(
+  element: Element,
+  document: Document,
+): { fontFamily: string; color: string; background: string; fontSize: number } | undefined {
+  const window = document.defaultView;
+  if (!window) return undefined;
+  const style = window.getComputedStyle(element);
+  // A translucent tint (a callout, a hover wash) is mixed over whatever lies
+  // beneath it, so the patches and the paper copy come out solid.
+  const tints: [number, number, number, number][] = [];
+  let background = '';
+  for (
+    let current: Element | null = element;
+    current && !background;
+    current = current.parentElement
+  ) {
+    const value = window.getComputedStyle(current).backgroundColor;
+    const colour = rgba(value);
+    if (!colour) {
+      if (value && value !== 'transparent') background = value;
+    } else if (colour[3] >= 1) background = value;
+    else if (colour[3] > 0) tints.push(colour);
+  }
+  if (tints.length && (!background || rgba(background))) {
+    const [red, green, blue] = tints.reduceRight<[number, number, number]>(
+      (under, [r, g, b, a]) => [
+        r * a + under[0] * (1 - a),
+        g * a + under[1] * (1 - a),
+        b * a + under[2] * (1 - a),
+      ],
+      (rgba(background) ?? [255, 255, 255]).slice(0, 3) as [number, number, number],
+    );
+    background = `rgb(${Math.round(red)}, ${Math.round(green)}, ${Math.round(blue)})`;
+  }
+  const fontSize = Number.parseFloat(style.fontSize);
+  return {
+    fontFamily: style.fontFamily,
+    color: style.color,
+    background: background || 'rgb(255, 255, 255)',
+    fontSize: Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16,
+  };
+}
+
+/** A computed `rgb()`/`rgba()` colour as [r, g, b, alpha]; null for any other form. */
+function rgba(value: string | undefined): [number, number, number, number] | null {
+  const match = /^rgba?\(([^)]*)\)$/u.exec(value?.trim() ?? '');
+  const parts =
+    match?.[1]
+      ?.split(/[\s,/]+/u)
+      .filter(Boolean)
+      .map(Number) ?? [];
+  if (parts.length < 3 || parts.length > 4 || !parts.every(Number.isFinite)) return null;
+  const [red = 0, green = 0, blue = 0, alpha = 1] = parts;
+  return [red, green, blue, alpha];
 }

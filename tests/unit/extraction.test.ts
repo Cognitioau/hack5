@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://example.org/article"}
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractCandidate, publicWebUrl, sentenceAt } from '../../src/adapters/browser/extraction';
+import {
+  extractCandidate,
+  extractPage,
+  extractSelection,
+  publicWebUrl,
+  readingStyle,
+  sentenceAt,
+} from '../../src/adapters/browser/extraction';
 
 const rectangle = new DOMRect(30, 40, 200, 60);
 let target: Element;
@@ -262,6 +269,73 @@ describe('bounded untrusted page extraction', () => {
     expect(capture?.rectangles).toHaveLength(1);
   });
 
+  it('reports where the browser paints a selection, past the trimmed evidence', () => {
+    fixture('<p id="text">Grab these words and more.</p>', '#text');
+    const range = document.createRange();
+    range.setStart(target.firstChild as Node, 0);
+    range.setEnd(target.firstChild as Node, 17);
+    document.getSelection()?.addRange(range);
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      return [new DOMRect(10, 20, this.toString().length * 8, 18)] as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true });
+    expect(capture?.candidate.text).toBe('Grab these words');
+    expect(capture?.rectangles?.[0]?.width).toBe(16 * 8);
+    // The trailing space is still highlighted on the page.
+    expect(capture?.highlight).toEqual([expect.objectContaining({ x: 10, width: 17 * 8 })]);
+  });
+
+  it("grows each highlighted fragment to its own paragraph's line box, one box per line", () => {
+    fixture(
+      '<div id="text"><p style="line-height: 32px">First <b>bold</b> line</p><p style="line-height: 20px">Second para</p></div>',
+      '#text',
+    );
+    const [first, second] = target.querySelectorAll('p');
+    const range = document.createRange();
+    range.setStart(first?.firstChild as Node, 0);
+    range.setEnd(second?.firstChild as Node, 11);
+    document.getSelection()?.addRange(range);
+    // Glyph boxes: 24px tall in the first paragraph, 16px in the second.
+    const glyphs: Record<string, DOMRect> = {
+      'First ': new DOMRect(10, 100, 48, 24),
+      bold: new DOMRect(58, 100, 32, 24),
+      ' line': new DOMRect(90, 100, 40, 24),
+      'Second para': new DOMRect(10, 140, 88, 16),
+    };
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      const own = glyphs[this.toString()];
+      return (own ? [own] : Object.values(glyphs)) as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true });
+    expect(capture?.highlight?.map(({ x, y, width, height }) => ({ x, y, width, height }))).toEqual(
+      [
+        // The first line also covers its line break, which the selection runs on past.
+        { x: 10, y: 96, width: 120 + 24 / 4, height: 32 },
+        { x: 10, y: 138, width: 88, height: 20 },
+      ],
+    );
+  });
+
+  it('highlights only the lines on screen', () => {
+    fixture('<p id="text">Above the fold <b>and inside it</b></p>', '#text');
+    const range = document.createRange();
+    range.setStart(target.firstChild as Node, 0);
+    range.setEnd(target.lastChild?.firstChild as Node, 13);
+    document.getSelection()?.addRange(range);
+    const glyphs: Record<string, DOMRect> = {
+      'Above the fold ': new DOMRect(10, -200, 120, 24),
+      'and inside it': new DOMRect(10, 100, 104, 24),
+    };
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      const own = glyphs[this.toString()];
+      return (own ? [own] : Object.values(glyphs)) as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true });
+    expect(capture?.highlight).toEqual([
+      expect.objectContaining({ x: 10, y: 100, width: 104, height: 24 }),
+    ]);
+  });
+
   it('captures the actual loaded image URL, context and viewport rectangle', () => {
     fixture(
       '<figure><img id="image" src="/fallback.png" alt="A fern"><figcaption>Forest floor</figcaption></figure>',
@@ -295,6 +369,104 @@ describe('bounded untrusted page extraction', () => {
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
     target = document.body;
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+});
+
+describe('explicit selection and whole-page grabs', () => {
+  it('keeps a selection when the pointer rests over a control or the extension', () => {
+    fixture(
+      '<p id="text">Keep this selected sentence.</p><nav><button id="menu">Menu</button></nav>',
+      '#menu',
+    );
+    const paragraph = document.querySelector('#text') as Element;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    document.getSelection()?.addRange(range);
+    expect(
+      extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true })?.candidate.text,
+    ).toBe('Keep this selected sentence.');
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    expect(extractSelection(document)?.candidate).toMatchObject({
+      kind: 'text',
+      url: 'https://example.org/article',
+      text: 'Keep this selected sentence.',
+    });
+  });
+
+  it('returns no selection for a collapsed, editable or control selection', () => {
+    fixture(
+      '<p id="text">Public words</p><div contenteditable="true" id="private">Secret</div>',
+      '#text',
+    );
+    expect(extractSelection(document)).toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector('#private') as Node);
+    document.getSelection()?.addRange(range);
+    expect(extractSelection(document)).toBeNull();
+  });
+
+  it('grabs a page as its link plus a bounded excerpt of visible reading text', () => {
+    fixture(
+      `<header><p>Site banner</p></header><nav><p>Home · About</p></nav>
+       <main><h1>Keep the interesting part</h1><p>First   public paragraph.</p>
+       <p style="display:none">Hidden paragraph</p><form><p>Form label</p><input value="secret"></form>
+       <div contenteditable="true"><p>Draft text</p></div><aside><p>Related links</p></aside>
+       <ul><li>One <p>nested</p></li></ul><footer><p>Copyright</p></footer></main>`,
+      'main',
+    );
+    const page = extractPage(document);
+    expect(page?.candidate).toMatchObject({
+      kind: 'link',
+      url: 'https://example.org/article',
+      title: 'Synthetic public article',
+    });
+    expect(page?.candidate.text).toBe(
+      'Keep the interesting part\n\nFirst public paragraph.\n\nOne\n\nnested',
+    );
+    expect(page?.target).toBe(document.body);
+    expect(page?.rectangle).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it('bounds the page excerpt and falls back to the title for a page without reading text', () => {
+    fixture(`<main>${'<p>Twenty characters!! </p>'.repeat(400)}</main>`, 'main');
+    const text = extractPage(document)?.candidate.text ?? '';
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text.endsWith('…')).toBe(true);
+    fixture('<main><button>Only a control</button></main>', 'main');
+    expect(extractPage(document)?.candidate.text).toBe('Synthetic public article');
+  });
+
+  it('skips banner chrome only when the page has no article or main landmark', () => {
+    fixture('<header><p>Site banner</p></header><p id="body">Body text.</p>', '#body');
+    expect(extractPage(document)?.candidate.text).toBe('Body text.');
+    fixture('<article><header><h1>Article title</h1></header><p>Body.</p></article>', 'article');
+    expect(extractPage(document)?.candidate.text).toBe('Article title\n\nBody.');
+  });
+
+  it('reads the visible reading style from the nearest opaque background', () => {
+    fixture(
+      '<div style="background-color: rgb(20, 22, 28)"><p id="text" style="color: rgb(220, 221, 228); font-family: Georgia">Dark words</p></div>',
+      '#text',
+    );
+    expect(readingStyle(target, document)).toEqual({
+      fontFamily: 'Georgia',
+      color: 'rgb(220, 221, 228)',
+      background: 'rgb(20, 22, 28)',
+      fontSize: 16,
+    });
+  });
+
+  it('mixes a translucent background over what lies beneath it', () => {
+    fixture(
+      '<div style="background-color: rgb(200, 220, 240)"><div style="background-color: rgba(0, 0, 0, 0.05)"><p id="text">Words</p></div></div>',
+      '#text',
+    );
+    expect(readingStyle(target, document)?.background).toBe('rgb(190, 209, 228)');
+    fixture(
+      '<div style="background-color: rgba(0, 0, 0, 0.5)"><p id="text">Words</p></div>',
+      '#text',
+    );
+    expect(readingStyle(target, document)?.background).toBe('rgb(128, 128, 128)');
   });
 });
 
