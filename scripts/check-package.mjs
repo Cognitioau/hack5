@@ -40,8 +40,10 @@ for (const filename of [
   'content.js',
   'options.js',
   'graveyard.js',
+  'popup.js',
   'options.html',
   'graveyard.html',
+  'popup.html',
   'LICENSE',
   'THIRD_PARTY_NOTICES.md',
 ]) {
@@ -71,7 +73,12 @@ assert(
   'Universal activation must remain an explicit runtime choice',
 );
 
-for (const filename of ['options.html', 'graveyard.html', ...(!core ? ['gaze.html'] : [])]) {
+for (const filename of [
+  'options.html',
+  'graveyard.html',
+  'popup.html',
+  ...(!core ? ['gaze.html'] : []),
+]) {
   const html = await readFile(resolve(destination, filename), 'utf8');
   if (filename === 'gaze.html')
     assert(

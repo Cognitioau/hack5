@@ -2,6 +2,7 @@
 // @vitest-environment-options {"url":"https://example.org/article","pretendToBeVisual":true}
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '../../src/core/contracts/index';
+import { grabEndFor } from '../../src/ui/grave';
 import { GRAVE_HANDS } from '../../src/ui/grave-sprite';
 import { HandView } from '../../src/ui/hand';
 
@@ -11,8 +12,6 @@ const actions = {
   capture: vi.fn(),
   cancel: vi.fn(),
   archive: vi.fn(),
-  close: vi.fn(),
-  page: vi.fn(),
 };
 const rectangle = {
   x: 120,
@@ -22,6 +21,9 @@ const rectangle = {
   viewportWidth: 800,
   viewportHeight: 600,
 };
+
+/** Steps of cracks before the first footage frame. */
+const PRE = 5;
 
 interface FakeFrame {
   frame: number;
@@ -46,26 +48,34 @@ function packedHand(count: number): Uint8Array<ArrayBuffer> {
  * its size, and the offscreen canvas that lays each one's hand over its wall.
  */
 function fakeCanvas() {
-  const drawImage = vi.fn();
+  const drawn: Record<string | symbol, unknown> = {};
+  // Each image laid on a canvas: its frame, how it was composited, and when.
+  const layers: { frame: number; mode: string; alpha: number; at: number }[] = [];
+  const drawImage = vi.fn((image: FakeFrame) => {
+    layers.push({
+      frame: image.frame,
+      mode: String(drawn.globalCompositeOperation ?? 'source-over'),
+      alpha: Number(drawn.globalAlpha ?? 1),
+      at: performance.now(),
+    });
+  });
+  drawn.drawImage = drawImage;
   // Every colour stroked, filled or put in a gradient on the effect's canvases.
   const colours: string[] = [];
-  const context = new Proxy<Record<string | symbol, unknown>>(
-    { drawImage },
-    {
-      get: (target, key) => {
-        target[key] ??= vi.fn(() => ({
-          addColorStop: (_offset: number, colour: string) => colours.push(colour),
-        }));
-        return target[key];
-      },
-      set: (target, key, value) => {
-        if ((key === 'strokeStyle' || key === 'fillStyle') && typeof value === 'string')
-          colours.push(value);
-        target[key] = value;
-        return true;
-      },
+  const context = new Proxy<Record<string | symbol, unknown>>(drawn, {
+    get: (target, key) => {
+      target[key] ??= vi.fn(() => ({
+        addColorStop: (_offset: number, colour: string) => colours.push(colour),
+      }));
+      return target[key];
     },
-  );
+    set: (target, key, value) => {
+      if ((key === 'strokeStyle' || key === 'fillStyle') && typeof value === 'string')
+        colours.push(value);
+      target[key] = value;
+      return true;
+    },
+  });
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
     () => context as unknown as CanvasRenderingContext2D,
   );
@@ -105,7 +115,22 @@ function fakeCanvas() {
     }
   }
   Object.defineProperty(window, 'OffscreenCanvas', { configurable: true, value: Layers });
-  return { drawImage, decode, packed, laid, colours };
+  return { drawImage, decode, packed, laid, colours, layers };
+}
+
+/**
+ * The footage as painted: each paint's frame and, when the next frame is mixed
+ * in, that frame and the strengths the two were laid at.
+ */
+function paints(layers: ReturnType<typeof fakeCanvas>['layers']) {
+  const result: { frame: number; alpha: number; at: number; next?: number; mix?: number }[] = [];
+  for (const layer of layers) {
+    const last = result.at(-1);
+    if (layer.mode === 'lighter' && last && last.next === undefined)
+      Object.assign(last, { next: layer.frame, mix: layer.alpha });
+    else result.push({ frame: layer.frame, alpha: layer.alpha, at: layer.at });
+  }
+  return result;
 }
 
 function element<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -136,21 +161,24 @@ afterEach(() => {
 });
 
 describe('target-local hand presentation', () => {
-  it('keeps ordinary cursor movement quiet and secondary controls explicitly expandable', () => {
+  it('keeps the page to the hand and a status line; the toolbar holds page, pause and help', () => {
+    const grab = vi.fn();
+    view.dispose();
+    view = new HandView(document, { ...actions, grab });
     view.move(180, 230);
     expect(element('.effect').hidden).toBe(true);
-    expect(element('.panel').hidden).toBe(true);
     expect(shadow.querySelector('.cursor')).toBeNull();
-    element('.toggle').click();
-    expect(element('.toggle').getAttribute('aria-expanded')).toBe('true');
-    expect(element('.panel').hidden).toBe(false);
-    const savePage = [...shadow.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent === 'Save page',
-    );
-    savePage?.click();
-    expect(actions.page).toHaveBeenCalledOnce();
-    element('.close').click();
-    expect(actions.close).toHaveBeenCalledOnce();
+    // Nothing on the page opens into a menu or card.
+    for (const gone of ['.toggle', '.panel', '.receipt', '.close', '.snippet'])
+      expect(shadow.querySelector(gone)).toBeNull();
+    const labels = [...shadow.querySelectorAll('button')].map((button) => button.textContent);
+    for (const moved of ['Grab selection', 'Save page', 'Settings', 'Pause everywhere'])
+      expect(labels).not.toContain(moved);
+    // The hand ends the bar, so a status growing beside it never moves it.
+    expect(element('.bar').lastElementChild).toBe(element('.grab'));
+    expect(element('.dock').dataset.state).toBe('idle');
+    element('.grab').click();
+    expect(grab).toHaveBeenCalledOnce();
   });
 
   it('renders untrusted snippet copies as text and never alters the source passage', () => {
@@ -170,7 +198,7 @@ describe('target-local hand presentation', () => {
       'Queued locally. Waiting for the vault response.',
     );
     expect(element('.effect').hidden).toBe(false);
-    expect(element('.title').textContent).not.toContain('Saved');
+    expect(element('.status').textContent).not.toContain('Saved');
   });
 
   it('preserves the capture animation after target removal but never hides a newer capture', async () => {
@@ -191,11 +219,11 @@ describe('target-local hand presentation', () => {
     view.setState('error', 'Still local.', 'The vault has not acknowledged this capture.');
     await vi.advanceTimersByTimeAsync(500);
     expect(element('.effect').hidden).toBe(true);
-    expect(element('.title').textContent).toBe('Still local.');
+    expect(element('.status').textContent).toBe('Still local.');
   });
 
   it('loads each hand once per page, plays its frames in order and never repeats a hand', async () => {
-    const { drawImage, decode, packed, laid } = fakeCanvas();
+    const { drawImage, decode, packed, laid, layers } = fakeCanvas();
     const sprite = vi
       .fn<(hand: number) => Promise<Uint8Array<ArrayBuffer> | null>>()
       .mockRejectedValueOnce(new Error('Synthetic interrupted read'))
@@ -214,12 +242,15 @@ describe('target-local hand presentation', () => {
     // The plaster cracks before any footage shows.
     expect(drawImage).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(900);
-    const drawn = drawImage.mock.calls.map(([image]) => (image as unknown as FakeFrame).frame);
+    // The frames on screen play in order; any mixed in is the one after.
+    const shown = paints(layers);
+    const drawn = shown.map(({ frame }) => frame);
     expect(drawn[0]).toBe(0);
     expect(drawn.length).toBeGreaterThan(5);
     expect(drawn.every((frame, index) => index === 0 || frame >= (drawn[index - 1] ?? 0))).toBe(
       true,
     );
+    for (const { frame, next } of shown) if (next !== undefined) expect(next).toBe(frame + 1);
     // Only a handful of frames are ever held decoded at once.
     const open = frames.filter((frame) => !vi.mocked(frame.close).mock.calls.length);
     expect(open.length).toBeGreaterThan(0);
@@ -279,6 +310,92 @@ describe('target-local hand presentation', () => {
     ).toEqual([]);
   });
 
+  it('mixes each footage frame into the next as the display frame’s own time passes', async () => {
+    const { layers } = fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    // A busy page gets to the callback late: the display frame began 10 ms earlier.
+    const late = window.requestAnimationFrame;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) =>
+      late((time) => callback(time - 10)),
+    );
+    view.setTarget(rectangle, 'Words that move on every display frame');
+    await vi.advanceTimersByTimeAsync(0);
+    const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+    if (!hand) throw new Error('No hand was requested');
+    const step = grabEndFor(hand) / (PRE + hand.beats.fist + 1);
+    const started = performance.now();
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    await vi.advanceTimersByTimeAsync(900);
+    const shown = paints(layers);
+    expect(shown.length).toBeGreaterThan(30);
+    // Nearly every display frame mixes the next footage frame in, so the hand
+    // moves on each of them rather than every second or third.
+    expect(shown.filter(({ next }) => next !== undefined).length).toBeGreaterThan(
+      shown.length * 0.9,
+    );
+    for (const { frame, alpha, at, next, mix } of shown) {
+      const pose = (at - 10 - started) / step;
+      expect(frame).toBe(Math.floor(pose) - PRE);
+      if (next === undefined || mix === undefined) continue;
+      // Laid at complementary strengths, set by how far that frame's time has come.
+      expect(mix).toBeCloseTo(pose - Math.floor(pose), 6);
+      expect(alpha + mix).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('decodes the first footage frames while the plaster cracks', async () => {
+    const { decode, layers } = fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'Words the hand is ready for');
+    await vi.advanceTimersByTimeAsync(0);
+    const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+    if (!hand) throw new Error('No hand was requested');
+    const step = grabEndFor(hand) / (PRE + hand.beats.fist + 1);
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    // Still cracking: no footage is on screen, but its first frames are decoding.
+    await vi.advanceTimersByTimeAsync(PRE * step - 40);
+    expect(layers).toHaveLength(0);
+    const asked = decode.mock.calls.map(([blob]) => ((blob as Blob).size - 12) / 2);
+    expect(asked).toContain(0);
+    expect(asked.length).toBeLessThanOrEqual(8);
+    await vi.advanceTimersByTimeAsync(80);
+    expect(paints(layers)[0]?.frame).toBe(0);
+  });
+
+  it('keeps only the frames around a still fist decoded', async () => {
+    fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({ matches: true }),
+    });
+    try {
+      view.dispose();
+      view = new HandView(document, { ...actions, sprite });
+      view.setTarget(rectangle, 'Words for a still grab');
+      await vi.advanceTimersByTimeAsync(0);
+      const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+      if (!hand) throw new Error('No hand was requested');
+      // The grab starts cracking, asking for the first frames, then holds the fist at once.
+      view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+      await vi.advanceTimersByTimeAsync(0);
+      const open = frames.filter((frame) => !vi.mocked(frame.close).mock.calls.length);
+      expect(open.length).toBeGreaterThan(0);
+      expect(open.length).toBeLessThanOrEqual(8);
+      const { fist } = hand.beats;
+      for (const { frame } of open) {
+        expect(frame).toBeGreaterThanOrEqual(fist - 1);
+        expect(frame).toBeLessThanOrEqual(fist + 6);
+      }
+    } finally {
+      Reflect.deleteProperty(window, 'matchMedia');
+    }
+  });
+
   it('covers where the page highlights a selection, not only the trimmed evidence', () => {
     view.setTarget(rectangle, 'Grab these words', [{ x: 10, y: 20, width: 128, height: 18 }], {
       highlight: [{ x: 10, y: 20, width: 136, height: 18 }],
@@ -328,7 +445,6 @@ describe('target-local hand presentation', () => {
   it('keeps undo accessible while collapsed and suppresses it during a different pending capture', () => {
     view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
     view.setUndoAvailable(true);
-    expect(element('.panel').hidden).toBe(true);
     expect(element('.archive').hidden).toBe(false);
     element('.archive').click();
     expect(actions.archive).toHaveBeenCalledOnce();
@@ -345,9 +461,73 @@ describe('target-local hand presentation', () => {
     await vi.advanceTimersByTimeAsync(4_000);
     expect(element('.effect').hidden).toBe(true);
     expect(element('.dock').dataset.state).toBe('saving');
-    expect(element('.title').textContent).toBe('Queued locally.');
+    expect(element('.status').textContent).toBe('Queued locally.');
     expect(element('.detail').textContent).toBe('Waiting for the vault connection.');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('finishes the grab of a capture kept on this device, then buries it and heals the page', async () => {
+    const sprite = vi.fn(async (_hand: number) => null);
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'Kept until the vault is connected.');
+    view.setState('saving', 'Taking hold…', 'Preparing a durable local capture.');
+    const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+    if (!hand) throw new Error('No hand was loaded');
+    const grabEnd = grabEndFor(hand);
+    await vi.advanceTimersByTimeAsync(40);
+    view.setState('error', 'Kept on this device.', 'Connect a vault to bury it in Obsidian.', {
+      kept: true,
+    });
+    // Still reaching for the words just before the fist closes on them.
+    await vi.advanceTimersByTimeAsync(grabEnd - 140);
+    expect(element('.effect').hidden).toBe(false);
+    expect(element('.effect').dataset.phase).toBe('reach');
+    // Kept is taken: the hand pulls the copy under and the page heals, while the
+    // receipt still says the vault has not got it.
+    await vi.advanceTimersByTimeAsync(300);
+    expect(element('.effect').dataset.phase).toBe('bury');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(element('.effect').hidden).toBe(true);
+    expect(element('.dock').dataset.state).toBe('error');
+  });
+
+  it('lets go at once when nothing was kept', async () => {
+    view.setTarget(rectangle, 'Never captured.');
+    view.setState('saving', 'Taking hold…', 'Preparing a durable local capture.');
+    await vi.advanceTimersByTimeAsync(40);
+    view.setState('error', 'The hand slipped.', 'The capture was refused.');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(element('.effect').dataset.phase).toBe('release');
+  });
+
+  it('offers Connect vault beside the hand only when a vault fixes it, then lets the error go quiet', async () => {
+    expect(shadow.querySelector('.connect')).toBeNull();
+    const settings = vi.fn();
+    view.dispose();
+    view = new HandView(document, { ...actions, settings });
+    const connect = element<HTMLButtonElement>('.connect');
+    expect(connect.hidden).toBe(true);
+    view.setState('error', 'Kept on this device.', 'Connect a vault to bury it in Obsidian.', {
+      kept: true,
+      settings: true,
+    });
+    expect(connect.hidden).toBe(false);
+    expect(element('.status').textContent).toBe('Kept on this device.');
+    expect(element('.detail').textContent).toBe('Connect a vault to bury it in Obsidian.');
+    connect.click();
+    expect(settings).toHaveBeenCalledOnce();
+    // Readable for a while, then the hand alone keeps the warning colour.
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(element('.dock').dataset.quiet).toBe('false');
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(element('.dock').dataset.quiet).toBe('true');
+    // Any later state takes the offer away again.
+    view.setState('idle', 'Ready when you are.', 'Select text or click the hand.');
+    expect(connect.hidden).toBe(true);
+    expect(element('.dock').dataset.quiet).toBe('false');
+    view.setState('error', 'The hand slipped.', 'Select some page text first.');
+    expect(connect.hidden).toBe(true);
   });
 
   it('does not grab an old passage again when archiving its completed capture', async () => {
@@ -362,6 +542,9 @@ describe('target-local hand presentation', () => {
   });
 
   it('hides every screenshot overlay and disposes pending animation work and listeners', async () => {
+    const grab = vi.fn();
+    view.dispose();
+    view = new HandView(document, { ...actions, grab });
     view.setTarget(rectangle, 'Synthetic screenshot target');
     view.setTrail([
       { x: 140, y: 210 },
@@ -374,17 +557,17 @@ describe('target-local hand presentation', () => {
     expect(view.host.style.getPropertyPriority('display')).toBe('important');
     view.setHidden(false);
     expect(view.host.style.getPropertyValue('display')).toBe('block');
-    const close = element('.close');
+    const hand = element('.grab');
     view.dispose();
     expect(view.host.isConnected).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
-    close.click();
-    expect(actions.close).not.toHaveBeenCalled();
+    hand.click();
+    expect(grab).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(element('.effect').hidden).toBe(true);
   });
 
-  it('keeps related notes behind the compact indicator and rejects executable links', () => {
+  it('keeps a related note behind its own small toggle and rejects executable links', () => {
     const ghost: SearchResult = {
       capture: {
         schemaVersion: 1,
@@ -410,15 +593,18 @@ describe('target-local hand presentation', () => {
       sourceUrl: 'https://example.org/note',
       mode: 'keyword',
     };
+    expect(element('.ghost-toggle').hidden).toBe(true);
     view.setGhost(ghost);
     expect(element('.ghost').hidden).toBe(true);
-    expect(element('.ghost-indicator').hidden).toBe(false);
-    element('.toggle').click();
+    expect(element('.ghost-toggle').hidden).toBe(false);
+    element('.ghost-toggle').click();
+    expect(element('.ghost-toggle').getAttribute('aria-expanded')).toBe('true');
     expect(element('.ghost').hidden).toBe(false);
     expect(element('.ghost a').textContent).toBe('<b>Source title</b>');
     expect(shadow.querySelector('img')).toBeNull();
     view.setGhost({ ...ghost, sourceUrl: 'javascript:alert(1)' });
     expect(element('.ghost').hidden).toBe(true);
+    expect(element('.ghost-toggle').hidden).toBe(true);
     expect(element('.ghost a').hasAttribute('href')).toBe(false);
   });
 });

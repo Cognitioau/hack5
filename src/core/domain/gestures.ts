@@ -207,11 +207,13 @@ function isClosedOval(points: readonly GesturePoint[], bounds: CircleBounds): bo
   const deviation = Math.sqrt(
     radii.reduce((sum, radius) => sum + (radius - meanRadius) ** 2, 0) / radii.length,
   );
+  // Hand-drawn loops seldom close: most of a turn, traced one way round, will do,
+  // as long as the end comes back toward the start (within a radius or so).
   return (
-    Math.abs(rotation) >= Math.PI * 1.9 &&
+    Math.abs(rotation) >= Math.PI * 1.65 &&
     Math.abs(rotation) / Math.max(travel, 0.001) >= 0.88 &&
     deviation / meanRadius <= 0.26 &&
-    distance(first, last) <= 0.45
+    distance(first, last) <= 1.1
   );
 }
 

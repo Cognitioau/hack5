@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://example.org/article","pretendToBeVisual":true}
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppResponse, ContentMessage, PublicCapture } from '../../src/core/contracts/index';
+import {
+  type AppResponse,
+  type ContentMessage,
+  noVaultMessage,
+  type PublicCapture,
+} from '../../src/core/contracts/index';
 
 type RuntimeListener = (
   message: unknown,
@@ -551,6 +556,61 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(messages('ARCHIVE')).toHaveLength(0);
   });
 
+  it('removes its hand once the extension is reloaded under it', async () => {
+    expect(document.querySelectorAll('[data-zombie-hand-ui]')).toHaveLength(1);
+    (chrome.runtime as { id?: string | undefined }).id = undefined;
+    send.mockImplementation(async () => {
+      throw new Error('Extension context invalidated.');
+    });
+    dispatch('pointerdown');
+    expect(document.querySelectorAll('[data-zombie-hand-ui]')).toHaveLength(0);
+  });
+
+  it('removes its hand when a request finds the extension gone', async () => {
+    send.mockImplementation(async () => {
+      (chrome.runtime as { id?: string | undefined }).id = undefined;
+      throw new Error('Extension context invalidated.');
+    });
+    const hand = shadow?.querySelector<HTMLButtonElement>('.grab');
+    if (!hand) throw new Error('No hand to click');
+    hand.click();
+    await flush();
+    expect(document.querySelectorAll('[data-zombie-hand-ui]')).toHaveLength(0);
+  });
+
+  it('replaces a hand left behind by a copy from before a reload', async () => {
+    (window as Window & { __zombieHandDispose?: () => void }).__zombieHandDispose?.();
+    const stale = document.createElement('div');
+    stale.dataset.zombieHandUi = 'true';
+    document.documentElement.append(stale);
+    vi.resetModules();
+    await import('../../src/bootstrap/content');
+    await flush();
+    const hosts = document.querySelectorAll('[data-zombie-hand-ui]');
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).not.toBe(stale);
+  });
+
+  it('leaves the hand of the other build profile installed alongside', async () => {
+    (window as Window & { __zombieHandDispose?: () => void }).__zombieHandDispose?.();
+    const other = document.createElement('div');
+    other.dataset.zombieHandUi = 'true';
+    other.dataset.zombieHandOwner = 'core';
+    document.documentElement.append(other);
+    vi.resetModules();
+    await import('../../src/bootstrap/content');
+    await flush();
+    const hosts = [...document.querySelectorAll<HTMLElement>('[data-zombie-hand-ui]')];
+    // The mark names the profile, never the extension's id, so pages cannot tell machines apart.
+    const markup = document.documentElement.outerHTML;
+    other.remove();
+    expect(hosts).toHaveLength(2);
+    expect(hosts.map((host) => host.dataset.zombieHandOwner)).toEqual(
+      expect.arrayContaining(['core', 'full']),
+    );
+    expect(markup).not.toContain('test-extension');
+  });
+
   it('disposes listeners and timers on deactivation, and ignores foreign runtime messages', async () => {
     const response = vi.fn();
     runtimeListener?.({ v: 1, type: 'DEACTIVATE' }, { id: 'another-extension' }, response);
@@ -627,11 +687,98 @@ describe('one-click grabs (mocked browser boundary)', () => {
     expect(shadow?.textContent).toContain('The link and its readable text are saved.');
   });
 
-  it('asks for a selection instead of guessing when Grab selection has nothing to take', async () => {
-    control('.button.primary').click();
+  it.each([
+    ['no vault is connected', 'failed', noVaultMessage, true],
+    ['the vault refused the note', 'failed', 'Capture note is too large.', false],
+    ['the vault holds a conflicting change', 'conflict', undefined, false],
+  ] as const)(
+    'lets the hand finish a capture kept when %s, offering settings only where they fix it',
+    async (_, persistence, lastError, offered) => {
+      send.mockImplementation(async (message: ContentMessage) =>
+        message.type === 'CAPTURE'
+          ? {
+              ok: true,
+              capture: {
+                ...record(message.operationId, 'active', persistence),
+                ...(lastError ? { lastError } : {}),
+              },
+            }
+          : handleMessage(message),
+      );
+      selectPassage();
+      control('.grab').click();
+      await flush();
+      expect(control('.dock').dataset.state).toBe('error');
+      // The vault answered before the hand surfaced; it is still reaching for the words.
+      expect(control('.effect').hidden).toBe(false);
+      expect(control('.effect').dataset.phase).toBe('reach');
+      expect(control('.status').textContent).toBe('Kept on this device.');
+      expect(control('.connect').hidden).toBe(!offered);
+      if (!offered) return;
+      expect(control('.detail').textContent).toBe('Connect a vault to bury it in Obsidian.');
+      control('.connect').click();
+      await flush();
+      expect(messages('OPEN_SETTINGS')).toHaveLength(1);
+    },
+  );
+
+  /** A grab asked for from the toolbar popup; returns what the page answered. */
+  async function toolbarGrab(kind: 'selection' | 'page'): Promise<unknown> {
+    const respond = vi.fn();
+    expect(runtimeListener?.({ v: 1, type: 'GRAB', kind }, { id: 'test-extension' }, respond)).toBe(
+      true,
+    );
     await flush();
+    expect(respond).toHaveBeenCalledOnce();
+    return respond.mock.calls[0]?.[0];
+  }
+
+  it('tells the toolbar why nothing was taken, and takes the selection when there is one', async () => {
+    expect(await toolbarGrab('selection')).toEqual({
+      ok: false,
+      error: 'Select some text on the page first, or grab the whole page.',
+    });
     expect(messages('ARM')).toHaveLength(0);
-    expect(shadow?.textContent).toContain('Select some page text first');
+    selectPassage();
+    expect(await toolbarGrab('selection')).toEqual({ ok: true });
+    expect(messages('ARM')[0]).toMatchObject({ candidate: { kind: 'text', text: passage } });
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it('takes the page from the toolbar even with text selected', async () => {
+    selectPassage();
+    expect(await toolbarGrab('page')).toEqual({ ok: true });
+    expect(messages('ARM')[0]).toMatchObject({
+      candidate: { kind: 'link', url: 'https://example.org/article' },
+    });
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it('passes a refusal back to the toolbar, but counts a capture kept on the device as taken', async () => {
+    send.mockImplementation(async (message: ContentMessage) =>
+      message.type === 'ARM'
+        ? { ok: false, error: 'Zombie Hand is paused everywhere' }
+        : handleMessage(message),
+    );
+    selectPassage();
+    expect(await toolbarGrab('selection')).toEqual({
+      ok: false,
+      error: 'Zombie Hand is paused everywhere',
+    });
+    expect(messages('CAPTURE')).toHaveLength(0);
+    send.mockImplementation(async (message: ContentMessage) =>
+      message.type === 'CAPTURE'
+        ? {
+            ok: true,
+            capture: {
+              ...record(message.operationId, 'active', 'failed'),
+              lastError: noVaultMessage,
+            },
+          }
+        : handleMessage(message),
+    );
+    expect(await toolbarGrab('selection')).toEqual({ ok: true });
+    expect(control('.status').textContent).toBe('Kept on this device.');
   });
 
   it('offers a selection chip once a selection settles, never mid-drag or for a grabbed selection', async () => {

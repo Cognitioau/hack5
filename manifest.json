@@ -11,7 +11,8 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Enable or pause Zombie Hand everywhere"
+    "default_title": "Zombie Hand: grab this page or your selection",
+    "default_popup": "popup.html"
   },
   "options_page": "options.html",
   "content_security_policy": {

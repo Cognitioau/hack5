@@ -194,6 +194,7 @@ function harness() {
   const session = storageArea({ vaultKey: fixtureKey });
   const messages = event<Listener>();
   const permissionRemoved = event<(permissions: chrome.permissions.Permissions) => void>();
+  const permissionAdded = event<(permissions: chrome.permissions.Permissions) => void>();
   const tabUpdated =
     event<(tabId: number, change: chrome.tabs.OnUpdatedInfo, value: chrome.tabs.Tab) => void>();
   const tabs = new Map<number, chrome.tabs.Tab>([[101, tab()]]);
@@ -233,7 +234,7 @@ function harness() {
       onStartup: event<() => void>(),
     },
     storage: { local, session },
-    permissions: { contains, onRemoved: permissionRemoved },
+    permissions: { contains, onRemoved: permissionRemoved, onAdded: permissionAdded },
     tabs: {
       get: vi.fn(async (id: number) => structuredClone(tabs.get(id))),
       query: vi.fn(async (query: chrome.tabs.QueryInfo) =>
@@ -241,7 +242,7 @@ function harness() {
           .filter((item) => !query.active || item.active)
           .map((item) => structuredClone(item)),
       ),
-      sendMessage: vi.fn(async () => undefined),
+      sendMessage: vi.fn(async (..._message: unknown[]): Promise<unknown> => undefined),
       onUpdated: tabUpdated,
       onActivated: event<(info: { tabId: number; windowId: number }) => void>(),
       onRemoved: event<(id: number) => void>(),
@@ -251,7 +252,6 @@ function harness() {
       onFocusChanged: event<(windowId: number) => void>(),
     },
     scripting: { executeScript: vi.fn(async () => []) },
-    action: { onClicked: event<(value: chrome.tabs.Tab) => void>() },
     alarms: {
       get: vi.fn(async () => undefined),
       create: vi.fn(async () => undefined),
@@ -296,12 +296,18 @@ function harness() {
     tabs,
     tabUpdated,
     permissionRemoved,
+    permissionAdded,
     network,
     transmitted,
   };
 }
 
 let context: ReturnType<typeof harness>;
+/** The toolbar popup: a trusted extension page, like settings and the graveyard. */
+const popup = (): chrome.runtime.MessageSender => ({
+  id: extensionId,
+  url: context.api.runtime.getURL('popup.html'),
+});
 let store: Store;
 let backgroundStore: Store;
 
@@ -484,7 +490,7 @@ describe('production background capability boundary', () => {
   // Every page message, read from the schema so a new one cannot skip the sender check.
   const pageMessages: Record<string, () => Promise<Record<string, unknown>>> = {
     CONTENT_STATUS: async () => ({ v: 1, type: 'CONTENT_STATUS' }),
-    PAUSE_HAND: async () => ({ v: 1, type: 'PAUSE_HAND' }),
+    OPEN_SETTINGS: async () => ({ v: 1, type: 'OPEN_SETTINGS' }),
     HAND_SPRITE: async () => {
       context.network.mockImplementation(async () => new Response(new Uint8Array([1, 2, 3])));
       return { v: 1, type: 'HAND_SPRITE', hand: 0 };
@@ -549,7 +555,10 @@ describe('production background capability boundary', () => {
 
   it.each([
     { v: 1, type: 'SET_ACTIVATION', enabled: true },
+    { v: 1, type: 'SET_ACTIVATION', enabled: false },
     { v: 1, type: 'BEGIN_ACTIVATION' },
+    { v: 1, type: 'PAUSE_HAND' },
+    { v: 1, type: 'GRAB_ACTIVE_TAB', kind: 'page' },
     { v: 1, type: 'GRANT_MEDIA_ORIGIN', origin: 'https://images.example.org' },
     { v: 1, type: 'REVOKE_MEDIA_ORIGIN', origin: 'https://images.example.org' },
   ])(
@@ -558,6 +567,7 @@ describe('production background capability boundary', () => {
       expect((await context.send(message)).ok).toBe(false);
       expect(context.local.values.handActivation).toBeUndefined();
       expect(context.local.values.mediaOriginGrants).toBeUndefined();
+      expect(context.api.tabs.sendMessage).not.toHaveBeenCalled();
     },
   );
 
@@ -595,9 +605,19 @@ describe('production background capability boundary', () => {
     });
   });
 
-  it('lets a page pause globally, then rejects stale arming and confirmation', async () => {
+  it('opens the settings page for a page, and nothing else', async () => {
+    const before = await store.list();
+    expect((await context.send({ v: 1, type: 'OPEN_SETTINGS' })).ok).toBe(true);
+    expect(context.api.runtime.openOptionsPage).toHaveBeenCalledOnce();
+    expect(context.local.values.handActivation).not.toBe('paused');
+    expect(await store.list()).toEqual(before);
+  });
+
+  it('pauses from the toolbar, then rejects stale arming and confirmation', async () => {
     const token = await arm();
-    expect((await context.send({ v: 1, type: 'PAUSE_HAND' })).ok).toBe(true);
+    expect((await context.send({ v: 1, type: 'SET_ACTIVATION', enabled: false }, popup())).ok).toBe(
+      true,
+    );
     expect(context.local.values.handActivation).toBe('paused');
     expect((await context.send({ v: 1, type: 'ARM', pageUrl, candidate: candidate() })).ok).toBe(
       false,
@@ -611,6 +631,131 @@ describe('production background capability boundary', () => {
       { v: 1, type: 'DEACTIVATE' },
       { frameId: 0 },
     );
+  });
+
+  it('grabs from the toolbar on the active tab, waking it first and passing back its answer', async () => {
+    const replies: unknown[] = [{ ok: true }, { ok: false, error: `<b>${'x'.repeat(400)}</b>` }];
+    context.api.tabs.sendMessage.mockImplementation(async () => replies.shift());
+    expect(
+      await context.send({ v: 1, type: 'GRAB_ACTIVE_TAB', kind: 'selection' }, popup()),
+    ).toEqual({ ok: true });
+    expect(context.api.scripting.executeScript).toHaveBeenCalledWith({
+      target: { tabId: 101, frameIds: [0] },
+      files: ['content.js'],
+    });
+    expect(context.api.tabs.sendMessage).toHaveBeenLastCalledWith(
+      101,
+      { v: 1, type: 'GRAB', kind: 'selection' },
+      { frameId: 0 },
+    );
+    // The page's words come back as bounded plain data for the popup's textContent.
+    const refused = await context.send({ v: 1, type: 'GRAB_ACTIVE_TAB', kind: 'page' }, popup());
+    expect(refused).toEqual({ ok: false, error: `<b>${'x'.repeat(297)}` });
+    // A page with no hand to answer (a browser page, an excluded site) says so.
+    expect(
+      await context.send({ v: 1, type: 'GRAB_ACTIVE_TAB', kind: 'page' }, popup()),
+    ).toMatchObject({ ok: false, error: expect.stringContaining('cannot reach this page') });
+    // Paused means no page is touched at all.
+    await context.send({ v: 1, type: 'SET_ACTIVATION', enabled: false }, popup());
+    context.api.tabs.sendMessage.mockClear();
+    context.api.scripting.executeScript.mockClear();
+    expect(
+      await context.send({ v: 1, type: 'GRAB_ACTIVE_TAB', kind: 'page' }, popup()),
+    ).toMatchObject({ ok: false, error: expect.stringContaining('paused everywhere') });
+    expect(context.api.scripting.executeScript).not.toHaveBeenCalled();
+    expect(context.api.tabs.sendMessage).not.toHaveBeenCalledWith(
+      101,
+      expect.objectContaining({ type: 'GRAB' }),
+      expect.anything(),
+    );
+  });
+
+  it('trusts the popup page by its exact address only', async () => {
+    const lookalike = { id: extensionId, url: `${context.api.runtime.getURL('popup.html')}.evil` };
+    expect(
+      (await context.send({ v: 1, type: 'GRAB_ACTIVE_TAB', kind: 'page' }, lookalike)).ok,
+    ).toBe(false);
+    expect(context.api.tabs.sendMessage).not.toHaveBeenCalled();
+    expect((await context.send({ v: 1, type: 'GET_STATE' }, popup())).ok).toBe(true);
+  });
+
+  it("finishes a toolbar activation on Chrome's grant when the prompt closed the popup", async () => {
+    let granted = false;
+    context.contains.mockImplementation(async () => granted);
+    const started = await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+    if (!started.ok || !started.activationRequest) throw new Error('Missing activation intent');
+    granted = true;
+    context.permissionAdded.listeners[0]?.({ origins: ['<all_urls>'] });
+    await vi.waitFor(() => expect(context.local.values.handActivation).toBe('universal'));
+    // A popup that did survive the prompt finishes the same activation harmlessly.
+    expect(
+      await context.send(
+        { v: 1, type: 'SET_ACTIVATION', enabled: true, requestId: started.activationRequest },
+        popup(),
+      ),
+    ).toMatchObject({ ok: true, activation: 'universal' });
+  });
+
+  it('answers a popup that survived the prompt while the grant is still turning the hand on', async () => {
+    let granted = false;
+    context.contains.mockImplementation(async () => granted);
+    const started = await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+    if (!started.ok || !started.activationRequest) throw new Error('Missing activation intent');
+    granted = true;
+    const writing = context.local.deferWrite('handActivation');
+    context.permissionAdded.listeners[0]?.({ origins: ['<all_urls>'] });
+    await writing.entered;
+    const reply = context.send(
+      { v: 1, type: 'SET_ACTIVATION', enabled: true, requestId: started.activationRequest },
+      popup(),
+    );
+    writing.release();
+    expect(await reply).toMatchObject({ ok: true, activation: 'universal' });
+  });
+
+  it('leaves a paused hand alone when site access was already held and another origin is granted', async () => {
+    await context.send({ v: 1, type: 'SET_ACTIVATION', enabled: false }, popup());
+    // Access already held needs no prompt, so this request can only be finished by its own popup.
+    await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+    context.permissionAdded.listeners[0]?.({ origins: ['https://images.example.org/*'] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(context.local.values.handActivation).toBe('paused');
+  });
+
+  it('ignores a grant that arrives long after the prompt began', async () => {
+    await context.send({ v: 1, type: 'SET_ACTIVATION', enabled: false }, popup());
+    let granted = false;
+    context.contains.mockImplementation(async () => granted);
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(1_000_000);
+      await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+      // Denied, say, then granted much later from chrome://extensions.
+      now.mockReturnValue(1_000_000 + 10 * 60_000);
+      granted = true;
+      context.permissionAdded.listeners[0]?.({ origins: ['<all_urls>'] });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(context.local.values.handActivation).toBe('paused');
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([
+    'no prompt began',
+    'the prompt was superseded by a pause',
+    'the grant was not site access',
+  ] as const)('leaves the hand alone on a grant when %s', async (situation) => {
+    context.contains.mockImplementation(async () => situation !== 'the grant was not site access');
+    if (situation !== 'no prompt began')
+      await context.send({ v: 1, type: 'BEGIN_ACTIVATION' }, popup());
+    if (situation === 'the prompt was superseded by a pause')
+      await context.send({ v: 1, type: 'SET_ACTIVATION', enabled: false }, popup());
+    const before = context.local.values.handActivation;
+    context.permissionAdded.listeners[0]?.({ origins: ['https://images.example.org/*'] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(context.local.values.handActivation).toBe(before);
+    expect(context.local.values.handActivation).not.toBe('universal');
   });
 
   it.each(['pause', 'permission-removal'] as const)(

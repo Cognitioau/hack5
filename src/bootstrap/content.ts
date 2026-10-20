@@ -1,4 +1,10 @@
-import type { AppResponse, ContentMessage, Features, PublicCapture } from '../core/contracts/index';
+import {
+  type AppResponse,
+  type ContentMessage,
+  type Features,
+  noVaultMessage,
+  type PublicCapture,
+} from '../core/contracts/index';
 import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core/domain/gestures';
 import {
   extractCandidate,
@@ -10,11 +16,20 @@ import {
   type ExtractedCandidate,
 } from '../adapters/browser/extraction';
 import { currentVideoSeconds, extractYouTubeCandidate } from '../features/youtube/transcript';
-import { HandView } from '../ui/hand';
+import { HandView, type StateOptions } from '../ui/hand';
 
 type Phase = 'idle' | 'aiming' | 'arming' | 'armed' | 'saving' | 'saved' | 'error';
 type SessionWindow = Window & { __zombieHandDispose?: () => void };
 const sessionWindow = window as SessionWindow;
+
+/** False once the extension is reloaded or removed under this copy of the script. */
+const connected = (): boolean => {
+  try {
+    return Boolean(chrome.runtime?.id);
+  } catch {
+    return false;
+  }
+};
 
 /** Only an explicitly injected content entry installs listeners on a page. */
 function activate(): () => void {
@@ -51,6 +66,8 @@ function activate(): () => void {
   let ghostEpoch = 0;
   let lastGhostAt = Number.NEGATIVE_INFINITY;
   let lastUndo: { captureId: string; until: number } | null = null;
+  /** Why the latest attempt took nothing; null once it was kept or the hand moved on. */
+  let failure: string | null = null;
   const ownedIds = new Set<string>();
   const cancellationRequested = new Set<string>();
   const acknowledgedSaves = new Set<string>();
@@ -60,6 +77,8 @@ function activate(): () => void {
     try {
       return (await chrome.runtime.sendMessage(message)) as AppResponse;
     } catch {
+      // Reloaded or removed: this copy is orphaned, and any new one replaces its hand.
+      if (!connected()) dispose();
       return {
         ok: false,
         error: 'The extension connection was interrupted. Reopen Zombie Hand to reconnect.',
@@ -91,13 +110,19 @@ function activate(): () => void {
     view.setState('idle', 'Ready when you are.', detail);
   };
 
-  const showError = (detail: string): void => {
+  const showError = (detail: string, options: StateOptions = {}): void => {
     phase = 'error';
+    failure = options.kept ? null : detail;
     circle = null;
     trail = [];
     view.setTrail([]);
     view.setTarget(null);
-    view.setState('error', 'Still here. Still yours.', detail);
+    view.setState(
+      'error',
+      options.kept ? 'Kept on this device.' : 'The hand slipped.',
+      detail,
+      options,
+    );
   };
 
   const renderCapture = (capture: PublicCapture): void => {
@@ -177,11 +202,14 @@ function activate(): () => void {
     operationId = null;
     locked = null;
     view.setUndoAvailable(true);
+    const noVault = capture.lastError === noVaultMessage;
     showError(
       capture.persistence === 'conflict'
-        ? 'Kept locally. The vault contains a conflicting change; review it in the graveyard.'
-        : capture.lastError ||
-            'Kept locally, but the vault save failed. Check the connection in the graveyard.',
+        ? 'The vault has a conflicting change; review it in the graveyard.'
+        : noVault
+          ? 'Connect a vault to bury it in Obsidian.'
+          : capture.lastError || 'The vault save failed. Check the connection in the graveyard.',
+      { kept: true, settings: noVault },
     );
   };
 
@@ -483,6 +511,21 @@ function activate(): () => void {
     else await grabPage();
   };
 
+  /** A grab asked for from the toolbar popup, which shows why nothing was taken. */
+  const grabFromToolbar = async (whole: boolean): Promise<AppResponse> => {
+    const selected = whole ? null : extractSelection(document);
+    if (!whole && !selected)
+      return { ok: false, error: 'Select some text on the page first, or grab the whole page.' };
+    if (phase === 'saving' || phase === 'arming')
+      return { ok: false, error: 'The hand is still holding the last grab.' };
+    failure = null;
+    // An armed lasso target is taken as it stands.
+    if (!(await beginManualGrab())) return { ok: true };
+    if (selected) await grabSelected(selected);
+    else await grabPage();
+    return phase === 'error' && failure ? { ok: false, error: failure } : { ok: true };
+  };
+
   const showSelectionChip = (): void => {
     chipTimer = undefined;
     if (disposed) return;
@@ -519,6 +562,14 @@ function activate(): () => void {
     return bytes;
   };
 
+  // A copy injected before the extension was reloaded leaves its hand behind,
+  // cut off from the extension; the page keeps one hand, this one. The other build
+  // profile installed alongside keeps its own (hands from before owners were marked
+  // go too). Hands are marked by profile, never by the extension's id, which for an
+  // unpacked build comes from its folder and would let pages tell machines apart.
+  const owner = __CORE_ONLY__ ? 'core' : 'full';
+  for (const stale of document.querySelectorAll<HTMLElement>('[data-zombie-hand-ui]'))
+    if ((stale.dataset.zombieHandOwner ?? owner) === owner) stale.remove();
   const view = new HandView(document, {
     capture: () => {
       void captureSelection();
@@ -532,15 +583,12 @@ function activate(): () => void {
     archive: () => {
       void archive();
     },
-    page: () => {
-      void beginManualGrab().then((ready) => (ready ? grabPage() : undefined));
-    },
-    close: () => {
-      void request({ v: 1, type: 'PAUSE_HAND' });
-      dispose();
+    settings: () => {
+      void request({ v: 1, type: 'OPEN_SETTINGS' });
     },
     sprite: loadSprite,
   });
+  view.host.dataset.zombieHandOwner = owner;
 
   // A modifier hold owns exactly one lasso. Its release never cancels a
   // completed circle that is already crossing the asynchronous message boundary.
@@ -755,6 +803,9 @@ function activate(): () => void {
         dispose();
         sendResponse({ ok: true });
         return false;
+      case 'GRAB':
+        void grabFromToolbar((message as { kind?: unknown }).kind === 'page').then(sendResponse);
+        return true;
       default:
         return false;
     }
@@ -771,8 +822,8 @@ function activate(): () => void {
 
   function dispose(): void {
     if (disposed) return;
-    if (token && !operationId) void request({ v: 1, type: 'CANCEL', token });
     disposed = true;
+    if (token && !operationId) void request({ v: 1, type: 'CANCEL', token });
     generation += 1;
     ghostEpoch += 1;
     clearArmTimers();
@@ -828,13 +879,18 @@ function activate(): () => void {
   document.addEventListener(
     'visibilitychange',
     () => {
-      if (document.hidden) invalidateTarget();
+      if (!connected()) dispose();
+      else if (document.hidden) invalidateTarget();
     },
     { signal: listeners.signal },
   );
   document.addEventListener(
     'pointerdown',
     (event) => {
+      if (!connected()) {
+        dispose();
+        return;
+      }
       if (!event.isTrusted || view.contains(event)) return;
       pointerHeld = true;
       endInput(true);
@@ -858,6 +914,10 @@ function activate(): () => void {
   document.addEventListener(
     'keydown',
     (event) => {
+      if (!connected()) {
+        dispose();
+        return;
+      }
       if (!event.isTrusted || (view.contains(event) && event.key !== 'Escape')) return;
       if (event.key === 'Escape' && ['aiming', 'arming', 'armed', 'saving'].includes(phase)) {
         event.preventDefault();

@@ -137,9 +137,46 @@ describe('modifier-held circle geometry', () => {
     expect(trace(shake).center).toBeNull();
   });
 
+  // Hand-drawn loops rarely close: they stop short, spiral in or out, wobble or overshoot.
+  const drawn = (
+    radiusAt: (turn: number) => number,
+    turns: number,
+    { samples = 65, duration = 840, jitter = 0 } = {},
+  ): GesturePoint[] =>
+    Array.from({ length: samples }, (_, index) => {
+      const turn = (index / (samples - 1)) * turns;
+      const angle = turn * Math.PI * 2;
+      // A hand wavers a few times round a loop, not from one sample to the next.
+      const radius = 55 * radiusAt(turn) + jitter * Math.sin(turn * Math.PI * 2 * 5);
+      return {
+        x: anchor.x + Math.cos(angle) * radius,
+        y: anchor.y + Math.sin(angle) * radius,
+        at: (index / (samples - 1)) * duration,
+      };
+    });
+  it.each([
+    ['stops a little short of closing', drawn(() => 1, 0.86)],
+    ['spirals inward, ending well inside its start', drawn((turn) => 1 - 0.32 * turn, 1)],
+    ['spirals outward, ending well outside its start', drawn((turn) => 1 + 0.4 * turn, 1)],
+    ['is lopsided, like an egg', drawn((turn) => 1 + 0.32 * Math.cos(turn * Math.PI * 2), 0.92)],
+    ['wobbles as a hand does', drawn(() => 1, 0.9, { jitter: 7 })],
+    ['overshoots its start', drawn((turn) => 1 - 0.15 * turn, 1.2)],
+    [
+      'curls in tightly',
+      drawn(() => 1, 1).map((point, index) => ({
+        ...point,
+        x: anchor.x + (point.x - anchor.x) * (1 - index / 90),
+        y: anchor.y + (point.y - anchor.y) * (1 - index / 90),
+      })),
+    ],
+    ['is quick and sparsely sampled', drawn(() => 1, 0.9, { samples: 22, duration: 330 })],
+  ])('confirms a loop that %s', (_, points) => {
+    expect(trace(points).decisions).toContain('confirm');
+  });
+
   it('rejects incomplete arcs, jitter, huge swipes, flat loops and missing arcs', () => {
     const rejected = [
-      orbit(1, 55, 0.9),
+      orbit(1, 55, 0.7),
       orbit(1, 18),
       orbit(1, 260),
       orbit().map((point) => ({ ...point, y: anchor.y + (point.y - anchor.y) / 4 })),
@@ -148,18 +185,12 @@ describe('modifier-held circle geometry', () => {
     for (const points of rejected) expect(trace(points).decisions).not.toContain('confirm');
   });
 
-  it('rejects reversals and an inward spiral even when the endpoints are near each other', () => {
+  it('rejects a loop traced back and forth', () => {
     const backtracking = orbit().flatMap((point, index) => [
       { ...(orbit()[Math.max(0, index - 5)] ?? point), at: point.at },
       { ...point, at: point.at + 1 },
     ]);
-    const spiral = orbit().map((point, index) => ({
-      ...point,
-      x: anchor.x + (point.x - anchor.x) * (1 - index / 90),
-      y: anchor.y + (point.y - anchor.y) * (1 - index / 90),
-    }));
     expect(trace(backtracking).decisions).not.toContain('confirm');
-    expect(trace(spiral).decisions).not.toContain('confirm');
   });
 
   it('requires an actual tracing duration and does not slide past a timed-out prefix', () => {
