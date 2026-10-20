@@ -292,6 +292,40 @@ describe('grave choreography invariants', () => {
     );
   });
 
+  it('covers the whole line box, where the browser paints the selection', () => {
+    // 21px Georgia at line-height 1.55: 24px glyph boxes in 32.55px lines.
+    const lineHeight = 32.55;
+    const lines = [
+      { x: 80, y: 124, width: 400, height: 24 },
+      { x: 80, y: 124 + lineHeight, width: 300, height: 24 },
+    ];
+    const scene = (height: number) =>
+      graveLayout({
+        kind: 'text',
+        source: { x: 80, y: 124, width: 400, height: 24 + lineHeight },
+        rectangles: lines,
+        viewport: { width: 800, height: 600 },
+        text: 'Two lines',
+        style: {
+          fontFamily: 'Georgia',
+          color: 'rgb(35, 59, 49)',
+          background: 'rgb(243, 239, 229)',
+          fontSize: 21,
+          lineHeight: height,
+        },
+      });
+    for (const [index, line] of lines.entries()) {
+      const patch = scene(lineHeight).patches[index];
+      if (!patch) throw new Error('No patch');
+      const middle = line.y + line.height / 2;
+      expect(patch.y).toBeLessThanOrEqual(middle - lineHeight / 2);
+      expect(patch.y + patch.height).toBeGreaterThanOrEqual(middle + lineHeight / 2);
+      expect(patch.height).toBeLessThanOrEqual(lineHeight + 2);
+      // A container's outsized line height cannot blank the page around the words.
+      expect(scene(400).patches[index]?.height).toBeLessThanOrEqual(line.height * 2 + 2);
+    }
+  });
+
   it('keeps the cracks around the hole and inside their canvas', () => {
     for (const index of hands) {
       const layout = layoutFor('text', index);

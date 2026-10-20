@@ -22,16 +22,20 @@ async function frame(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: resolve(directory, `${name}.png`) });
 }
 
-/** Counts hand-coloured pixels (rotting skin, not page ink, paper, plaster or the selection) in a screenshot region. */
-async function handPixels(
+/**
+ * Counts pixels of one colour in a screenshot region: rotting skin (not page
+ * ink, paper, plaster or the selection), or the page's blue selection highlight.
+ */
+async function pixels(
   fixture: Awaited<ReturnType<typeof launchExtension>>,
   shot: Buffer,
   region: { x: number; y: number; width: number; height: number },
+  colour: 'skin' | 'selection' = 'skin',
 ): Promise<number> {
   const decoder = await fixture.context.newPage();
   try {
     return await decoder.evaluate(
-      async ({ bytes, area }) => {
+      async ({ bytes, area, wanted }) => {
         const bitmap = await createImageBitmap(
           new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
         );
@@ -46,11 +50,13 @@ async function handPixels(
           const luma = 0.3 * r + 0.59 * g + 0.11 * b;
           const chroma = Math.max(r, g, b) - Math.min(r, g, b);
           // Warm grey skin: plaster debris and cracks are near neutral, the selection is blue.
-          if (luma > 25 && luma < 200 && chroma >= 12 && r >= g + 5 && b <= g) count += 1;
+          const skin = luma > 25 && luma < 200 && chroma >= 12 && r >= g + 5 && b <= g;
+          const selection = b - r > 25 && b > 120;
+          if (wanted === 'skin' ? skin : selection) count += 1;
         }
         return count;
       },
-      { bytes: [...shot], area: region },
+      { bytes: [...shot], area: region, wanted: colour },
     );
   } finally {
     await decoder.close();
@@ -71,9 +77,24 @@ test('the rendered hand bursts through a page whose CSP forbids every image', as
     const words = await dragSelect(strict, '#strict');
     const selected = await strict.evaluate(() => {
       const rectangle = getSelection()?.getRangeAt(0).getBoundingClientRect();
-      return rectangle ? { x: rectangle.x + rectangle.width / 2, bottom: rectangle.bottom } : null;
+      return rectangle
+        ? {
+            x: rectangle.x + rectangle.width / 2,
+            left: rectangle.left,
+            top: rectangle.top,
+            width: rectangle.width,
+            bottom: rectangle.bottom,
+          }
+        : null;
     });
     if (!selected) throw new Error('No selection rectangle');
+    // The browser paints the selection over the whole line box, past the glyphs.
+    const line = {
+      x: Math.round(selected.left - 8),
+      y: Math.round(selected.top - 10),
+      width: Math.round(selected.width + 16),
+      height: Math.round(selected.bottom - selected.top + 20),
+    };
     // The grave tears open just below the passage and the hand climbs out over it.
     const region = {
       x: Math.round(selected.x - 90),
@@ -81,15 +102,26 @@ test('the rendered hand bursts through a page whose CSP forbids every image', as
       width: 180,
       height: 200,
     };
-    const quiet = await handPixels(fixture, await strict.screenshot(), region);
+    const before = await strict.screenshot();
+    const quiet = await pixels(fixture, before, region);
+    const highlighted = await pixels(fixture, before, line, 'selection');
     await strict.mouse.click(viewport.width - 35, viewport.height - 35);
+    const clicked = Date.now();
     await strict.waitForTimeout(640);
     const shot = await strict.screenshot();
     await frame(strict, 'grab-strict-csp');
-    const haunted = await handPixels(fixture, shot, region);
+    const haunted = await pixels(fixture, shot, region);
     expect(quiet).toBeLessThan(60);
     // Measured near 12,500 on this fixture; the cracks and debris alone count zero.
     expect(haunted).toBeGreaterThan(3_000);
+    // Once the hand has taken the words, none of the page's own highlight is left
+    // showing around the blank where they were.
+    const shots: Buffer[] = [];
+    while (Date.now() - clicked < 3_000) shots.push(await strict.screenshot({ clip: line }));
+    const whole = { x: 0, y: 0, width: line.width, height: line.height };
+    const left = await Promise.all(shots.map((clip) => pixels(fixture, clip, whole, 'selection')));
+    expect(highlighted).toBeGreaterThan(2_000);
+    expect(Math.min(...left)).toBeLessThan(30);
     await expect
       .poll(async () => (await state(fixture)).map((c) => c.candidate.text))
       .toContain(words);

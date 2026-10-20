@@ -370,7 +370,12 @@ function activate(): () => void {
         ? candidate.candidate.title
         : candidate.candidate.text || candidate.candidate.title,
       candidate.rectangles,
-      { kind: whole, detail: location.hostname, ...(style ? { style } : {}) },
+      {
+        kind: whole,
+        detail: location.hostname,
+        ...(style ? { style } : {}),
+        ...(candidate.highlight ? { highlight: candidate.highlight } : {}),
+      },
     );
     view.setState(
       'arming',

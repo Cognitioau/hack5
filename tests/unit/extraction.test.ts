@@ -269,6 +269,22 @@ describe('bounded untrusted page extraction', () => {
     expect(capture?.rectangles).toHaveLength(1);
   });
 
+  it('reports where the browser paints a selection, past the trimmed evidence', () => {
+    fixture('<p id="text">Grab these words and more.</p>', '#text');
+    const range = document.createRange();
+    range.setStart(target.firstChild as Node, 0);
+    range.setEnd(target.firstChild as Node, 17);
+    document.getSelection()?.addRange(range);
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+      return [new DOMRect(10, 20, this.toString().length * 8, 18)] as unknown as DOMRectList;
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 }, { preferSelection: true });
+    expect(capture?.candidate.text).toBe('Grab these words');
+    expect(capture?.rectangles?.[0]?.width).toBe(16 * 8);
+    // The trailing space is still highlighted on the page.
+    expect(capture?.highlight).toEqual([expect.objectContaining({ x: 10, width: 17 * 8 })]);
+  });
+
   it('captures the actual loaded image URL, context and viewport rectangle', () => {
     fixture(
       '<figure><img id="image" src="/fallback.png" alt="A fern"><figcaption>Forest floor</figcaption></figure>',
@@ -387,6 +403,15 @@ describe('explicit selection and whole-page grabs', () => {
       background: 'rgb(20, 22, 28)',
       fontSize: 16,
     });
+  });
+
+  it('reads a pixel line height and leaves out one it cannot measure', () => {
+    fixture('<p id="text" style="line-height: 30px">Words</p>', '#text');
+    expect(readingStyle(target, document)?.lineHeight).toBe(30);
+    fixture('<p id="text" style="line-height: normal">Words</p>', '#text');
+    expect(readingStyle(target, document)).not.toHaveProperty('lineHeight');
+    fixture('<p id="text" style="line-height: 1.5">Words</p>', '#text');
+    expect(readingStyle(target, document)).not.toHaveProperty('lineHeight');
   });
 });
 

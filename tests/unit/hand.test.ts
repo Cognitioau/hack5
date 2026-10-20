@@ -194,6 +194,14 @@ describe('target-local hand presentation', () => {
     expect(GRAVE_HANDS[second ?? -1]).toBeDefined();
   });
 
+  it('covers where the page highlights a selection, not only the trimmed evidence', () => {
+    view.setTarget(rectangle, 'Grab these words', [{ x: 10, y: 20, width: 128, height: 18 }], {
+      highlight: [{ x: 10, y: 20, width: 136, height: 18 }],
+    });
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    expect(element('.grave-patches div').style.width).toBe(`${136 + 4}px`);
+  });
+
   it('holds the closed fist when the frames arrive after a reduced-motion grab', async () => {
     const { drawImage } = fakeCanvas();
     let deliver: (value: Uint8Array<ArrayBuffer>) => void = () => {};

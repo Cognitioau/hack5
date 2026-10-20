@@ -19,6 +19,8 @@ export interface ExtractedCandidate {
   rectangle: TargetRectangle;
   /** Visible text fragments for an exact highlight; media keeps its original rectangle. */
   rectangles?: TargetRectangle[];
+  /** Where the browser paints a live selection, which can run past the trimmed evidence. */
+  highlight?: TargetRectangle[];
   target: Element;
 }
 
@@ -301,6 +303,7 @@ function selectionCandidate(
   const span = boundedSpan(map.text, 0, map.text.length, MAX_TEXT);
   const selectedRange = mappedRange(document, map, span);
   if (span.text.length < 2 || !selectedRange) return null;
+  const geometry = textGeometry(document, target, selectedRange);
   return {
     candidate: {
       kind: 'text',
@@ -309,7 +312,18 @@ function selectionCandidate(
       text: span.text,
     },
     target,
-    ...textGeometry(document, target, selectedRange),
+    ...geometry,
+    ...(boxes.length
+      ? {
+          highlight: boxes.slice(0, 64).map((box) => ({
+            ...geometry.rectangle,
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -489,7 +503,9 @@ export function extractPage(document: Document): ExtractedCandidate | null {
 export function readingStyle(
   element: Element,
   document: Document,
-): { fontFamily: string; color: string; background: string; fontSize: number } | undefined {
+):
+  | { fontFamily: string; color: string; background: string; fontSize: number; lineHeight?: number }
+  | undefined {
   const window = document.defaultView;
   if (!window) return undefined;
   const style = window.getComputedStyle(element);
@@ -504,10 +520,15 @@ export function readingStyle(
       background = value;
   }
   const fontSize = Number.parseFloat(style.fontSize);
+  // Browsers compute line-height to px, or leave it 'normal' (about the glyph box).
+  const lineHeight = style.lineHeight.endsWith('px')
+    ? Number.parseFloat(style.lineHeight)
+    : Number.NaN;
   return {
     fontFamily: style.fontFamily,
     color: style.color,
     background: background || 'rgb(255, 255, 255)',
     fontSize: Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16,
+    ...(Number.isFinite(lineHeight) && lineHeight > 0 ? { lineHeight } : {}),
   };
 }

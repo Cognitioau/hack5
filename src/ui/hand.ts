@@ -23,6 +23,8 @@ export interface TargetPresentation {
   style?: ScrapStyle;
   /** Page host shown on a page grab's sheet. */
   detail?: string;
+  /** Where the page itself highlights the target (a live selection), hidden once the words are taken. */
+  highlight?: readonly Rectangle[];
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -327,7 +329,10 @@ export class HandView {
       this.effectScene = {
         kind: presentation.kind ?? 'text',
         source: rectangle,
-        rectangles: targetRectangles.slice(0, 64),
+        rectangles: (presentation.highlight?.length
+          ? presentation.highlight
+          : targetRectangles
+        ).slice(0, 64),
         viewport: { width: rectangle.viewportWidth, height: rectangle.viewportHeight },
         text: snippet,
         ...(presentation.detail === undefined ? {} : { detail: presentation.detail }),

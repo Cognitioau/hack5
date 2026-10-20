@@ -27,6 +27,8 @@ export interface ScrapStyle {
   background: string;
   /** Computed size of the reading text, in px; the hand is sized from it. */
   fontSize?: number;
+  /** Computed line height in px, when it is not 'normal'. */
+  lineHeight?: number;
 }
 export interface GraveScene {
   kind: GraveKind;
@@ -287,15 +289,21 @@ export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
   );
 
   const lines = page ? [] : scene.rectangles?.length ? scene.rectangles : [source];
+  // The browser paints a live selection over the whole line box, not just the
+  // glyphs; a patch that stopped at the glyphs would leave it showing as bands.
+  const lineHeight = scene.style?.lineHeight ?? 0;
   const patches = lines
     .slice(0, 64)
     .filter((area) => [area.x, area.y, area.width, area.height].every(Number.isFinite))
-    .map((area) => ({
-      x: area.x - 2,
-      y: area.y - 1,
-      width: area.width + 4,
-      height: area.height + 2,
-    }));
+    .map((area) => {
+      const height = Math.min(Math.max(area.height, lineHeight), area.height * 2) + 2;
+      return {
+        x: area.x - 2,
+        y: area.y + (area.height - height) / 2,
+        width: area.width + 4,
+        height,
+      };
+    });
   const rgb = parseColor(scene.style?.background) ?? [255, 255, 255];
   return {
     kind: scene.kind,
