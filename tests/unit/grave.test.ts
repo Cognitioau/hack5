@@ -18,6 +18,7 @@ import {
   splitFrames,
 } from '../../src/ui/grave';
 import { GRAVE_HANDS } from '../../src/ui/grave-sprite';
+import { PAPER_GRID, paperFacets, type SheetKind } from '../../src/ui/paper';
 
 const viewports = [
   { width: 1280, height: 800 },
@@ -84,9 +85,10 @@ describe('packaged grave hands', () => {
       const header = Buffer.from(frame.subarray(0, 30));
       expect(header.toString('ascii', 0, 4)).toBe('RIFF');
       expect(header.toString('ascii', 8, 16)).toBe('WEBPVP8X');
-      // Every frame carries alpha at the declared size.
+      // Every frame carries alpha: the hand at the declared size, and the wall
+      // behind it beside it.
       expect((header[20] ?? 0) & 0x10).toBe(0x10);
-      expect(1 + header.readUIntLE(24, 3)).toBe(hand.size.width);
+      expect(1 + header.readUIntLE(24, 3)).toBe(2 * hand.size.width);
       expect(1 + header.readUIntLE(27, 3)).toBe(hand.size.height);
     }
     const { slam, take, fist } = hand.beats;
@@ -224,6 +226,8 @@ describe('grave choreography invariants', () => {
       const layout = layoutFor('text', index);
       const { hand } = layout;
       const end = grabEndFor(hand);
+      // A fifth faster than it was filmed: no take keeps the words waiting 1.8 s.
+      expect(end).toBeLessThan(1_800);
       const frames: (number | null)[] = [];
       for (let t = 0; t <= end + 2_000; t += 5)
         frames.push(footageFrame(layout, poseAt(layout, { phase: 'grab', t }).step));
@@ -246,7 +250,7 @@ describe('grave choreography invariants', () => {
     const duration = buryDuration(layout, from);
     // The yank, then the heal.
     expect(duration).toBeGreaterThan(1_000);
-    expect(duration).toBeLessThan(2_400);
+    expect(duration).toBeLessThan(2_000);
     let last = from.step;
     for (let u = 0; u <= duration; u += 10) {
       const pose = poseAt(layout, { phase: 'bury', u, from });
@@ -307,16 +311,97 @@ describe('grave choreography invariants', () => {
 
   it.each(hands)('hands the words to the fingers of hand %i as they close', (index) => {
     const layout = layoutFor('text', index);
-    const { take } = layout.hand.beats;
+    const { take, fist } = layout.hand.beats;
     expect(scrapAt(layout, PRE + take - 1).visible).toBe(false);
-    expect(scrapAt(layout, PRE + take)).toMatchObject({ visible: true, ...layout.word });
+    // The copy starts flat on the words, then is torn free and balled up as
+    // the fingers close.
+    expect(scrapAt(layout, PRE + take)).toMatchObject({
+      visible: true,
+      ...layout.word,
+      crumple: 0,
+      lift: 0,
+    });
     const held = scrapAt(layout, PRE + take + 4);
     const grip = layout.hand.grip[take + 4];
     if (!grip) throw new Error('No grip');
     expect(held.x).toBeCloseTo(onPage(layout, grip).x - 21 * layout.scale, 6);
     expect(held.y).toBeCloseTo(onPage(layout, grip).y, 6);
-    expect(held.sx).toBeLessThan(1);
+    expect(held.lift).toBe(1);
+    expect(held.crumple).toBeGreaterThan(0.5);
+    expect(scrapAt(layout, PRE + fist).crumple).toBeGreaterThan(0.95);
   });
+
+  it.each(['text', 'page'] as const)(
+    'bends the %s copy without tearing it, and balls it up into creases',
+    (kind: SheetKind) => {
+      const [width, height] = kind === 'text' ? [204, 26] : [168, 96];
+      const [columns, rows] = PAPER_GRID[kind];
+      // Flat, every facet lies where it was cut from, so the mesh can take over
+      // from the flat copy without a jump.
+      for (const facet of paperFacets(kind, width, height, { crumple: 0, lift: 0, step: 0 })) {
+        facet.matrix.forEach((value, at) => {
+          expect(value).toBeCloseTo([1, 0, 0, 1, 0, 0][at] ?? 0, 9);
+        });
+        expect(facet.light).toBeCloseTo(1, 9);
+        expect(facet.back).toBe(false);
+      }
+      // Its paper as the viewer sees it, folds and all.
+      const seen = (facets: ReturnType<typeof paperFacets>) =>
+        (facets.reduce((sum, { matrix: [a, b, c, d] }) => sum + Math.abs(a * d - b * c), 0) *
+          width *
+          height) /
+        facets.length;
+      let previous = width * height;
+      for (const crumple of [0.25, 0.5, 0.75, 1]) {
+        const facets = paperFacets(kind, width, height, { crumple, lift: 1, step: 40 });
+        expect(facets).toHaveLength(2 * columns * rows);
+        expect(facets.flatMap(({ matrix }) => matrix).every(Number.isFinite)).toBe(true);
+        // Every facet meeting at a corner of the grid puts it in the same
+        // place: the sheet folds but never splits. Each cell holds its upper
+        // left triangle, then its lower right one.
+        const corners = new Map<string, [number, number][]>();
+        facets.forEach(({ matrix: [a, b, c, d, e, f] }, at) => {
+          const cell = Math.floor(at / 2);
+          const [i, j] = [cell % columns, Math.floor(cell / columns)];
+          const own: [number, number][] =
+            at % 2 === 0
+              ? [
+                  [i, j],
+                  [i + 1, j],
+                  [i, j + 1],
+                ]
+              : [
+                  [i + 1, j + 1],
+                  [i, j + 1],
+                  [i + 1, j],
+                ];
+          for (const [ci, cj] of own) {
+            const [x, y] = [(width * ci) / columns, (height * cj) / rows];
+            const placed = corners.get(`${ci},${cj}`) ?? [];
+            placed.push([a * x + c * y + e, b * x + d * y + f]);
+            corners.set(`${ci},${cj}`, placed);
+          }
+        });
+        expect(corners.size).toBe((columns + 1) * (rows + 1));
+        for (const [[x0, y0] = [0, 0], ...rest] of corners.values())
+          for (const [x, y] of rest) {
+            expect(x).toBeCloseTo(x0, 6);
+            expect(y).toBeCloseTo(y0, 6);
+          }
+        // It shrinks as it balls up.
+        const size = seen(facets);
+        expect(size).toBeLessThan(previous);
+        previous = size;
+      }
+      // Balled up, it is a fraction of the sheet, creased into facets that
+      // face the light at different angles.
+      expect(previous).toBeLessThan(0.3 * width * height);
+      const lights = paperFacets(kind, width, height, { crumple: 1, lift: 1, step: 40 }).map(
+        ({ light }) => light,
+      );
+      expect(Math.max(...lights) - Math.min(...lights)).toBeGreaterThan(0.5);
+    },
+  );
 
   it('peels a page grab off the viewport into a card before the slap', () => {
     for (const index of hands) {

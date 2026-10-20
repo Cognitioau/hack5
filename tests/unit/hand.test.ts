@@ -41,7 +41,10 @@ function packedHand(count: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(parts.flat());
 }
 
-/** 2D contexts that record drawImage, and a decoder that names each frame by its size. */
+/**
+ * 2D contexts that record drawImage, a decoder that names each packed frame by
+ * its size, and the offscreen canvas that lays each one's hand over its wall.
+ */
 function fakeCanvas() {
   const drawImage = vi.fn();
   const context = new Proxy<Record<string | symbol, unknown>>(
@@ -57,13 +60,31 @@ function fakeCanvas() {
     () => context as unknown as CanvasRenderingContext2D,
   );
   frames = [];
+  const packed: FakeFrame[] = [];
   const decode = vi.fn(async (blob: Blob) => {
-    const frame = { frame: (blob.size - 12) / 2, close: vi.fn() };
-    frames.push(frame);
+    const frame = { frame: (blob.size - 12) / 2, close: vi.fn(), width: 2, height: 1 };
+    packed.push(frame);
     return frame as unknown as ImageBitmap;
   });
   Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: decode });
-  return { drawImage, decode };
+  class Layers {
+    private last = -1;
+    getContext() {
+      return {
+        clearRect: vi.fn(),
+        drawImage: (image: FakeFrame) => {
+          this.last = image.frame;
+        },
+      };
+    }
+    transferToImageBitmap() {
+      const frame = { frame: this.last, close: vi.fn() };
+      frames.push(frame);
+      return frame;
+    }
+  }
+  Object.defineProperty(window, 'OffscreenCanvas', { configurable: true, value: Layers });
+  return { drawImage, decode, packed };
 }
 
 function element<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -153,7 +174,7 @@ describe('target-local hand presentation', () => {
   });
 
   it('loads each hand once per page, plays its frames in order and never repeats a hand', async () => {
-    const { drawImage, decode } = fakeCanvas();
+    const { drawImage, decode, packed } = fakeCanvas();
     const sprite = vi
       .fn<(hand: number) => Promise<Uint8Array<ArrayBuffer> | null>>()
       .mockRejectedValueOnce(new Error('Synthetic interrupted read'))
@@ -183,6 +204,9 @@ describe('target-local hand presentation', () => {
     expect(open.length).toBeGreaterThan(0);
     expect(open.length).toBeLessThanOrEqual(8);
     expect(decode.mock.calls.length).toBeGreaterThan(open.length);
+    // Each packed frame is let go as soon as its layers are laid together.
+    expect(packed.length).toBe(decode.mock.calls.length);
+    for (const frame of packed) expect(frame.close).toHaveBeenCalledOnce();
     view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(element('.effect').hidden).toBe(true);

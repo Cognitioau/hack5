@@ -11,11 +11,15 @@
  * (scripts/hand), one of several takes picked per grab, with the heal matted
  * onto each. Its frames arrive as bytes and are decoded a few at a time around
  * the one on screen, so the page's CSP never sees a URL and only a handful of
- * frames are ever held decoded. The cracks, the torn hole, the debris and dust
- * of the break-in and the paper copy are drawn here around it.
+ * frames are ever held decoded. Each frame carries the hand and the wall apart,
+ * and the wall is tinted to the page's own colour under the hand, so a dark
+ * page gets dark plaster rather than a pale glow. The cracks, the torn hole,
+ * the debris and dust of the break-in and the paper copy are drawn here around
+ * it; the copy bends and balls up as a mesh of facets (./paper).
  */
 
 import { GRAVE_FPS, GRAVE_HANDS, type GraveHand } from './grave-sprite';
+import { paperFacets, tornEdge } from './paper';
 
 export type GraveKind = 'text' | 'page';
 export interface GraveRect {
@@ -51,7 +55,9 @@ const PRE = 5;
 const OPEN = 3;
 /** A release rewinds the grab at least twice as fast, and never takes longer than this. */
 const RELEASE_MS = 450;
-const STEP_MS = 1_000 / GRAVE_FPS;
+/** The footage plays this much faster than it was filmed; the debris keeps pace with it. */
+const PLAY = 1.2;
+const STEP_MS = 1_000 / (GRAVE_FPS * PLAY);
 /** The hands were tuned at 260 px across the footage frame over 17 px text. */
 const DISPLAY_PER_FONT_PX = 260 / 17;
 /** Radius in px of the hole's dark core when the debris and dust were tuned; they scale with it. */
@@ -98,6 +104,8 @@ export interface GraveLayout {
   patches: GraveRect[];
   /** The viewport a page grab's sheet peels off. */
   sheet: GraveRect;
+  /** The page's colour, which the wall's plaster, dust and debris take on. */
+  paper: Rgb;
   dark: boolean;
   /** Crack polylines as [x, y, width] points, spreading from the hole. */
   cracks: [number, number, number][][];
@@ -308,6 +316,7 @@ export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
     word,
     patches,
     sheet: { x: 0, y: 0, width, height },
+    paper: rgb,
     dark: (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 < 0.4,
     cracks,
     crackBox,
@@ -367,23 +376,37 @@ export function healAt(layout: GraveLayout, step: number): number {
 
 export interface ScrapPose {
   visible: boolean;
+  /** Centre of the copy on the page. */
   x: number;
   y: number;
   rotation: number;
   sx: number;
   sy: number;
   skew: number;
+  /** 0 flat on the page, 1 balled up in the fist. */
+  crumple: number;
+  /** 0 lying on the page, 1 torn free and lifted toward the viewer. */
+  lift: number;
 }
 
 /**
- * The paper copy: for text it appears where the fingers close on the words and
- * rides in the fist, crumpling; a page's sheet first peels off the viewport
- * into a card for the hand to slap down on.
+ * The paper copy: for text it appears where the fingers close on the words, is
+ * torn free and balled up as the fist shuts, and rides in it; a page's sheet
+ * first peels off the viewport into a card for the hand to slap down on.
  */
 export function scrapAt(layout: GraveLayout, step: number): ScrapPose {
   const { hand, word, scale } = layout;
   const frame = Math.floor(step) - PRE;
-  const resting = { visible: true, ...word, rotation: 0, sx: 1, sy: 1, skew: 0 };
+  const resting = {
+    visible: true,
+    ...word,
+    rotation: 0,
+    sx: 1,
+    sy: 1,
+    skew: 0,
+    crumple: 0,
+    lift: 0,
+  };
   if (frame < hand.beats.take) {
     if (layout.kind === 'text') return { ...resting, visible: false };
     const peel = outCubic(progress(step, 0, PRE + hand.beats.slam));
@@ -399,17 +422,17 @@ export function scrapAt(layout: GraveLayout, step: number): ScrapPose {
   }
   const grip = frame < hand.frames ? hand.grip[frame] : null;
   if (!grip) return { ...resting, visible: false };
-  const k = Math.min(1, (step - PRE - hand.beats.take) / 4);
-  const crumple = 1 - 0.42 * k;
+  const taken = step - PRE - hand.beats.take;
+  const k = Math.min(1, taken / 4);
   return {
-    visible: true,
+    ...resting,
     // A crumpled end of the copy shows past the thumb.
     x: lerp(word.x, layout.place.x + grip.x * scale, k) - 21 * scale * k,
     y: lerp(word.y, layout.place.y + grip.y * scale, k),
     rotation: (layout.kind === 'page' ? -4 : 0) - 14 * k,
-    sx: crumple,
-    sy: crumple * (1 - 0.25 * k),
-    skew: 8 * k,
+    // Torn free at once, then balled up as the fingers close into the fist.
+    lift: Math.min(1, taken / 1.5),
+    crumple: outCubic(progress(taken, 0, hand.beats.fist - hand.beats.take + 0.5)),
   };
 }
 
@@ -424,7 +447,17 @@ function parseColor(value: string | undefined): [number, number, number] | null 
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
+type Rgb = readonly [number, number, number];
 type Decode = (frame: Blob) => Promise<ImageBitmap>;
+
+/** A wall colour, filmed against white, as it shows on this page: multiplied by the page's colour. */
+function onPaper(layout: GraveLayout, red: number, green: number, blue: number): string {
+  return [red, green, blue]
+    .map((channel, index) =>
+      Math.round((clamp(channel, 0, 255) * (layout.paper[index] ?? 255)) / 255),
+    )
+    .join(',');
+}
 
 /** One hand's frames: kept as compressed bytes, decoded only around the frame on screen. */
 class Footage {
@@ -484,7 +517,7 @@ class Footage {
   }
 }
 
-const dustTone = (layout: GraveLayout): string => (layout.dark ? '200,196,186' : '214,208,196');
+const dustTone = (layout: GraveLayout): string => onPaper(layout, 214, 208, 196);
 
 /** A soft puff of plaster dust. */
 function dustCloud(
@@ -512,6 +545,11 @@ export class GraveEffect {
   private readonly sprite: HTMLCanvasElement;
   private readonly fx: HTMLCanvasElement;
   private readonly footage = new Map<number, Footage>();
+  /** Where a packed frame's hand is laid over its tinted wall; reused for every frame. */
+  private layers: OffscreenCanvas | null = null;
+  /** The paper copy cut into facets, once it first bends, and the flat sheet's size. */
+  private facets: HTMLDivElement[] = [];
+  private sheet = { width: 0, height: 0 };
   private layout: GraveLayout | null = null;
   private state: GraveState | null = null;
   private painted: GravePose | null = null;
@@ -556,10 +594,14 @@ export class GraveEffect {
     this.footage.get(index)?.release();
     this.footage.set(
       index,
-      new Footage(frames, this.decode, () => {
-        this.painted = null;
-        if (this.held || this.frame === undefined) this.render();
-      }),
+      new Footage(
+        frames,
+        (frame) => this.decode(frame).then((both) => this.layered(both)),
+        () => {
+          this.painted = null;
+          if (this.held || this.frame === undefined) this.render();
+        },
+      ),
     );
     if (this.layout?.index === index) {
       this.painted = null;
@@ -660,6 +702,42 @@ export class GraveEffect {
     if (this.layout) this.footage.get(this.layout.index)?.release();
   }
 
+  /**
+   * One frame to draw from a packed one: its hand (the left half) over its wall
+   * (the right half), the wall multiplied by the page's colour. Over white that
+   * is the footage itself; over a dark page the plaster, rim and shadow are the
+   * page's own dark, while the hand keeps its colour.
+   */
+  private layered(both: ImageBitmap): ImageBitmap {
+    try {
+      const view = this.document.defaultView;
+      if (!view?.OffscreenCanvas) throw new Error('No offscreen canvas');
+      const width = both.width / 2;
+      const { height } = both;
+      if (this.layers?.width !== width || this.layers.height !== height)
+        this.layers = new view.OffscreenCanvas(width, height);
+      const context = this.layers.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('No 2D context');
+      context.clearRect(0, 0, width, height);
+      context.drawImage(both, width, 0, width, height, 0, 0, width, height);
+      const [red, green, blue] = (this.layout?.paper ?? [255, 255, 255]).map((c) => c / 255);
+      if (red !== 1 || green !== 1 || blue !== 1) {
+        const wall = context.getImageData(0, 0, width, height);
+        const { data } = wall;
+        for (let at = 0; at < data.length; at += 4) {
+          data[at] = (data[at] ?? 0) * (red ?? 1);
+          data[at + 1] = (data[at + 1] ?? 0) * (green ?? 1);
+          data[at + 2] = (data[at + 2] ?? 0) * (blue ?? 1);
+        }
+        context.putImageData(wall, 0, 0);
+      }
+      context.drawImage(both, 0, 0, width, height, 0, 0, width, height);
+      return this.layers.transferToImageBitmap();
+    } finally {
+      both.close();
+    }
+  }
+
   private current(): GraveState | null {
     if (!this.state || this.held) return this.state;
     const elapsed = this.now() - this.startedAt;
@@ -738,6 +816,7 @@ export class GraveEffect {
   private fillScrap(scene: GraveScene): void {
     const slip = this.document.createElement('div');
     slip.className = `slip ${scene.kind}`;
+    slip.style.clipPath = tornEdge(scene.kind);
     const words = this.document.createElement('p');
     words.className = 'grabbed';
     words.textContent = scene.text.slice(0, 220) || 'Source reference';
@@ -749,7 +828,39 @@ export class GraveEffect {
       slip.append(detail);
       for (let line = 0; line < 3; line++) slip.append(this.document.createElement('i'));
     }
-    this.scrap.replaceChildren(slip);
+    const mesh = this.document.createElement('div');
+    mesh.className = 'crumple';
+    mesh.hidden = true;
+    this.facets = [];
+    this.sheet = { width: 0, height: 0 };
+    this.scrap.replaceChildren(slip, mesh);
+  }
+
+  /**
+   * Cuts the flat copy into the facets it crumples into: each a copy of the
+   * sheet clipped to one triangle of it, which a transform then lays onto its
+   * facet. Copies are cloned nodes, so the words stay text.
+   */
+  private cutScrap(kind: GraveKind): void {
+    const [slip, mesh] = [...this.scrap.children] as HTMLElement[];
+    if (!slip || !mesh) return;
+    const width = slip.offsetWidth;
+    const height = slip.offsetHeight;
+    // Without layout (a hidden or detached view) the copy stays flat.
+    if (!width || !height) return;
+    this.sheet = { width, height };
+    this.facets = paperFacets(kind, width, height, { crumple: 0, lift: 0, step: 0 }).map(
+      ({ clip }) => {
+        const facet = this.document.createElement('div');
+        facet.className = 'facet';
+        facet.style.width = `${width}px`;
+        facet.style.height = `${height}px`;
+        facet.style.clipPath = `polygon(${clip.map(([x, y]) => `${x.toFixed(2)}px ${y.toFixed(2)}px`).join(',')})`;
+        facet.append(slip.cloneNode(true));
+        return facet;
+      },
+    );
+    mesh.replaceChildren(...this.facets);
   }
 
   private paint(layout: GraveLayout, pose: GravePose): void {
@@ -851,7 +962,7 @@ export class GraveEffect {
 
   private drawFx(layout: GraveLayout, pose: GravePose): void {
     const { hand, hole, unit } = layout;
-    const burst = (pose.step - PRE + 0.5) / GRAVE_FPS; // seconds since the wall gave way
+    const burst = (pose.step - PRE + 0.5) / GRAVE_FPS; // footage seconds since the wall gave way
     const slap = (pose.step - PRE - hand.beats.slam + 0.5) / GRAVE_FPS;
     const flying = pose.forward && ((burst >= 0 && burst < 0.9) || (slap > 0 && slap < 0.45));
     if (!flying) {
@@ -895,7 +1006,7 @@ export class GraveEffect {
         if (t < 0.25) {
           // A short streak behind it while it is fast.
           const [px, py] = at(Math.max(0, t - 0.03));
-          context.strokeStyle = `rgba(${chunk.tone},${chunk.tone - 4},${chunk.tone - 12},${0.35 * (1 - t / 0.25)})`;
+          context.strokeStyle = `rgba(${onPaper(layout, chunk.tone, chunk.tone - 4, chunk.tone - 12)},${0.35 * (1 - t / 0.25)})`;
           context.lineWidth = chunk.size * grow * 0.9;
           context.lineCap = 'round';
           context.beginPath();
@@ -915,8 +1026,14 @@ export class GraveEffect {
         }
         context.closePath();
         const shade = context.createLinearGradient(-1, -1, 1, 1);
-        shade.addColorStop(0, `rgb(${chunk.tone + 30},${chunk.tone + 27},${chunk.tone + 20})`);
-        shade.addColorStop(1, `rgb(${chunk.tone - 50},${chunk.tone - 54},${chunk.tone - 60})`);
+        shade.addColorStop(
+          0,
+          `rgb(${onPaper(layout, chunk.tone + 30, chunk.tone + 27, chunk.tone + 20)})`,
+        );
+        shade.addColorStop(
+          1,
+          `rgb(${onPaper(layout, chunk.tone - 50, chunk.tone - 54, chunk.tone - 60)})`,
+        );
         context.fillStyle = shade;
         context.fill();
         context.restore();
@@ -952,5 +1069,47 @@ export class GraveEffect {
     const fixed = (value: number) => value.toFixed(2);
     this.scrap.style.transform = `translate(${fixed(scrap.x)}px, ${fixed(scrap.y)}px) rotate(${fixed(scrap.rotation)}deg) scale(${fixed(scrap.sx)}, ${fixed(scrap.sy)}) skewX(${fixed(scrap.skew)}deg) translate(-50%, -50%)`;
     this.scrap.style.opacity = layout.kind === 'page' ? fixed(progress(step, 0, 3)) : '1';
+    // Torn free, it casts a deeper shadow.
+    this.scrap.style.filter = `drop-shadow(0 ${fixed(1 + 3 * scrap.lift)}px ${fixed(2 + 3 * scrap.lift)}px #00000050)`;
+    this.crumple(layout, scrap, step);
+  }
+
+  /** Bends and balls up the copy: the flat sheet, or its facets laid onto the pose. */
+  private crumple(layout: GraveLayout, scrap: ScrapPose, step: number): void {
+    const [slip, mesh] = [...this.scrap.children] as HTMLElement[];
+    if (!slip || !mesh) return;
+    const bent = scrap.crumple > 0.001 || scrap.lift > 0.001;
+    if (bent && !this.facets.length) this.cutScrap(layout.kind);
+    const meshed = bent && this.facets.length > 0;
+    slip.style.visibility = meshed ? 'hidden' : '';
+    mesh.hidden = !meshed;
+    if (!meshed) return;
+    const { width, height } = this.sheet;
+    const facets = paperFacets(layout.kind, width, height, {
+      crumple: scrap.crumple,
+      lift: scrap.lift,
+      step,
+    });
+    const order = facets
+      .map((_, index) => index)
+      .sort((a, b) => (facets[a]?.depth ?? 0) - (facets[b]?.depth ?? 0));
+    const [red, green, blue] = layout.paper;
+    for (const [rank, index] of order.entries()) {
+      const facet = facets[index];
+      const element = this.facets[index];
+      if (!facet || !element) continue;
+      element.style.zIndex = String(rank);
+      element.style.transform = `matrix(${facet.matrix.map((value) => value.toFixed(4)).join(',')})`;
+      // Turned from the light it darkens, toward it it brightens; the soft
+      // daylight fills even a crease turned right away. A back shows the
+      // sheet's blank side.
+      const light = 0.4 + 0.6 * facet.light;
+      const shade = facet.back
+        ? `rgb(${[red, green, blue].map((c) => Math.round(c * (0.7 + 0.25 * Math.min(1, light)))).join(',')})`
+        : light < 1
+          ? `rgba(0,0,0,${((1 - light) * 0.65).toFixed(3)})`
+          : `rgba(255,255,255,${Math.min(0.25, (light - 1) * 0.6).toFixed(3)})`;
+      element.style.setProperty('--shade', shade);
+    }
   }
 }

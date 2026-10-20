@@ -7,7 +7,9 @@ the one that played last.
 - `assets/grave-hand-{0,1,2}.bin`: each take's frames as WebP files packed back
   to back (48, 62 and 50 frames at 24 fps), then the 35 frames of the heal
   matted onto that take. They are 2× the 260 px display size, so they stay
-  sharp on retina screens.
+  sharp on retina screens. Each frame holds two layers side by side: the hand
+  on the left and the wall behind it (rim, hole, plaster, shadow) on the
+  right.
 - `src/ui/grave-sprite.ts`: frame size, hole, beats, the grip point of every
   frame and the heal's frame count. Generated; do not edit.
 - `takes.json`: where each take and the heal came from, which of their frames
@@ -114,17 +116,30 @@ node scripts/hand/publish-hands.mjs .cache/hand-matte/t0 .cache/hand-matte/t1 .c
 npx biome format --write src/ui/grave-sprite.ts
 ```
 
-This needs ffmpeg and cwebp on the path.
+This needs ffmpeg, cwebp and Swift on the path, and macOS 14 or later: the
+takes' matte asks Apple's Vision framework (`lift.swift`) where the hand is.
+The heal needs neither.
 
 ## How the scripts work
 
 - **`matte.py`** divides every frame by a model of the bare wall: a quadratic
   fitted to the clean first frame, rescaled per frame so exposure drift
-  cancels. Skin, the hole and broken plaster become an opaque hand. The wall's
+  cancels. Skin, the hole and broken plaster become opaque. The wall's
   shading becomes black at partial alpha, so the hand's shadow falls on a
   light page and vanishes on a dark one. Edge pixels have the wall's share
   removed, so a dark page shows no pale fringe. It also records the hole, and
   a grip point per frame: the head of whatever stays joined to the hole.
+- **The hand and the wall** are then written as two layers (`h000.png` and
+  `w000.png` onwards), because the page multiplies the wall by its own colour
+  before laying the hand over it: on a dark page the rim, plaster and the
+  marks the fingers leave turn dark instead of glowing cream. Over white the
+  two give back the single layer exactly, so a light page is unchanged.
+  `lift.swift` writes Vision's foreground subject for each frame; the hand is
+  that subject less whatever still matches the empty hole at the start or the
+  end, less pale plaster on the rim. Vision folds broken plaster beside the
+  fist into its subject, so on the rim the hand is also kept to the convex
+  hull of the hole's core and where the arm crosses out of the rim. A heal is
+  all wall.
 - **`edit`** (in `takes.json`) picks source frames. `49-75:2` keeps every
   second frame, which quickens the slow drag; a fractional step such as `:1.5`
   quickens a span by that much. The leading `0` and trailing `120` keep the
@@ -144,7 +159,9 @@ This needs ffmpeg and cwebp on the path.
   `beats.py` prints per-frame motion to find them.
 - **`publish-hands.mjs`** scales every frame to `pack` (0.8125) with
   premultiplied alpha, so the transparent wall's colour never bleeds into the
-  hand's edge. Each take's heal frames follow its own in the pack. It encodes each frame with `cwebp -q 80 -alpha_q 100` and writes
+  hand's edge, and packs each frame's hand and wall side by side. Each take's
+  heal frames follow its own in the pack. It encodes each frame with
+  `cwebp -q 80 -alpha_q 100` and writes
   the packs and `grave-sprite.ts`. After the fist it keeps the previous grip
   wherever the matte jumps to the hole's rim, and it fails if any beat has no
   grip.
