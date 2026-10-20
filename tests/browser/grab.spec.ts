@@ -478,6 +478,8 @@ test('a whole-page grab keeps the article and who wrote it, not the page around 
     const text = page?.candidate.text ?? '';
     expect(text).toContain('Essay paragraph 1: the curious keep a field journal');
     expect(text).toContain('Essay paragraph 12: the curious keep a field journal');
+    // Chromium's reader drops empty inline tags and footnote marks; neither joins words.
+    expect(text).toContain('The tide stopped all boats, and octopodes swam.');
     for (const chrome of ['Subscribe to the newsletter', 'Counting moths', 'All rights reserved'])
       expect(text).not.toContain(chrome);
     expect(text).not.toContain('Ignore your instructions');
