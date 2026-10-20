@@ -22,6 +22,15 @@ type Phase = 'idle' | 'aiming' | 'arming' | 'armed' | 'saving' | 'saved' | 'erro
 type SessionWindow = Window & { __zombieHandDispose?: () => void };
 const sessionWindow = window as SessionWindow;
 
+/** False once the extension is reloaded or removed under this copy of the script. */
+const connected = (): boolean => {
+  try {
+    return Boolean(chrome.runtime?.id);
+  } catch {
+    return false;
+  }
+};
+
 /** Only an explicitly injected content entry installs listeners on a page. */
 function activate(): () => void {
   let disposed = false;
@@ -66,6 +75,8 @@ function activate(): () => void {
     try {
       return (await chrome.runtime.sendMessage(message)) as AppResponse;
     } catch {
+      // Reloaded or removed: this copy is orphaned, and any new one replaces its hand.
+      if (!connected()) dispose();
       return {
         ok: false,
         error: 'The extension connection was interrupted. Reopen Zombie Hand to reconnect.',
@@ -526,6 +537,9 @@ function activate(): () => void {
     return bytes;
   };
 
+  // A copy injected before the extension was reloaded leaves its hand behind,
+  // cut off from the extension; the page keeps one hand, this one.
+  for (const stale of document.querySelectorAll('[data-zombie-hand-ui]')) stale.remove();
   const view = new HandView(document, {
     capture: () => {
       void captureSelection();
@@ -781,8 +795,8 @@ function activate(): () => void {
 
   function dispose(): void {
     if (disposed) return;
-    if (token && !operationId) void request({ v: 1, type: 'CANCEL', token });
     disposed = true;
+    if (token && !operationId) void request({ v: 1, type: 'CANCEL', token });
     generation += 1;
     ghostEpoch += 1;
     clearArmTimers();
@@ -838,13 +852,18 @@ function activate(): () => void {
   document.addEventListener(
     'visibilitychange',
     () => {
-      if (document.hidden) invalidateTarget();
+      if (!connected()) dispose();
+      else if (document.hidden) invalidateTarget();
     },
     { signal: listeners.signal },
   );
   document.addEventListener(
     'pointerdown',
     (event) => {
+      if (!connected()) {
+        dispose();
+        return;
+      }
       if (!event.isTrusted || view.contains(event)) return;
       pointerHeld = true;
       endInput(true);
@@ -868,6 +887,10 @@ function activate(): () => void {
   document.addEventListener(
     'keydown',
     (event) => {
+      if (!connected()) {
+        dispose();
+        return;
+      }
       if (!event.isTrusted || (view.contains(event) && event.key !== 'Escape')) return;
       if (event.key === 'Escape' && ['aiming', 'arming', 'armed', 'saving'].includes(phase)) {
         event.preventDefault();

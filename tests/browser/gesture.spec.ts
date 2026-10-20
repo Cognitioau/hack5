@@ -163,3 +163,50 @@ test('universal activation follows tabs, navigation and restart, respects exclus
     await vault.close();
   }
 });
+
+test('reloading the extension leaves one working hand on a page that was already open', async () => {
+  test.setTimeout(120_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full', true, true);
+  try {
+    await configureVault(fixture, vault, false);
+    const page = await fixture.context.newPage();
+    await page.goto(`${vault.origin}/article`);
+    await fixture.options.bringToFront();
+    await fixture.options.getByRole('button', { name: 'Enable across tabs', exact: true }).click();
+    await expect(fixture.options.locator('#activation-state')).toContainText(
+      'On across your browser',
+    );
+    await page.bringToFront();
+    await expect(page.locator('[data-zombie-hand-ui]')).toHaveCount(1);
+    // As after a rebuild and Reload in chrome://extensions: the page keeps the
+    // old content script, cut off from the extension, and is given a new one.
+    const browser = fixture.context.browser();
+    if (!browser) throw new Error('No browser');
+    const session = await browser.newBrowserCDPSession();
+    const restarted = fixture.context.waitForEvent('serviceworker');
+    try {
+      // What Reload in chrome://extensions does to an unpacked extension.
+      await session.send('Extensions.loadUnpacked', { path: fixture.extension });
+    } finally {
+      await session.detach();
+    }
+    await restarted;
+    const options = await fixture.context.newPage();
+    await options.goto(`chrome-extension://${fixture.id}/options.html`);
+    await page.bringToFront();
+    await captureAt(page, '#dog', 'circle');
+    await expect
+      .poll(async () => {
+        const response = (await options.evaluate(() =>
+          chrome.runtime.sendMessage({ v: 1, type: 'GET_STATE' }),
+        )) as { captures?: { persistence: string }[] };
+        return response.captures?.map((capture) => capture.persistence);
+      })
+      .toEqual(['saved-vault']);
+    await expect(page.locator('[data-zombie-hand-ui]')).toHaveCount(1);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});

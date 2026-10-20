@@ -556,6 +556,39 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(messages('ARCHIVE')).toHaveLength(0);
   });
 
+  it('removes its hand once the extension is reloaded under it', async () => {
+    expect(document.querySelectorAll('[data-zombie-hand-ui]')).toHaveLength(1);
+    (chrome.runtime as { id?: string | undefined }).id = undefined;
+    send.mockImplementation(async () => {
+      throw new Error('Extension context invalidated.');
+    });
+    dispatch('pointerdown');
+    expect(document.querySelectorAll('[data-zombie-hand-ui]')).toHaveLength(0);
+  });
+
+  it('removes its hand when a request finds the extension gone', async () => {
+    send.mockImplementation(async () => {
+      (chrome.runtime as { id?: string | undefined }).id = undefined;
+      throw new Error('Extension context invalidated.');
+    });
+    (shadow?.querySelector('.grab') as HTMLButtonElement).click();
+    await flush();
+    expect(document.querySelectorAll('[data-zombie-hand-ui]')).toHaveLength(0);
+  });
+
+  it('replaces a hand left behind by a copy from before a reload', async () => {
+    (window as Window & { __zombieHandDispose?: () => void }).__zombieHandDispose?.();
+    const stale = document.createElement('div');
+    stale.dataset.zombieHandUi = 'true';
+    document.documentElement.append(stale);
+    vi.resetModules();
+    await import('../../src/bootstrap/content');
+    await flush();
+    const hosts = document.querySelectorAll('[data-zombie-hand-ui]');
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).not.toBe(stale);
+  });
+
   it('disposes listeners and timers on deactivation, and ignores foreign runtime messages', async () => {
     const response = vi.fn();
     runtimeListener?.({ v: 1, type: 'DEACTIVATE' }, { id: 'another-extension' }, response);
