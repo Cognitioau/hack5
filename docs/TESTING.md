@@ -23,7 +23,7 @@ TypeScript is strict. Biome checks formatting/lint. AST checks enforce layer and
 | Vault contracts | Paths, malicious content, preconditions, conflicts, uncertain writes, attachments and recovery | Protocol fixture, not a running plugin |
 | Security | Real background listener authorization and revocation interleavings; message/media policies | Synthetic Chrome and transport APIs |
 | Capture browser | Bundled extension, trusted inputs, crop pixels, storage isolation, fixture captions, semantic retrieval, archive/restart and core | Synthetic sites/vault; scoped test-only pregrants |
-| Grab browser | Trusted drag selection, hand click keeps the selection, collapsed dock does not shift under the pointer, whole-page grab excerpt, selection chip, the footage hand's skin pixels on a page whose CSP forbids every image, and none of the page's selection highlight left around the taken words | Synthetic site/vault; a colour predicate, not a visual judgement |
+| Grab browser | Trusted drag selection, hand click keeps the selection, collapsed dock does not shift under the pointer, whole-page grab excerpt, selection chip, the footage hand's skin pixels on a page whose CSP forbids every image, and none of the page's selection highlight left around the taken words, whether one line, two paragraphs or inside a translucent callout | Synthetic site/vault; a colour predicate, not a visual judgement |
 | Inference browser | Real packaged model/WASM, semantic ordering, normalization, determinism and cold restart | Isolated model host |
 | Gaze browser | Explicit startup, local model, no outgoing requests/persisted samples, actual camera track stop | Chromium fake camera; no human accuracy claim |
 
