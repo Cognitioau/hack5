@@ -688,6 +688,48 @@ describe('one-click grabs (mocked browser boundary)', () => {
   });
 
   it.each([
+    ['reads the article', 'loads', undefined],
+    ['keeps the excerpt when the reader fails', 'throws', 'Fixture heading\n\nReadable body text.'],
+    [
+      'keeps the excerpt when the reader cannot be loaded',
+      'refused',
+      'Fixture heading\n\nReadable body text.',
+    ],
+  ] as const)('a whole-page grab %s', async (_, reader, excerpt) => {
+    document.body.innerHTML =
+      '<nav><p>Menu</p></nav><main><h1>Fixture heading</h1><p>Readable body text.</p></main>';
+    const global = globalThis as { zombieHandReadArticle?: unknown };
+    send.mockImplementation(async (message: ContentMessage) => {
+      if (message.type !== 'READ_PAGE') return handleMessage(message);
+      if (reader === 'refused') return { ok: false, error: 'Not loaded' };
+      global.zombieHandReadArticle = () => {
+        if (reader === 'throws') throw new Error('Reader failed');
+        return { title: 'The article', text: 'The article text.', byline: { author: 'Ada' } };
+      };
+      return { ok: true };
+    });
+    try {
+      control('.grab').click();
+      await flush();
+      expect(messages('READ_PAGE')).toHaveLength(1);
+      expect(messages('ARM')[0]).toMatchObject({
+        candidate: excerpt
+          ? { kind: 'link', wholePage: true, title: 'Public fixture', text: excerpt }
+          : {
+              kind: 'link',
+              wholePage: true,
+              title: 'The article',
+              text: 'The article text.',
+              byline: { author: 'Ada' },
+            },
+      });
+      expect(messages('CAPTURE')).toHaveLength(1);
+    } finally {
+      delete global.zombieHandReadArticle;
+    }
+  });
+
+  it.each([
     ['no vault is connected', 'failed', noVaultMessage, true],
     ['the vault refused the note', 'failed', 'Capture note is too large.', false],
     ['the vault holds a conflicting change', 'conflict', undefined, false],

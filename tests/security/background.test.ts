@@ -491,6 +491,7 @@ describe('production background capability boundary', () => {
   const pageMessages: Record<string, () => Promise<Record<string, unknown>>> = {
     CONTENT_STATUS: async () => ({ v: 1, type: 'CONTENT_STATUS' }),
     OPEN_SETTINGS: async () => ({ v: 1, type: 'OPEN_SETTINGS' }),
+    READ_PAGE: async () => ({ v: 1, type: 'READ_PAGE' }),
     HAND_SPRITE: async () => {
       context.network.mockImplementation(async () => new Response(new Uint8Array([1, 2, 3])));
       return { v: 1, type: 'HAND_SPRITE', hand: 0 };
@@ -570,6 +571,22 @@ describe('production background capability boundary', () => {
       expect(context.api.tabs.sendMessage).not.toHaveBeenCalled();
     },
   );
+
+  it('loads the article reader into only the document that asked, and only from the package', async () => {
+    expect(await context.send({ v: 1, type: 'READ_PAGE' })).toEqual({ ok: true });
+    expect(context.api.scripting.executeScript).toHaveBeenCalledTimes(1);
+    expect(context.api.scripting.executeScript).toHaveBeenCalledWith({
+      target: { tabId: context.sender().tab?.id, documentIds: ['document-1'] },
+      files: ['page-reader.js'],
+    });
+    // A page can only ask for the reader, never name a file or another document.
+    for (const message of [
+      { v: 1, type: 'READ_PAGE', files: ['background.js'] },
+      { v: 1, type: 'READ_PAGE', documentId: 'document-2' },
+    ])
+      expect((await context.send(message)).ok, JSON.stringify(message)).toBe(false);
+    expect(context.api.scripting.executeScript).toHaveBeenCalledTimes(1);
+  });
 
   it('hands a page only a packaged hand, read from the extension origin', async () => {
     const bytes = new Uint8Array([82, 73, 70, 70, 0, 255, 128]);

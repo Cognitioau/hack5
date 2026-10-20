@@ -54,6 +54,12 @@ const bundles = await Promise.all([
   }),
   build({
     ...common,
+    entryPoints: ['src/bootstrap/page-reader.ts'],
+    outfile: resolve(destination, 'page-reader.js'),
+    format: 'iife',
+  }),
+  build({
+    ...common,
     entryPoints: ['src/bootstrap/options.ts'],
     outfile: resolve(destination, 'options.js'),
     format: 'esm',
@@ -138,21 +144,50 @@ if (!core) {
   }
 }
 await mkdir(resolve(destination, 'licenses'), { recursive: true });
-for (const [name, file] of [
-  ['transformers-Apache-2.0.txt', 'node_modules/@huggingface/transformers/LICENSE'],
-  ['huggingface-jinja-MIT.txt', 'node_modules/@huggingface/jinja/LICENSE'],
-  ['huggingface-tokenizers-Apache-2.0.txt', 'node_modules/@huggingface/tokenizers/LICENSE'],
-  ['onnxruntime-MIT.txt', 'licenses/onnxruntime-MIT.txt'],
-  ['onnxruntime-ThirdPartyNotices.txt', 'licenses/onnxruntime-ThirdPartyNotices.txt'],
-  ['zod-MIT.txt', 'node_modules/zod/LICENSE'],
-  ['yaml-ISC.txt', 'node_modules/yaml/LICENSE'],
-])
+// Each license text and the bundled npm packages it covers. Jinja and
+// Tokenizers arrive prebundled inside Transformers.js, not as packages.
+const licenses = [
+  [
+    'transformers-Apache-2.0.txt',
+    'node_modules/@huggingface/transformers/LICENSE',
+    ['@huggingface/transformers'],
+  ],
+  ['huggingface-jinja-MIT.txt', 'node_modules/@huggingface/jinja/LICENSE', []],
+  ['huggingface-tokenizers-Apache-2.0.txt', 'node_modules/@huggingface/tokenizers/LICENSE', []],
+  [
+    'onnxruntime-MIT.txt',
+    'licenses/onnxruntime-MIT.txt',
+    ['onnxruntime-web', 'onnxruntime-common'],
+  ],
+  ['onnxruntime-ThirdPartyNotices.txt', 'licenses/onnxruntime-ThirdPartyNotices.txt', []],
+  ['zod-MIT.txt', 'node_modules/zod/LICENSE', ['zod']],
+  ['yaml-ISC.txt', 'node_modules/yaml/LICENSE', ['yaml']],
+  ['defuddle-MIT.txt', 'node_modules/defuddle/LICENSE', ['defuddle']],
+  ...(core
+    ? []
+    : [
+        [
+          'mediapipe-Apache-2.0.txt',
+          'licenses/mediapipe-Apache-2.0.txt',
+          ['@mediapipe/tasks-vision'],
+        ],
+      ]),
+];
+for (const [name, file] of licenses)
   await cp(resolve(root, file), resolve(destination, 'licenses', name));
-if (!core)
-  await cp(
-    resolve(root, 'licenses/mediapipe-Apache-2.0.txt'),
-    resolve(destination, 'licenses/mediapipe-Apache-2.0.txt'),
-  );
+const licensed = new Set(licenses.flatMap(([, , packages]) => packages));
+const unlicensed = new Set(
+  bundles.flatMap((result) =>
+    Object.values(result.metafile.outputs).flatMap((output) =>
+      Object.entries(output.inputs)
+        .filter(([, value]) => value.bytesInOutput > 0)
+        .map(([name]) => /^node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(name)?.[1])
+        .filter((name) => name && !licensed.has(name)),
+    ),
+  ),
+);
+if (unlicensed.size)
+  throw new Error(`Bundled without a license text in licenses/: ${[...unlicensed].join(', ')}`);
 const meta = { profile: core ? 'core' : 'full', bundles: bundles.map((item) => item.metafile) };
 await mkdir(resolve(root, '.cache'), { recursive: true });
 await writeFile(

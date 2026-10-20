@@ -177,12 +177,12 @@ function attachmentPath(config: NormalizedConfig, id: string, extension: string)
   return `${config.folder}/attachments/${id}.${extension}`;
 }
 
-function sourceLink(url: string): string {
+function sourceLink(url: string, label = 'Open source'): string {
   // Angle brackets keep parentheses in URLs from closing the generated Markdown link.
   const encoded = new URL(url).href.replace(/[<>\s]/g, (character) =>
     encodeURIComponent(character),
   );
-  return `[Open source](<${encoded}>)`;
+  return `[${label}](<${encoded}>)`;
 }
 
 function renderNote(
@@ -190,6 +190,7 @@ function renderNote(
   record: CaptureRecord,
   asset?: AssetDescriptor,
 ): Uint8Array {
+  const { byline, context, passageUrl } = record.candidate;
   const frontmatter = stringifyYaml(
     {
       zombie_hand: marker,
@@ -201,6 +202,12 @@ function renderNote(
       source: record.candidate.url,
       kind: record.candidate.kind,
       preservation: record.preservation,
+      // Version-1 notes stay byte-identical: these keys appear only when captured.
+      ...(byline?.author ? { author: byline.author } : {}),
+      ...(byline?.site ? { site: byline.site } : {}),
+      ...(byline?.published ? { published: byline.published } : {}),
+      ...(record.candidate.wholePage ? { whole_page: true } : {}),
+      ...(record.candidate.truncated ? { truncated: true } : {}),
     },
     { defaultStringType: 'QUOTE_DOUBLE', doubleQuotedAsJSON: true, lineWidth: 0 },
   );
@@ -211,17 +218,28 @@ function renderNote(
     '',
     `# ${escapeMarkdown(record.candidate.title)}`,
     '',
-    sourceLink(record.candidate.url),
-    '',
-    `Preservation: ${record.preservation}.`,
+    passageUrl
+      ? `${sourceLink(record.candidate.url)} · ${sourceLink(passageUrl, 'Open passage')}`
+      : sourceLink(record.candidate.url),
     '',
   ];
+  const credit = [byline?.author && `By ${byline.author}`, byline?.site, byline?.published]
+    .filter(Boolean)
+    .join(' · ');
+  if (credit) lines.push(escapeMarkdown(credit), '');
+  lines.push(`Preservation: ${record.preservation}.`, '');
   if (asset) {
     const path = attachmentPath(config, record.id, asset.extension);
     lines.push(asset.extension === 'pdf' ? `[[${path}|Saved PDF]]` : `![[${path}]]`, '');
   }
+  if (context) {
+    lines.push('## Context', '');
+    if (context.heading) lines.push(`Under the heading “${escapeMarkdown(context.heading)}”.`, '');
+    if (context.paragraph) lines.push(quoteEvidence(context.paragraph), '');
+  }
   if (record.candidate.text)
     lines.push('## Captured evidence', '', quoteEvidence(record.candidate.text), '');
+  if (record.candidate.truncated) lines.push('The evidence stops short of the source.', '');
   const video = record.candidate.video;
   if (video) {
     const moment = `https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(video.seconds)}s`;

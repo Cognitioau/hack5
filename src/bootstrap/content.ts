@@ -6,6 +6,7 @@ import {
   type PublicCapture,
 } from '../core/contracts/index';
 import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core/domain/gestures';
+import type { Article } from '../adapters/browser/article';
 import {
   extractCandidate,
   extractPage,
@@ -470,13 +471,32 @@ function activate(): () => void {
     await arm(candidate, true);
   };
 
+  /** The page's readable article, from the reader the background loads on demand. */
+  const readArticle = async (): Promise<Article | null> => {
+    const reader = () =>
+      (globalThis as { zombieHandReadArticle?: (page: Document) => Article | null })
+        .zombieHandReadArticle;
+    try {
+      if (!reader() && !(await request({ v: 1, type: 'READ_PAGE' })).ok) return null;
+      return reader()?.(document) ?? null;
+    } catch {
+      // The reader improves a page grab but is never required: the excerpt still saves.
+      return null;
+    }
+  };
+
   const grabPage = async (): Promise<void> => {
     const page = extractPage(document);
     if (!page) {
       showError('This page cannot be grabbed. Only public http(s) pages are captured.');
       return;
     }
-    await arm(page, true, 'page');
+    const article = await readArticle();
+    const { truncated: _excerptCut, ...excerpt } = page.candidate;
+    const candidate = article
+      ? { ...excerpt, ...article, wholePage: true as const }
+      : { ...page.candidate, wholePage: true as const };
+    await arm({ ...page, candidate }, true, 'page');
   };
 
   /** Alt+Shift+Z: the selection wherever the pointer is, else what the pointer is on. */

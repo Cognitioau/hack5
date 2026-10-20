@@ -38,6 +38,7 @@ assert(
 for (const filename of [
   'background.js',
   'content.js',
+  'page-reader.js',
   'options.js',
   'graveyard.js',
   'popup.js',

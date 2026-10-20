@@ -46,6 +46,11 @@ const MAX_PAGE_BLOCKS = 400;
 const MAX_TEXT = 12_000;
 const MAX_SOURCE_TEXT = 64_000;
 const MAX_SOURCE_NODES = 2_048;
+const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
+const PARAGRAPH_SELECTOR = 'p,li,blockquote,dd,td,pre,figcaption';
+const MAX_CONTEXT_PARAGRAPH = 1_500;
+const MAX_HEADINGS = 2_000;
+const MAX_LINKED_DATA = 200_000;
 
 interface TextPiece {
   node: Text;
@@ -311,6 +316,7 @@ function selectionCandidate(
       url: pageUrl,
       title: cleanText(document.title || span.text, 300),
       text: span.text,
+      ...passageDetails(document, pageUrl, selectedRange, span.text),
     },
     target,
     ...geometry,
@@ -401,6 +407,154 @@ function selectionHighlight(
   }));
 }
 
+type Byline = NonNullable<CaptureCandidate['byline']>;
+type PassageDetails = Pick<CaptureCandidate, 'context' | 'passageUrl' | 'byline'>;
+
+/**
+ * A link that opens the page scrolled to the passage, as a text fragment: the
+ * whole passage when short, otherwise its first and last four words.
+ */
+export function passageLink(pageUrl: string, evidence: string): string | undefined {
+  const words = evidence.replace(/…$/u, '').split(/\s+/u).filter(Boolean);
+  if (!words.length) return undefined;
+  // Dashes and commas are text-directive syntax, so they are escaped too.
+  const encode = (part: string[]): string =>
+    encodeURIComponent(part.join(' ')).replace(/-/gu, '%2D');
+  const directive =
+    words.length <= 8 ? encode(words) : `${encode(words.slice(0, 4))},${encode(words.slice(-4))}`;
+  const url = new URL(pageUrl);
+  const fragment = url.hash.replace(/:~:.*$/u, '');
+  url.hash = '';
+  const link = `${url.href}${fragment || '#'}:~:text=${directive}`;
+  return link.length <= 4_000 ? link : undefined;
+}
+
+/** The nearest visible heading above a passage, skipping page furniture. */
+function headingBefore(document: Document, node: Node): string | undefined {
+  const headings = Array.from(document.querySelectorAll(HEADING_SELECTOR)).slice(0, MAX_HEADINGS);
+  for (let index = headings.length - 1; index >= 0; index--) {
+    const heading = headings[index];
+    if (!heading || heading.contains(node)) continue;
+    if (!(heading.compareDocumentPosition(node) & node.DOCUMENT_POSITION_FOLLOWING)) continue;
+    if (heading.closest(PAGE_CHROME_SELECTOR) || hiddenByPage(heading, document)) continue;
+    // Self-links such as "#" or "¶" trail many blog and docs headings.
+    const text = cleanText(collectText(document, heading)?.text ?? '', 300).replace(
+      /\s*[#¶§]$/u,
+      '',
+    );
+    if (text) return text;
+  }
+  return undefined;
+}
+
+/** The paragraph a passage sits in, when there is more of it than the passage. */
+function paragraphAround(document: Document, range: Range, evidence: string): string | undefined {
+  const start =
+    range.startContainer.nodeType === 1
+      ? (range.startContainer as Element)
+      : range.startContainer.parentElement;
+  const block = start?.closest(PARAGRAPH_SELECTOR);
+  if (!block || !block.contains(range.endContainer) || block.closest(PAGE_CHROME_SELECTOR))
+    return undefined;
+  const text = cleanText(collectText(document, block)?.text ?? '', MAX_SOURCE_TEXT);
+  if (text.length < evidence.length + 20 || evidence.length > MAX_CONTEXT_PARAGRAPH / 2)
+    return undefined;
+  if (text.length <= MAX_CONTEXT_PARAGRAPH) return text;
+  // A long paragraph keeps a window centred on the passage.
+  const at = Math.max(0, text.indexOf(evidence.slice(0, 60)));
+  const room = MAX_CONTEXT_PARAGRAPH - 2;
+  const from = Math.max(
+    0,
+    Math.min(at - Math.floor((room - evidence.length) / 2), text.length - room),
+  );
+  const window = text.slice(from, from + room);
+  return `${from > 0 ? '…' : ''}${window}${from + window.length < text.length ? '…' : ''}`;
+}
+
+function linkedData(document: Document): Byline {
+  const found: Byline = {};
+  const name = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) return value.map(name).filter(Boolean).slice(0, 3).join(', ');
+    if (value && typeof value === 'object') {
+      const named = (value as { name?: unknown }).name;
+      if (typeof named === 'string') return named;
+    }
+    return '';
+  };
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 4 || !value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 20)) visit(item, depth + 1);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    found.author ||= name(record.author) || undefined;
+    if (typeof record.datePublished === 'string') found.published ||= record.datePublished;
+    found.site ||= name(record.publisher) || undefined;
+    visit(record['@graph'], depth + 1);
+  };
+  for (const script of Array.from(
+    document.querySelectorAll('script[type="application/ld+json"]'),
+  ).slice(0, 8)) {
+    const text = script.textContent ?? '';
+    if (text.length > MAX_LINKED_DATA) continue;
+    try {
+      visit(JSON.parse(text), 0);
+    } catch {
+      // A page's malformed metadata is simply not used.
+    }
+  }
+  return found;
+}
+
+/** Who wrote the page and where, read from its metadata; page text is never executed. */
+export function pageByline(document: Document): Byline | undefined {
+  const meta = (...names: string[]): string => {
+    for (const name of names) {
+      const element = document.querySelector(`meta[name="${name}"],meta[property="${name}"]`);
+      const value = cleanText(element?.getAttribute('content') ?? '', 200);
+      if (value) return value;
+    }
+    return '';
+  };
+  const linked = linkedData(document);
+  const author = [meta('author', 'article:author', 'parsely-author'), linked.author ?? '']
+    .map((value) => cleanText(value, 200))
+    .find((value) => value && !/^https?:/iu.test(value));
+  const site = cleanText(meta('og:site_name', 'application-name') || linked.site || '', 200);
+  const date = Date.parse(
+    meta('article:published_time', 'datePublished', 'date') || linked.published || '',
+  );
+  const published = Number.isFinite(date) ? new Date(date).toISOString().slice(0, 10) : '';
+  const byline: Byline = {
+    ...(author ? { author } : {}),
+    ...(site ? { site } : {}),
+    ...(published ? { published } : {}),
+  };
+  return Object.keys(byline).length ? byline : undefined;
+}
+
+/** What a grabbed passage needs to stand on its own in the vault. */
+function passageDetails(
+  document: Document,
+  pageUrl: string,
+  range: Range,
+  evidence: string,
+): PassageDetails {
+  const heading = headingBefore(document, range.startContainer);
+  const paragraph = paragraphAround(document, range, evidence);
+  const passageUrl = passageLink(pageUrl, evidence);
+  const byline = pageByline(document);
+  return {
+    ...(heading || paragraph
+      ? { context: { ...(heading ? { heading } : {}), ...(paragraph ? { paragraph } : {}) } }
+      : {}),
+    ...(passageUrl ? { passageUrl } : {}),
+    ...(byline ? { byline } : {}),
+  };
+}
+
 /** Return one sentence around the actual caret; never expand to the whole page. */
 export function sentenceAt(text: string, offset: number): string {
   return sentenceSpan(text, offset).text;
@@ -451,6 +605,7 @@ function textCandidate(
       url: pageUrl,
       title: cleanText(document.title || span.text, 300),
       text: span.text,
+      ...passageDetails(document, pageUrl, evidence, span.text),
     },
     target,
     ...textGeometry(document, target, evidence),
@@ -548,6 +703,7 @@ export function extractPage(document: Document): ExtractedCandidate | null {
     root === body ? `${PAGE_CHROME_SELECTOR},${PAGE_BANNER_SELECTOR}` : PAGE_CHROME_SELECTOR;
   const paragraphs: string[] = [];
   let length = 0;
+  let truncated = false;
   for (const block of Array.from(root.querySelectorAll(BLOCK_SELECTOR)).slice(0, MAX_PAGE_BLOCKS)) {
     if (block.closest(skipped)) continue;
     const text = cleanText(collectText(document, block)?.text ?? '', MAX_PAGE_EXCERPT);
@@ -558,6 +714,7 @@ export function extractPage(document: Document): ExtractedCandidate | null {
       const cut = text.slice(0, Math.max(0, room - 1)).replace(/\s+\S*$/u, '');
       if (cut) paragraphs.push(`${cut}…`);
       else if (paragraphs.length) paragraphs.push(`${paragraphs.pop()}…`);
+      truncated = true;
       break;
     }
     paragraphs.push(text);
@@ -566,8 +723,16 @@ export function extractPage(document: Document): ExtractedCandidate | null {
   const window = document.defaultView;
   const width = window?.innerWidth ?? document.documentElement.clientWidth;
   const height = window?.innerHeight ?? document.documentElement.clientHeight;
+  const byline = pageByline(document);
   return {
-    candidate: { kind: 'link', url: pageUrl, title, text: paragraphs.join('\n\n') || title },
+    candidate: {
+      kind: 'link',
+      url: pageUrl,
+      title,
+      text: paragraphs.join('\n\n') || title,
+      ...(byline ? { byline } : {}),
+      ...(truncated ? { truncated: true as const } : {}),
+    },
     target: body,
     rectangle: { x: 0, y: 0, width, height, viewportWidth: width, viewportHeight: height },
   };

@@ -58,9 +58,43 @@ export const candidateSchema = z
       })
       .strict()
       .optional(),
+    /** Where a passage sits on its page: the heading above it and the paragraph around it. */
+    context: z
+      .object({
+        heading: z.string().min(1).max(300).optional(),
+        paragraph: z.string().min(1).max(2000).optional(),
+      })
+      .strict()
+      .optional(),
+    /** The source page scrolled to the passage, as a text fragment link. */
+    passageUrl: safeUrlSchema.optional(),
+    /** Who wrote the page and where, as the page itself declares it. */
+    byline: z
+      .object({
+        author: z.string().min(1).max(200).optional(),
+        site: z.string().min(1).max(200).optional(),
+        published: z.string().min(1).max(40).optional(),
+      })
+      .strict()
+      .optional(),
+    /** A whole-page grab: the page's readable article rather than a passage of it. */
+    wholePage: z.literal(true).optional(),
+    /** The evidence stops short of the source. */
+    truncated: z.literal(true).optional(),
   })
   .strict()
   .superRefine((candidate, context) => {
+    if (candidate.passageUrl) {
+      const page = new URL(candidate.url);
+      const passage = new URL(candidate.passageUrl);
+      page.hash = '';
+      passage.hash = '';
+      if (page.href !== passage.href || !candidate.passageUrl.includes(':~:text='))
+        context.addIssue({
+          code: 'custom',
+          message: 'A passage link must point into its source page',
+        });
+    }
     if ((candidate.kind === 'image') !== !!candidate.image)
       context.addIssue({ code: 'custom', message: 'Image metadata must match capture kind' });
     if ((candidate.kind === 'youtube') !== !!candidate.video)
@@ -236,6 +270,7 @@ export const noVaultMessage =
 export const contentMessageSchema = z.discriminatedUnion('type', [
   z.object({ v: z.literal(1), type: z.literal('CONTENT_STATUS') }).strict(),
   z.object({ v: z.literal(1), type: z.literal('OPEN_SETTINGS') }).strict(),
+  z.object({ v: z.literal(1), type: z.literal('READ_PAGE') }).strict(),
   z
     .object({
       v: z.literal(1),
