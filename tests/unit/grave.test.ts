@@ -12,6 +12,7 @@ import {
   graveLayout,
   healAt,
   pickHand,
+  piecesAt,
   poseAt,
   releaseDuration,
   scrapAt,
@@ -29,6 +30,8 @@ const passage = { x: 400, y: 200, width: 300, height: 30 };
 const hands = GRAVE_HANDS.map((_, index) => index);
 /** Steps of cracks before the first footage frame. */
 const PRE = 5;
+/** Steps the plugged hole's seams take to close, after the last piece is home. */
+const SEAL_STEPS = 8;
 
 function layoutFor(
   kind: GraveKind,
@@ -59,6 +62,16 @@ const onPage = (layout: GraveLayout, point: { x: number; y: number }) => ({
   x: layout.place.x + point.x * layout.scale,
   y: layout.place.y + point.y * layout.scale,
 });
+/** Even-odd ray cast: whether a point lies inside an outline. */
+function inside(outline: readonly [number, number][], x: number, y: number): boolean {
+  let within = false;
+  for (let at = 0, before = outline.length - 1; at < outline.length; before = at++) {
+    const [x0, y0] = outline[at] as [number, number];
+    const [x1, y1] = outline[before] as [number, number];
+    if (y0 > y !== y1 > y && x < ((x1 - x0) * (y - y0)) / (y1 - y0) + x0) within = !within;
+  }
+  return within;
+}
 
 describe('packaged grave hands', () => {
   it.each(hands)('packs hand %i as a run of WebP frames matching its metadata', (index) => {
@@ -237,6 +250,63 @@ describe('grave choreography invariants', () => {
     expect(footageFrame(layout, end.step)).toBe(layout.hand.frames - 1);
     expect(healAt(layout, end.step)).toBe(1);
     expect(scrapAt(layout, end.step).visible).toBe(false);
+  });
+
+  it.each(hands)('plugs hand %i’s crater with plaster pieces that fit together', (index) => {
+    for (const viewport of viewports) {
+      const { hole, pieces } = layoutFor('text', index, viewport);
+      expect(pieces.length).toBeGreaterThanOrEqual(8);
+      // Out to where the crater's broken rim ends, every point lies under exactly one piece.
+      const counts: number[] = [];
+      const pitch = hole.r / 9.37;
+      for (let dx = -1.7 * hole.r; dx <= 1.7 * hole.r; dx += pitch)
+        for (let dy = -1.7 * hole.r; dy <= 1.7 * hole.r; dy += pitch) {
+          if (Math.hypot(dx, dy) > 1.7 * hole.r) continue;
+          const [x, y] = [hole.x + dx + 0.013, hole.y + dy + 0.017];
+          counts.push(pieces.filter((piece) => inside(piece.outline, x, y)).length);
+        }
+      expect(counts.length).toBeGreaterThan(700);
+      expect(counts.filter((count) => count !== 1)).toEqual([]);
+    }
+  });
+
+  it.each(hands)('flies hand %i’s plaster back in from beyond the hole, core last', (index) => {
+    const layout = layoutFor('text', index);
+    const { hand, hole, pieces } = layout;
+    const from = fistPose(layout);
+    const end = poseAt(layout, { phase: 'bury', u: buryDuration(layout, from), from }).step;
+    const gone = PRE + hand.frames - 1; // the hand is back through the hole
+    // Nothing covers the empty hole until the plaster starts back.
+    expect(piecesAt(layout, gone).every((pose) => pose.alpha === 0)).toBe(true);
+    const first = pieces.map(() => null as number | null);
+    const home = pieces.map(() => null as number | null);
+    for (let step = gone; step <= end; step += 0.05)
+      for (const [at, pose] of piecesAt(layout, step).entries()) {
+        if (pose.alpha > 0 && first[at] === null)
+          first[at] = Math.hypot(pose.x - hole.x, pose.y - hole.y);
+        if (pose.alpha > 0 && pose.lift === 0 && home[at] === null) home[at] = step;
+      }
+    // Each piece first shows beyond the crater's rim...
+    for (const distance of first) expect(distance).toBeGreaterThan(1.9 * hole.r);
+    // ...and lands exactly where it fits, the ring before the core that plugs the hole.
+    for (const [at, pose] of piecesAt(layout, end).entries()) {
+      const piece = pieces[at];
+      if (!piece) throw new Error('Missing piece');
+      expect(pose.x).toBeCloseTo(piece.rest.x, 9);
+      expect(pose.y).toBeCloseTo(piece.rest.y, 9);
+      expect(pose.rotation).toBeCloseTo(0, 9);
+      expect(pose.scale).toBeCloseTo(1, 9);
+      expect(pose.squash).toBeCloseTo(1, 9);
+    }
+    const landed = (core: boolean) =>
+      home.filter((_, at) => pieces[at]?.core === core).map((step) => step ?? Infinity);
+    expect(Math.max(...landed(false))).toBeLessThan(Math.min(...landed(true)));
+    // The seams only start to heal once every piece is home.
+    const all = Math.max(...home.map((step) => step ?? Infinity));
+    expect(healAt(layout, all - 0.05)).toBe(0);
+    expect(healAt(layout, end)).toBe(1);
+    // The dust each piece knocks off settles: its clock keeps running after the last lands.
+    for (const pose of piecesAt(layout, end)) expect(pose.landed).toBeGreaterThan(SEAL_STEPS - 1);
   });
 
   it.each(['text', 'page'] as const)(

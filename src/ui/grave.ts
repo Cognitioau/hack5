@@ -46,9 +46,17 @@ export interface GraveScene {
 const PRE = 5;
 /** Steps for the hole to tear open around the punch. */
 const OPEN = 3;
-/** Steps the empty hole stays after the hand has gone, then takes to heal. */
-const HOLD = 6;
-const HEAL = 12;
+/**
+ * Steps the empty hole stays after the hand has gone, the plaster takes to fly
+ * back into it, then the seams and cracks take to close.
+ */
+const HOLD = 3;
+const ASSEMBLE = 14;
+const SEAL = 8;
+/** Share of the assembly each piece of plaster spends in the air. */
+const FLIGHT = 0.45;
+/** Hole radii the crater stays whole to, under where the plaster lands (its rim ends near 1.7). */
+const CRATER = 1.45;
 /** A release rewinds the grab at least twice as fast, and never takes longer than this. */
 const RELEASE_MS = 450;
 const STEP_MS = 1_000 / GRAVE_FPS;
@@ -82,6 +90,43 @@ interface Puff {
   size: number;
   delay: number;
 }
+type Vertex = [number, number];
+/** A piece of plaster that flies back into the hole. */
+export interface Piece {
+  /** Its outline once home, in page px; neighbours share every edge. */
+  outline: Vertex[];
+  /** The outline's centre, which it flies and turns about. */
+  rest: Point;
+  /** One of the pieces in the middle, which plug the hole last. */
+  core: boolean;
+  /** Where it lifts off from, relative to home. */
+  away: Point;
+  /** How far below a straight line its flight dips. */
+  sag: number;
+  spin: number;
+  /** How far it is turned edge-on as it lifts off. */
+  tilt: number;
+  /** How much nearer the viewer it is as it lifts off. */
+  toward: number;
+  /** Share of the assembly that passes before it lifts off. */
+  delay: number;
+  /** Lighter or darker than the page, while it is apart. */
+  shade: number;
+}
+export interface PiecePose {
+  /** Where its centre is. */
+  x: number;
+  y: number;
+  rotation: number;
+  scale: number;
+  /** Width against height as it turns edge-on. */
+  squash: number;
+  /** How far it is from home, 1 at lift-off to 0 once there. */
+  lift: number;
+  alpha: number;
+  /** Steps since it landed, or -1 while it is still on its way. */
+  landed: number;
+}
 export interface GraveLayout {
   kind: GraveKind;
   /** Index into GRAVE_HANDS. */
@@ -106,8 +151,14 @@ export interface GraveLayout {
   unit: number;
   chunks: Chunk[];
   puffs: Puff[];
-  /** The torn edge: a ragged radius profile shared by opening and healing. */
+  /** The torn edge: a ragged radius profile the hole tears open along. */
   rim: number[];
+  /** The page's colour, which the plaster that plugs the hole is painted. */
+  paper: string;
+  /** Plaster that flies back into the hole and fits together over it. */
+  pieces: Piece[];
+  /** Where the plaster flies, in page px. */
+  healBox: GraveRect;
 }
 export interface GravePose {
   /** Footage steps since the cracks began; fractional between frames. */
@@ -163,7 +214,7 @@ export function splitFrames(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuf
 }
 
 const fistStep = (hand: GraveHand): number => PRE + hand.beats.fist;
-const lastStep = (hand: GraveHand): number => PRE + hand.frames - 1 + HOLD + HEAL;
+const lastStep = (hand: GraveHand): number => PRE + hand.frames - 1 + HOLD + ASSEMBLE + SEAL;
 
 /** Milliseconds from the start of a grab until the fist has closed on the words. */
 export function grabEndFor(hand: GraveHand): number {
@@ -286,6 +337,7 @@ export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
       delay: random() * 0.08,
     }),
   );
+  const pieces = plaster(hole, random);
 
   const lines = page ? [] : scene.rectangles?.length ? scene.rectangles : [source];
   const patches = lines
@@ -315,6 +367,152 @@ export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
     chunks,
     puffs,
     rim,
+    paper: scene.style?.background || '#ffffff',
+    pieces,
+    healBox: healBoxFor(pieces, unit, width, height),
+  };
+}
+
+/**
+ * The plaster that plugs the hole: a ring of pieces round a core of three,
+ * each break shared by the pieces either side of it so they fit exactly. The
+ * punch threw them out and down the wall; they come back the same way.
+ */
+function plaster(hole: Point & { r: number }, random: () => number): Piece[] {
+  const spokes = 8;
+  const turn = random() * Math.PI * 2;
+  const angles = Array.from(
+    { length: spokes },
+    (_, at) => turn + ((at + (random() - 0.5) * 0.3) / spokes) * Math.PI * 2,
+  );
+  // The breaks run out at a slant, not straight from the centre.
+  const slants = angles.map((angle) => angle + (random() - 0.5) * 0.4);
+  const wrap = <T>(list: readonly T[], index: number): T => list[index % list.length] as T;
+  const at = (angle: number, radius: number): Vertex => [
+    hole.x + Math.cos(angle) * radius,
+    hole.y + Math.sin(angle) * radius,
+  ];
+  // The core's edge, round the dark hole, and the ring's outer edge past the crater's rim.
+  const inner = angles.map(() => hole.r * (0.78 + random() * 0.4));
+  const outer = angles.map(() => hole.r * (1.84 + random() * 0.14));
+  const corners = (bearings: number[], radii: number[]) =>
+    bearings.map((angle, spoke) => at(angle, wrap(radii, spoke)));
+  const [innerCorners, outerCorners] = [corners(angles, inner), corners(slants, outer)];
+  /** A rough arc from one spoke to the next, its radius easing between theirs. */
+  const arc = (
+    bearings: number[],
+    radii: number[],
+    ends: Vertex[],
+    spoke: number,
+    steps: number,
+    rough: number,
+  ) => {
+    const start = wrap(bearings, spoke);
+    const end = wrap(bearings, spoke + 1) + (spoke + 1 === spokes ? Math.PI * 2 : 0);
+    return Array.from({ length: steps + 1 }, (_, k): Vertex => {
+      if (k === 0) return wrap(ends, spoke);
+      if (k === steps) return wrap(ends, spoke + 1);
+      const radius = lerp(wrap(radii, spoke), wrap(radii, spoke + 1), k / steps);
+      return at(lerp(start, end, k / steps), radius + (random() - 0.5) * 2 * rough * hole.r);
+    });
+  };
+  /** A jagged break from one point to another. */
+  const jag = (from: Vertex, to: Vertex, steps: number) => {
+    const [dx, dy] = [to[0] - from[0], to[1] - from[1]];
+    const length = Math.hypot(dx, dy) || 1;
+    return Array.from({ length: steps + 1 }, (_, k): Vertex => {
+      if (k === 0) return from;
+      if (k === steps) return to;
+      const off = (random() - 0.5) * 0.18 * hole.r;
+      return [
+        from[0] + (dx * k) / steps - (dy / length) * off,
+        from[1] + (dy * k) / steps + (dx / length) * off,
+      ];
+    });
+  };
+  const seams = angles.map((_, spoke) => arc(angles, inner, innerCorners, spoke, 6, 0.07));
+  const rims = angles.map((_, spoke) => arc(slants, outer, outerCorners, spoke, 9, 0.11));
+  const breaks = angles.map((_, spoke) =>
+    jag(wrap(innerCorners, spoke), wrap(outerCorners, spoke), 5),
+  );
+  const outlines = angles.map((_, spoke): Vertex[] => [
+    ...wrap(breaks, spoke),
+    ...wrap(rims, spoke).slice(1),
+    ...[...wrap(breaks, spoke + 1)].reverse().slice(1),
+    ...[...wrap(seams, spoke)].reverse().slice(1, -1),
+  ]);
+  // The core: three pieces meeting a little off the hole's centre.
+  const centre: Vertex = [
+    hole.x + (random() - 0.5) * 0.3 * hole.r,
+    hole.y + (random() - 0.5) * 0.3 * hole.r,
+  ];
+  const splits = [0, 3, 5];
+  const inward = splits.map((spoke) => jag(centre, wrap(innerCorners, spoke), 3));
+  for (const [k, spoke] of splits.entries()) {
+    const outline = [...wrap(inward, k)];
+    for (let along = spoke; along < (splits[k + 1] ?? spokes); along++)
+      outline.push(...wrap(seams, along).slice(1));
+    outline.push(...[...wrap(inward, k + 1)].reverse().slice(1, -1));
+    outlines.push(outline);
+  }
+  return outlines.map((outline, index): Piece => {
+    const rest = {
+      x: outline.reduce((sum, [x]) => sum + x, 0) / outline.length,
+      y: outline.reduce((sum, [, y]) => sum + y, 0) / outline.length,
+    };
+    const core = index >= spokes;
+    const angle = Math.atan2(rest.y - hole.y, rest.x - hole.x);
+    const out = (2.6 + random() * 1.2) * hole.r;
+    return {
+      outline,
+      rest,
+      core,
+      // Out from the hole and a little down the wall, where it fell.
+      away: {
+        x: Math.cos(angle) * out,
+        y: Math.sin(angle) * out + (0.2 + random() * 0.4) * hole.r,
+      },
+      sag: (0.4 + random() * 0.8) * hole.r,
+      spin: (random() < 0.5 ? -1 : 1) * (1.2 + random() * 2.4),
+      tilt: 0.5 + random() * 0.7,
+      toward: 0.25 + random() * 0.45,
+      // The ring lands first; the core plugs the hole last.
+      delay: core ? 0.42 + random() * 0.12 : random() * 0.35,
+      shade: (random() - 0.5) * 0.12,
+    };
+  });
+}
+
+/** Where a piece's centre is, `lift` of the way back from home to where it lifted off. */
+function flightAt(piece: Piece, lift: number): Point {
+  return {
+    x: piece.rest.x + piece.away.x * lift,
+    y: piece.rest.y + piece.away.y * lift + piece.sag * 4 * lift * (1 - lift),
+  };
+}
+
+/** The box the plaster flies through, with room for its shadows and dust, on screen. */
+function healBoxFor(pieces: Piece[], unit: number, width: number, height: number): GraveRect {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const piece of pieces) {
+    const reach = Math.max(
+      ...piece.outline.map(([x, y]) => Math.hypot(x - piece.rest.x, y - piece.rest.y)),
+    );
+    const size = reach * (1 + piece.toward) + 24 * unit;
+    for (let lift = 0; lift <= 1; lift += 0.125) {
+      const { x, y } = flightAt(piece, lift);
+      xs.push(x - size, x + size);
+      ys.push(y - size, y + size);
+    }
+  }
+  const left = clamp(Math.floor(Math.min(...xs)), 0, width - 1);
+  const top = clamp(Math.floor(Math.min(...ys)), 0, height - 1);
+  return {
+    x: left,
+    y: top,
+    width: Math.max(1, clamp(Math.ceil(Math.max(...xs)), 0, width) - left),
+    height: Math.max(1, clamp(Math.ceil(Math.max(...ys)), 0, height) - top),
   };
 }
 
@@ -357,9 +555,34 @@ export function footageFrame(layout: GraveLayout, step: number): number | null {
   return frame < 0 ? null : Math.min(frame, layout.hand.frames - 1);
 }
 
-/** How far the hole has healed over, 0 to 1. */
+/** How far the plaster has flown back into the hole, 0 to 1. */
+function assemblyAt(layout: GraveLayout, step: number): number {
+  return progress(step - PRE - (layout.hand.frames - 1), HOLD, HOLD + ASSEMBLE);
+}
+
+/** How far the plugged hole's seams and cracks have closed into the page, 0 to 1. */
 export function healAt(layout: GraveLayout, step: number): number {
-  return progress(step - PRE - (layout.hand.frames - 1), HOLD, HOLD + HEAL);
+  return progress(step - PRE - (layout.hand.frames - 1), HOLD + ASSEMBLE, HOLD + ASSEMBLE + SEAL);
+}
+
+/** Each piece of plaster on its way back into the hole. */
+export function piecesAt(layout: GraveLayout, step: number): PiecePose[] {
+  const since = step - PRE - (layout.hand.frames - 1) - HOLD; // steps since the plaster started back
+  const assembled = clamp(since / ASSEMBLE, 0, 1);
+  return layout.pieces.map((piece) => {
+    const flown = clamp((assembled - piece.delay) / FLIGHT, 0, 1);
+    // Thrown debris played backwards: slow to lift off, fastest as it slams home.
+    const lift = 1 - flown * flown;
+    return {
+      ...flightAt(piece, lift),
+      rotation: piece.spin * lift,
+      scale: 1 + piece.toward * lift,
+      squash: Math.cos(piece.tilt * lift),
+      lift,
+      alpha: clamp(flown / 0.2, 0, 1),
+      landed: flown === 1 ? since - (piece.delay + FLIGHT) * ASSEMBLE : -1,
+    };
+  });
 }
 
 export interface ScrapPose {
@@ -481,12 +704,33 @@ class Footage {
   }
 }
 
+const dustTone = (layout: GraveLayout): string => (layout.dark ? '200,196,186' : '214,208,196');
+
+/** A soft puff of plaster dust. */
+function dustCloud(
+  context: CanvasRenderingContext2D,
+  tone: string,
+  x: number,
+  y: number,
+  size: number,
+  alpha: number,
+): void {
+  const gradient = context.createRadialGradient(x, y, 0, x, y, size);
+  gradient.addColorStop(0, `rgba(${tone},${alpha})`);
+  gradient.addColorStop(1, `rgba(${tone},0)`);
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.arc(x, y, size, 0, Math.PI * 2);
+  context.fill();
+}
+
 export class GraveEffect {
   readonly element: HTMLDivElement;
   private readonly cracks: HTMLCanvasElement;
   private readonly patches: HTMLDivElement;
   private readonly scrap: HTMLDivElement;
   private readonly sprite: HTMLCanvasElement;
+  private readonly heal: HTMLCanvasElement;
   private readonly fx: HTMLCanvasElement;
   private readonly work: HTMLCanvasElement;
   private readonly footage = new Map<number, Footage>();
@@ -518,9 +762,11 @@ export class GraveEffect {
     // The copy sits under the footage, so the fingers close over it.
     this.scrap = node('div', 'grave-scrap');
     this.sprite = node('canvas', 'grave-hand');
+    // The plaster flies back in over the hole the footage leaves.
+    this.heal = node('canvas', 'grave-heal');
     this.fx = node('canvas', 'grave-fx');
     this.work = document.createElement('canvas');
-    this.element.append(this.cracks, this.patches, this.scrap, this.sprite, this.fx);
+    this.element.append(this.cracks, this.patches, this.scrap, this.sprite, this.heal, this.fx);
     this.element.hidden = true;
   }
 
@@ -561,6 +807,7 @@ export class GraveEffect {
     this.fillScrap(scene);
     const dpr = this.dpr();
     this.size(this.cracks, layout.crackBox, dpr);
+    this.size(this.heal, layout.healBox, dpr);
     const { width, height } = layout.hand.size;
     this.size(
       this.sprite,
@@ -614,7 +861,7 @@ export class GraveEffect {
     this.patches.replaceChildren();
     this.scrap.replaceChildren();
     // Full-size canvases are only held while a grab is on screen.
-    for (const canvas of [this.cracks, this.sprite, this.fx, this.work]) {
+    for (const canvas of [this.cracks, this.sprite, this.heal, this.fx, this.work]) {
       canvas.width = 0;
       canvas.height = 0;
     }
@@ -737,6 +984,7 @@ export class GraveEffect {
     this.element.style.opacity = pose.opacity.toFixed(3);
     this.drawCracks(layout, pose.step);
     this.drawFootage(layout, pose);
+    this.drawHeal(layout, pose.step);
     this.drawFx(layout, pose);
     this.placeWords(layout, pose.step);
   }
@@ -748,7 +996,8 @@ export class GraveEffect {
     const box = layout.crackBox;
     context.setTransform(dpr, 0, 0, dpr, -box.x * dpr, -box.y * dpr);
     context.clearRect(box.x, box.y, box.width, box.height);
-    const spread = Math.min(1, (step + 1) / (PRE + 1));
+    // They run out from the hole, draw back in as the plaster comes home, then fade.
+    const spread = Math.min(1, (step + 1) / (PRE + 1)) * (1 - 0.85 * assemblyAt(layout, step));
     const fade = 1 - healAt(layout, step);
     if (fade <= 0) return;
     context.lineCap = 'round';
@@ -800,7 +1049,9 @@ export class GraveEffect {
     const footage = this.footage.get(layout.index);
     const scale = this.dpr() * layout.scale;
     context.setTransform(scale, 0, 0, scale, 0, 0);
-    if (frame === null) {
+    const assembled = assemblyAt(layout, pose.step);
+    // Nothing shows before the wall gives way, nor once the plaster is home over the hole.
+    if (frame === null || assembled === 1) {
       context.clearRect(0, 0, width, height);
       return;
     }
@@ -820,41 +1071,112 @@ export class GraveEffect {
       context.restore();
       return;
     }
-    const heal = healAt(layout, pose.step);
-    if (heal === 0) {
+    if (assembled === 0) {
       context.drawImage(image, 0, 0, width, height);
       return;
     }
-    // Healing: the gouges fade where they are; the crater draws in on its own
-    // centre, paling as it shrinks, under a soft edge.
+    // The plaster flies back over a crater that stays where it is; only what
+    // lies beyond where it lands (the cracks' tips, the cast shadow) fades.
     const work = this.work.getContext('2d');
     if (!work) return;
-    const k = heal * heal * (3 - 2 * heal);
-    const { x, y } = hand.hole;
-    const soft = (mode: GlobalCompositeOperation, inner: number, outer: number) => {
-      const gradient = work.createRadialGradient(x, y, inner, x, y, outer);
+    const { x, y, radius } = hand.hole;
+    const part = (mode: GlobalCompositeOperation, alpha: number) => {
+      const gradient = work.createRadialGradient(x, y, radius * CRATER, x, y, radius * 1.7);
       gradient.addColorStop(0, '#000');
       gradient.addColorStop(1, 'rgba(0,0,0,0)');
+      work.clearRect(0, 0, width, height);
+      work.drawImage(image, 0, 0, width, height);
       work.globalCompositeOperation = mode;
       work.fillStyle = gradient;
       work.fillRect(0, 0, width, height);
       work.globalCompositeOperation = 'source-over';
+      context.globalAlpha = alpha;
+      context.drawImage(this.work, 0, 0);
     };
     work.setTransform(1, 0, 0, 1, 0, 0);
-    work.clearRect(0, 0, width, height);
-    work.drawImage(image, 0, 0, width, height);
-    soft('destination-out', reach * 0.9, reach * 1.25);
-    context.globalAlpha = 1 - k;
-    context.drawImage(this.work, 0, 0);
-    work.clearRect(0, 0, width, height);
-    const shrink = 1 - 0.8 * k;
-    work.setTransform(shrink, 0, 0, shrink, x * (1 - shrink), y * (1 - shrink));
-    work.drawImage(image, 0, 0, width, height);
-    work.setTransform(1, 0, 0, 1, 0, 0);
-    soft('destination-in', reach * 0.9 * shrink, reach * 1.25 * shrink);
-    context.globalAlpha = (1 - k) ** 0.8;
-    context.drawImage(this.work, 0, 0);
+    part('destination-in', 1);
+    part('destination-out', 1 - assembled);
     context.globalAlpha = 1;
+  }
+
+  /** The plaster flying back into the hole, then its seams closing into the page. */
+  private drawHeal(layout: GraveLayout, step: number): void {
+    const context = this.heal.getContext('2d');
+    if (!context) return;
+    const dpr = this.dpr();
+    const box = layout.healBox;
+    context.setTransform(dpr, 0, 0, dpr, -box.x * dpr, -box.y * dpr);
+    context.clearRect(box.x, box.y, box.width, box.height);
+    const sealed = healAt(layout, step);
+    const poses = piecesAt(layout, step);
+    if (sealed === 1 || poses.every((pose) => pose.alpha === 0)) return;
+    const { pieces, unit } = layout;
+    // Pieces home first; those still in the air pass in front, the nearest last.
+    const order = poses
+      .map((pose, index) => ({ pose, piece: pieces[index] }))
+      .sort((a, b) => a.pose.lift - b.pose.lift);
+    for (const { pose, piece } of order) {
+      if (!piece || pose.alpha === 0) continue;
+      const trace = () => {
+        context.beginPath();
+        for (const [at, [x, y]] of piece.outline.entries()) {
+          if (at) context.lineTo(x - piece.rest.x, y - piece.rest.y);
+          else context.moveTo(x - piece.rest.x, y - piece.rest.y);
+        }
+        context.closePath();
+      };
+      context.save();
+      context.globalAlpha = pose.alpha * (1 - sealed);
+      context.translate(pose.x, pose.y);
+      context.rotate(pose.rotation);
+      context.scale(pose.scale * pose.squash, pose.scale);
+      if (pose.lift > 0) {
+        // Off the wall it casts a shadow, and its broken gypsum shows under the paint.
+        context.shadowColor = `rgba(0,0,0,${(0.35 * pose.lift).toFixed(3)})`;
+        context.shadowBlur = 8 * unit * pose.lift * dpr;
+        context.shadowOffsetX = 5 * unit * pose.lift * dpr;
+        context.shadowOffsetY = 8 * unit * pose.lift * dpr;
+        trace();
+        // On a dark page bright gypsum would read as a line drawn round it, not a chip.
+        context.fillStyle = layout.dark ? 'rgb(112,108,101)' : 'rgb(206,200,188)';
+        context.fill();
+        context.shadowColor = 'transparent';
+        const edge = 2.5 * unit * pose.lift;
+        context.translate(-0.6 * edge, -edge);
+      }
+      trace();
+      // A colour the canvas cannot read leaves the plaster white rather than black.
+      context.fillStyle = '#ffffff';
+      context.fillStyle = layout.paper;
+      context.fill();
+      // Tumbling at the viewer it catches the light; a dark page's needs more to show.
+      const shade = piece.shade * (0.3 + 0.7 * pose.lift) + (layout.dark ? 0.1 * pose.lift : 0);
+      context.fillStyle = shade > 0 ? `rgba(255,255,255,${shade})` : `rgba(0,0,0,${-shade})`;
+      context.fill();
+      if (pose.landed >= 0) {
+        // Home, its breaks show as seams: a lit lip, then the dark split.
+        context.lineJoin = 'round';
+        context.lineWidth = 0.75;
+        context.translate(0.7, 0.8);
+        trace();
+        context.strokeStyle = layout.dark ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.55)';
+        context.stroke();
+        context.translate(-0.7, -0.8);
+        trace();
+        context.strokeStyle = 'rgba(40,36,32,.32)';
+        context.stroke();
+      }
+      context.restore();
+    }
+    // Each piece knocks a little dust off the wall as it slams home.
+    const tone = dustTone(layout);
+    for (const [index, pose] of poses.entries()) {
+      const piece = pieces[index];
+      if (!piece || pose.landed < 0 || pose.landed >= 4) continue;
+      const k = pose.landed / 4;
+      const alpha = (layout.dark ? 0.14 : 0.24) * (1 - k);
+      dustCloud(context, tone, piece.rest.x, piece.rest.y, (8 + 14 * k) * unit, alpha);
+    }
   }
 
   private drawFx(layout: GraveLayout, pose: GravePose): void {
@@ -876,16 +1198,9 @@ export class GraveEffect {
     if (!context) return;
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, view.width, view.height);
-    const tone = layout.dark ? '200,196,186' : '214,208,196';
-    const dust = (x: number, y: number, size: number, alpha: number) => {
-      const gradient = context.createRadialGradient(x, y, 0, x, y, size);
-      gradient.addColorStop(0, `rgba(${tone},${alpha})`);
-      gradient.addColorStop(1, `rgba(${tone},0)`);
-      context.fillStyle = gradient;
-      context.beginPath();
-      context.arc(x, y, size, 0, Math.PI * 2);
-      context.fill();
-    };
+    const tone = dustTone(layout);
+    const dust = (x: number, y: number, size: number, alpha: number) =>
+      dustCloud(context, tone, x, y, size, alpha);
     if (burst >= 0 && burst < 0.9) {
       for (const puff of layout.puffs) {
         const t = burst - puff.delay;
