@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": ["Read(./**)", "Glob", "Grep", "Edit(./wiki/**)"],
+    "deny": [
+      "Edit(./captures/**)",
+      "Edit(./metadata/**)",
+      "Edit(./attachments/**)",
+      "Edit(./.claude/**)",
+      "Edit(./AGENTS.md)",
+      "Edit(./CLAUDE.md)",
+      "Bash",
+      "PowerShell",
+      "WebFetch",
+      "WebSearch",
+      "mcp__*",
+      "Artifact",
+      "ArtifactComments",
+      "ArtifactData",
+      "PushNotification",
+      "RemoteTrigger",
+      "SendMessage",
+      "Workflow"
+    ]
+  }
+}
