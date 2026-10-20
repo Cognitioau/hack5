@@ -363,11 +363,20 @@ test('the toolbar popup grabs the selection or the page and gets out of the way;
     // On the page, a save is one line beside the hand, then the hand alone.
     const decoder = await fixture.context.newPage();
     await article.bringToFront();
-    const saved = await painted(decoder, bare, await article.screenshot({ clip: corner }));
+    // The page's card can still be going under, its shadow across the corner. Once
+    // it has, the bar alone shows: a 42px bar and its soft shadow, wide enough to
+    // hold its status line (the old receipt card stood about 150px tall).
+    let saved: Area | null = null;
+    await expect
+      .poll(
+        async () => {
+          saved = await painted(decoder, bare, await article.screenshot({ clip: corner }));
+          return saved !== null && saved.height <= 50 && saved.width <= 260 && saved.width >= 150;
+        },
+        { message: 'the saved bar alone, slim but showing its status', timeout: 4_000 },
+      )
+      .toBe(true);
     await frame(article, 'popup-grab-saved');
-    // A 42px bar and its soft shadow; the old receipt card stood about 150px tall.
-    expect(saved?.height).toBeLessThanOrEqual(50);
-    expect(saved?.width).toBeLessThanOrEqual(260);
     await article.waitForTimeout(6_500);
     const quiet = await painted(decoder, bare, await article.screenshot({ clip: corner }));
     expect(quiet?.height).toBeLessThanOrEqual(50);

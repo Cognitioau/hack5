@@ -563,9 +563,11 @@ function activate(): () => void {
   };
 
   // A copy injected before the extension was reloaded leaves its hand behind,
-  // cut off from the extension; the page keeps one hand, this one. Another build
-  // installed alongside keeps its own (hands from before owners were marked go too).
-  const owner = chrome.runtime.id;
+  // cut off from the extension; the page keeps one hand, this one. The other build
+  // profile installed alongside keeps its own (hands from before owners were marked
+  // go too). Hands are marked by profile, never by the extension's id, which for an
+  // unpacked build comes from its folder and would let pages tell machines apart.
+  const owner = __CORE_ONLY__ ? 'core' : 'full';
   for (const stale of document.querySelectorAll<HTMLElement>('[data-zombie-hand-ui]'))
     if ((stale.dataset.zombieHandOwner ?? owner) === owner) stale.remove();
   const view = new HandView(document, {
@@ -586,7 +588,7 @@ function activate(): () => void {
     },
     sprite: loadSprite,
   });
-  if (owner) view.host.dataset.zombieHandOwner = owner;
+  view.host.dataset.zombieHandOwner = owner;
 
   // A modifier hold owns exactly one lasso. Its release never cancels a
   // completed circle that is already crossing the asynchronous message boundary.

@@ -591,21 +591,24 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(hosts[0]).not.toBe(stale);
   });
 
-  it('leaves the hand of another build installed alongside', async () => {
+  it('leaves the hand of the other build profile installed alongside', async () => {
     (window as Window & { __zombieHandDispose?: () => void }).__zombieHandDispose?.();
     const other = document.createElement('div');
     other.dataset.zombieHandUi = 'true';
-    other.dataset.zombieHandOwner = 'another-extension';
+    other.dataset.zombieHandOwner = 'core';
     document.documentElement.append(other);
     vi.resetModules();
     await import('../../src/bootstrap/content');
     await flush();
     const hosts = [...document.querySelectorAll<HTMLElement>('[data-zombie-hand-ui]')];
+    // The mark names the profile, never the extension's id, so pages cannot tell machines apart.
+    const markup = document.documentElement.outerHTML;
     other.remove();
     expect(hosts).toHaveLength(2);
     expect(hosts.map((host) => host.dataset.zombieHandOwner)).toEqual(
-      expect.arrayContaining(['another-extension', 'test-extension']),
+      expect.arrayContaining(['core', 'full']),
     );
+    expect(markup).not.toContain('test-extension');
   });
 
   it('disposes listeners and timers on deactivation, and ignores foreign runtime messages', async () => {
