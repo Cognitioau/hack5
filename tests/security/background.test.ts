@@ -1,6 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  contentMessageSchema,
   defaultSettings,
   type AppResponse,
   type CaptureCandidate,
@@ -478,6 +479,55 @@ describe('production background capability boundary', () => {
       (await context.send({ v: 1, type: 'ARM', pageUrl, candidate: candidate() }, sender)).ok,
     ).toBe(false);
     expect(await store.list()).toHaveLength(0);
+  });
+
+  // Every page message, read from the schema so a new one cannot skip the sender check.
+  const pageMessages: Record<string, () => Promise<Record<string, unknown>>> = {
+    CONTENT_STATUS: async () => ({ v: 1, type: 'CONTENT_STATUS' }),
+    PAUSE_HAND: async () => ({ v: 1, type: 'PAUSE_HAND' }),
+    HAND_SPRITE: async () => {
+      context.network.mockImplementation(async () => new Response(new Uint8Array([1, 2, 3])));
+      return { v: 1, type: 'HAND_SPRITE' };
+    },
+    ARM: async () => ({ v: 1, type: 'ARM', pageUrl, candidate: candidate() }),
+    CAPTURE: async () => ({
+      v: 1,
+      type: 'CAPTURE',
+      token: await arm(),
+      operationId: crypto.randomUUID(),
+    }),
+    CANCEL: async () => ({ v: 1, type: 'CANCEL', token: await arm() }),
+    ARCHIVE: async () => ({ v: 1, type: 'ARCHIVE', captureId: await captured() }),
+    GET_CAPTURE: async () => ({ v: 1, type: 'GET_CAPTURE', captureId: await captured() }),
+    SEARCH: async () => ({ v: 1, type: 'SEARCH', query: 'orchids' }),
+  };
+  const pageTypes = contentMessageSchema.options.map((option) => option.shape.type.value);
+
+  async function captured(): Promise<string> {
+    const token = await arm();
+    const id = crypto.randomUUID();
+    expect((await context.send({ v: 1, type: 'CAPTURE', token, operationId: id })).ok).toBe(true);
+    await settled(id);
+    return id;
+  }
+
+  it('has a sample for every page message', () => {
+    expect(Object.keys(pageMessages).sort()).toEqual([...pageTypes].sort());
+  });
+
+  it.each(pageTypes)('accepts %s only from the enabled top-level page', async (type) => {
+    const message = await pageMessages[type]?.();
+    expect(contentMessageSchema.safeParse(message).success).toBe(true);
+    for (const override of [
+      { id: 'another-extension' },
+      { frameId: 1 },
+      { documentLifecycle: 'cached' },
+      { documentId: undefined },
+    ]) {
+      const sender = { ...context.sender(), ...override } as chrome.runtime.MessageSender;
+      expect((await context.send(message, sender)).ok, JSON.stringify(override)).toBe(false);
+    }
+    expect((await context.send(message)).ok).toBe(true);
   });
 
   it('does not grant trusted settings authority to page messages or lookalike extension URLs', async () => {

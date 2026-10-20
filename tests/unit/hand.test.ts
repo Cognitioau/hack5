@@ -164,6 +164,48 @@ describe('target-local hand presentation', () => {
     Reflect.deleteProperty(window, 'matchMedia');
   });
 
+  it('keeps the held fist when the atlas finishes decoding after a reduced-motion grab', async () => {
+    const atlas = { width: 1325, height: 2628 } as unknown as CanvasImageSource;
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      () => ({ clearRect: vi.fn(), drawImage }) as unknown as CanvasRenderingContext2D,
+    );
+    let decoded: (value: CanvasImageSource) => void = () => {};
+    const sprite = vi.fn(
+      () =>
+        new Promise<CanvasImageSource | null>((done) => {
+          decoded = done;
+        }),
+    );
+    // jsdom has no matchMedia; this view prefers reduced motion.
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({ matches: true }),
+    });
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'The first grab on a page');
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    expect(drawImage).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60);
+    decoded(atlas);
+    await vi.advanceTimersByTimeAsync(0);
+    const { frame, columns, rise, grab } = GRAVE_SPRITE;
+    const fist = rise + grab - 1;
+    expect(drawImage).toHaveBeenLastCalledWith(
+      atlas,
+      (fist % columns) * frame.width,
+      Math.floor(fist / columns) * frame.height,
+      frame.width,
+      frame.height,
+      0,
+      0,
+      frame.width,
+      frame.height,
+    );
+    Reflect.deleteProperty(window, 'matchMedia');
+  });
+
   it('keeps undo accessible while collapsed and suppresses it during a different pending capture', () => {
     view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
     view.setUndoAvailable(true);

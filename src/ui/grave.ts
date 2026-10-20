@@ -450,6 +450,8 @@ export class GraveEffect {
   private layout: GraveLayout | null = null;
   private state: GraveState | null = null;
   private startedAt = 0;
+  /** A held still keeps its pose; the clock no longer advances it. */
+  private held = false;
   private frame: number | undefined;
 
   constructor(private readonly document: Document) {
@@ -634,6 +636,7 @@ export class GraveEffect {
     this.fillScrap(scene);
     this.state = { phase: 'grab', t: 0 };
     this.startedAt = this.now();
+    this.held = false;
     this.element.removeAttribute('hidden');
     this.render();
     this.loop();
@@ -656,6 +659,7 @@ export class GraveEffect {
     if (!this.layout) return;
     this.stop();
     this.state = { phase: 'grab', t: this.layout.timing.grabEnd };
+    this.held = true;
     this.paint(poseAt(this.layout, this.state));
   }
 
@@ -663,6 +667,7 @@ export class GraveEffect {
     this.stop();
     this.layout = null;
     this.state = null;
+    this.held = false;
     this.element.setAttribute('hidden', '');
   }
 
@@ -680,7 +685,7 @@ export class GraveEffect {
   }
 
   private current(): GraveState | null {
-    if (!this.state) return null;
+    if (!this.state || this.held) return this.state;
     const elapsed = this.now() - this.startedAt;
     return this.state.phase === 'grab'
       ? { phase: 'grab', t: elapsed }
@@ -693,6 +698,7 @@ export class GraveEffect {
     const from = poseAt(this.layout, current);
     this.state = { phase, u: 0, from };
     this.startedAt = this.now();
+    this.held = false;
     this.render();
     this.loop();
   }
