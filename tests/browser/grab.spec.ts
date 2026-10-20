@@ -22,7 +22,7 @@ async function frame(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: resolve(directory, `${name}.png`) });
 }
 
-/** Counts hand-coloured pixels (tinted, not page ink, paper or grave soil) in a screenshot region. */
+/** Counts hand-coloured pixels (rotting skin, not page ink, paper, plaster or the selection) in a screenshot region. */
 async function handPixels(
   fixture: Awaited<ReturnType<typeof launchExtension>>,
   shot: Buffer,
@@ -45,8 +45,8 @@ async function handPixels(
           const [r = 0, g = 0, b = 0] = [data[i], data[i + 1], data[i + 2]];
           const luma = 0.3 * r + 0.59 * g + 0.11 * b;
           const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-          // Grey-green skin: not page ink, paper, the blue selection or brown grave soil.
-          if (luma > 25 && luma < 215 && chroma >= 8 && r <= g + 4 && b <= g + 4) count += 1;
+          // Warm grey skin: plaster debris and cracks are near neutral, the selection is blue.
+          if (luma > 25 && luma < 200 && chroma >= 12 && r >= g + 5 && b <= g) count += 1;
         }
         return count;
       },
@@ -88,8 +88,8 @@ test('the rendered hand bursts through a page whose CSP forbids every image', as
     await frame(strict, 'grab-strict-csp');
     const haunted = await handPixels(fixture, shot, region);
     expect(quiet).toBeLessThan(60);
-    // Measured near 1,200 on this fixture; an undrawn hand stays near the baseline.
-    expect(haunted).toBeGreaterThan(600);
+    // Measured near 12,500 on this fixture; the cracks and debris alone count zero.
+    expect(haunted).toBeGreaterThan(3_000);
     await expect
       .poll(async () => (await state(fixture)).map((c) => c.candidate.text))
       .toContain(words);

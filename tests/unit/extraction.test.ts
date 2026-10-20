@@ -385,6 +385,7 @@ describe('explicit selection and whole-page grabs', () => {
       fontFamily: 'Georgia',
       color: 'rgb(220, 221, 228)',
       background: 'rgb(20, 22, 28)',
+      fontSize: 16,
     });
   });
 });

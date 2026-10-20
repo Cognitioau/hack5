@@ -487,7 +487,7 @@ describe('production background capability boundary', () => {
     PAUSE_HAND: async () => ({ v: 1, type: 'PAUSE_HAND' }),
     HAND_SPRITE: async () => {
       context.network.mockImplementation(async () => new Response(new Uint8Array([1, 2, 3])));
-      return { v: 1, type: 'HAND_SPRITE' };
+      return { v: 1, type: 'HAND_SPRITE', hand: 0 };
     },
     ARM: async () => ({ v: 1, type: 'ARM', pageUrl, candidate: candidate() }),
     CAPTURE: async () => ({
@@ -561,29 +561,35 @@ describe('production background capability boundary', () => {
     },
   );
 
-  it('hands a page only the packaged hand atlas, read from the extension origin', async () => {
+  it('hands a page only a packaged hand, read from the extension origin', async () => {
     const bytes = new Uint8Array([82, 73, 70, 70, 0, 255, 128]);
     context.network.mockImplementationOnce(async () => new Response(bytes));
-    expect(await context.send({ v: 1, type: 'HAND_SPRITE' })).toMatchObject({
+    expect(await context.send({ v: 1, type: 'HAND_SPRITE', hand: 1 })).toMatchObject({
       ok: true,
       sprite: btoa(String.fromCharCode(...bytes)),
     });
     expect(context.network).toHaveBeenLastCalledWith(
-      context.api.runtime.getURL('assets/grave-hand.webp'),
+      context.api.runtime.getURL('assets/grave-hand-1.bin'),
     );
-    // A page cannot choose which packaged file is read.
+    // A page can only name a packaged hand by number, never choose a file.
     const calls = context.network.mock.calls.length;
-    expect((await context.send({ v: 1, type: 'HAND_SPRITE', path: 'models/private' })).ok).toBe(
-      false,
-    );
+    for (const message of [
+      { v: 1, type: 'HAND_SPRITE', hand: 1, path: 'models/private' },
+      { v: 1, type: 'HAND_SPRITE', path: 'models/private' },
+      { v: 1, type: 'HAND_SPRITE', hand: '../models/private' },
+      { v: 1, type: 'HAND_SPRITE', hand: -1 },
+      { v: 1, type: 'HAND_SPRITE', hand: 0.5 },
+      { v: 1, type: 'HAND_SPRITE', hand: 15 },
+    ])
+      expect((await context.send(message)).ok).toBe(false);
     expect(context.network.mock.calls.length).toBe(calls);
   });
 
-  it('retries the hand atlas after a failed read instead of caching the failure', async () => {
+  it('retries a hand after a failed read instead of caching the failure', async () => {
     context.network.mockImplementationOnce(async () => new Response('', { status: 404 }));
-    expect((await context.send({ v: 1, type: 'HAND_SPRITE' })).ok).toBe(false);
+    expect((await context.send({ v: 1, type: 'HAND_SPRITE', hand: 0 })).ok).toBe(false);
     context.network.mockImplementationOnce(async () => new Response(new Uint8Array([1, 2, 3])));
-    expect(await context.send({ v: 1, type: 'HAND_SPRITE' })).toMatchObject({
+    expect(await context.send({ v: 1, type: 'HAND_SPRITE', hand: 0 })).toMatchObject({
       ok: true,
       sprite: btoa('\x01\x02\x03'),
     });

@@ -44,13 +44,19 @@ for (const filename of [
   'graveyard.html',
   'LICENSE',
   'THIRD_PARTY_NOTICES.md',
-  'assets/grave-hand.webp',
 ]) {
   assert(
     (await readFile(resolve(destination, filename))).length > 0,
     `Missing or empty ${filename}`,
   );
 }
+const { takes } = JSON.parse(await readFile(resolve(root, 'scripts/hand/takes.json'), 'utf8'));
+assert(takes.length > 1, 'The grave needs more than one hand to vary between grabs');
+for (const [index] of takes.entries())
+  assert(
+    (await readFile(resolve(destination, `assets/grave-hand-${index}.bin`))).length > 0,
+    `Missing or empty grave hand ${index}`,
+  );
 const core = process.argv.includes('--core');
 const origins = manifest.optional_host_permissions ?? [];
 assert(

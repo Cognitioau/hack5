@@ -1,5 +1,5 @@
 import type { CaptureCandidate, SearchResult } from '../core/contracts/index';
-import { GRAVE_DURATION, GraveEffect, type GraveKind, type ScrapStyle } from './grave';
+import { GRAVE_DURATION, GraveEffect, type GraveKind, pickHand, type ScrapStyle } from './grave';
 
 type TargetRectangle = NonNullable<CaptureCandidate['image']>['rect'];
 type Rectangle = Pick<TargetRectangle, 'x' | 'y' | 'width' | 'height'>;
@@ -15,8 +15,8 @@ export interface HandActions {
   page?: () => void;
   /** The primary button: the selection when there is one, otherwise the page. */
   grab?: () => void;
-  /** Decodes the grave hand's frame atlas; the grave opens without a hand until it resolves. */
-  sprite?: () => Promise<CanvasImageSource | null>;
+  /** Reads one grave hand's packaged frames; its grave opens without a hand until they arrive. */
+  sprite?: (hand: number) => Promise<Uint8Array<ArrayBuffer> | null>;
 }
 export interface TargetPresentation {
   kind?: GraveKind;
@@ -57,14 +57,15 @@ const STYLE = `
 @keyframes chip-in{from{opacity:0;transform:translateY(4px) scale(.8)}}
 .targets{pointer-events:none;position:fixed;inset:0;z-index:2147483644}.target{position:fixed;border:1px solid #789e32;border-radius:3px;background:#c4f77721;box-shadow:0 0 0 2px #efffd350;pointer-events:none}.targets[data-state="arming"] .target{border-style:dashed}.targets[data-state="saving"] .target{background:#c4f7770d;border-color:#8da56480}.trail{pointer-events:none;position:fixed;inset:0;width:100vw;height:100vh;overflow:visible;z-index:2147483645}.trail path{fill:none;stroke:#619c32;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 1px #f3ffdf)}.trail .trail-halo{stroke:#f0ffe7b0;stroke-width:5}.trail circle{fill:#cff890;stroke:#4d712b;stroke-width:1.5}
 .effect{position:fixed;inset:0;pointer-events:none;z-index:2147483646}
-.grave{position:absolute;inset:0;overflow:visible;--paper:#f6f3ea;--paper-ink:#28301f;--crack:#28301f;--paper-font:Georgia,"Times New Roman",serif}
-.grave .crack{fill:none;stroke:var(--crack);stroke-width:1.4;stroke-dasharray:1;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.grave-rig{filter:drop-shadow(0 6px 5px #00000059)}.grave-hand{overflow:visible}.grave-hand canvas{display:block;width:100%;height:100%}
-.grave-scrap{filter:drop-shadow(0 5px 5px #00000040)}
-.grave .clod{fill:#5d4730;stroke:#2e2318;stroke-width:.25}.grave .shard{fill:var(--paper);stroke:#00000050;stroke-width:.2}
-.slip{box-sizing:border-box;width:100%;height:100%;padding:8px 11px 9px;background:var(--paper);background-image:linear-gradient(170deg,#ffffff1f,#0000000a);color:var(--paper-ink);font:13px/1.32 var(--paper-font);overflow:hidden;clip-path:polygon(0 7%,4% 0,11% 5%,19% 1%,27% 5%,36% 0,44% 6%,53% 1%,62% 5%,70% 0,79% 6%,87% 1%,95% 5%,100% 1%,99% 24%,100% 47%,98% 71%,100% 94%,94% 100%,86% 95%,77% 100%,68% 96%,59% 100%,50% 95%,41% 100%,32% 96%,23% 100%,14% 95%,5% 100%,0 95%,2% 72%,0 49%,2% 26%)}
-.slip p{margin:0;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow-wrap:anywhere}
-.slip.page{padding:13px 15px}.slip.page .grabbed{font-weight:700;font-size:15px;line-height:1.25;-webkit-line-clamp:2}.slip.page .host{margin-top:4px;font:11px/1.3 system-ui,sans-serif;opacity:.65;-webkit-line-clamp:1}.slip.page i{display:block;height:5px;margin-top:9px;border-radius:3px;background:currentColor;opacity:.14}.slip.page i:nth-of-type(2){width:86%}.slip.page i:nth-of-type(3){width:62%}
+.grave{position:absolute;inset:0;overflow:hidden;--paper:#fff;--paper-ink:#28301f;--paper-font:Georgia,"Times New Roman",serif;--paper-size:16px}
+.grave canvas,.grave-patches div,.grave-scrap{position:absolute;left:0;top:0}.grave-patches div{background:var(--paper)}
+.grave-hand{-webkit-mask-image:linear-gradient(to right,transparent,#000 7%,#000 93%,transparent),linear-gradient(to bottom,transparent,#000 7%,#000 93%,transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent,#000 7%,#000 93%,transparent),linear-gradient(to bottom,transparent,#000 7%,#000 93%,transparent);mask-composite:intersect}
+.grave-scrap{transform-origin:0 0;filter:drop-shadow(0 1px 2px #00000050)}
+.slip{box-sizing:border-box;background:var(--paper);background-image:linear-gradient(170deg,#ffffff1f,#0000000a);color:var(--paper-ink);font:var(--paper-size)/1.3 var(--paper-font);overflow:hidden}
+.slip p{margin:0;overflow:hidden;overflow-wrap:anywhere}
+.slip.text{padding:1px 4px;white-space:nowrap;max-width:12em;clip-path:polygon(0 8%,9% 0,23% 6%,41% 0,58% 7%,74% 1%,88% 6%,100% 0,97% 52%,100% 100%,82% 93%,64% 100%,47% 92%,30% 100%,14% 94%,0 100%,3% 48%)}.slip.text p{text-overflow:ellipsis}
+.slip.page{width:168px;height:96px;padding:12px 14px;font-size:12px;clip-path:polygon(0 7%,4% 0,11% 5%,19% 1%,27% 5%,36% 0,44% 6%,53% 1%,62% 5%,70% 0,79% 6%,87% 1%,95% 5%,100% 1%,99% 24%,100% 47%,98% 71%,100% 94%,94% 100%,86% 95%,77% 100%,68% 96%,59% 100%,50% 95%,41% 100%,32% 96%,23% 100%,14% 95%,5% 100%,0 95%,2% 72%,0 49%,2% 26%)}
+.slip.page p{display:-webkit-box;-webkit-box-orient:vertical}.slip.page .grabbed{font-weight:700;font-size:14px;line-height:1.25;-webkit-line-clamp:2}.slip.page .host{margin-top:3px;font:10px/1.3 system-ui,sans-serif;opacity:.65;-webkit-line-clamp:1}.slip.page i{display:block;height:4px;margin-top:7px;border-radius:2px;background:currentColor;opacity:.14}.slip.page i:nth-of-type(2){width:86%}.slip.page i:nth-of-type(3){width:62%}
 @media(max-width:420px){.dock{right:10px;bottom:10px}.receipt,.panel,.ghost{width:250px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 `;
@@ -108,7 +109,9 @@ export class HandView {
   private effectStartedAt = 0;
   private effectScene: Parameters<GraveEffect['start']>[0] | null = null;
   private targetActive = false;
-  private spriteRequest: Promise<void> | null = null;
+  private readonly spriteRequests = new Map<number, Promise<void>>();
+  /** The hand the next grab plays, chosen ahead so it can load while the user confirms. */
+  private nextHand = pickHand();
 
   constructor(
     private readonly document: Document,
@@ -324,13 +327,14 @@ export class HandView {
       this.effectScene = {
         kind: presentation.kind ?? 'text',
         source: rectangle,
+        rectangles: targetRectangles.slice(0, 64),
         viewport: { width: rectangle.viewportWidth, height: rectangle.viewportHeight },
         text: snippet,
         ...(presentation.detail === undefined ? {} : { detail: presentation.detail }),
         ...(presentation.style ? { style: presentation.style } : {}),
       };
-      // Decode the hand while the user confirms, so it is ready to burst through.
-      this.loadSprite();
+      // Load the next hand while the user confirms, so it is ready to burst through.
+      this.loadSprite(this.nextHand);
     }
     this.snippet.textContent = snippet.slice(0, 220);
     this.snippet.hidden = snippet.length === 0;
@@ -493,36 +497,43 @@ export class HandView {
     );
   }
 
-  /** Loads the atlas once; a failed load is retried at the next target. */
-  private loadSprite(): void {
-    if (this.spriteRequest || !this.actions.sprite) return;
-    this.spriteRequest = this.actions.sprite().then(
-      (sprite) => {
-        if (!sprite) this.spriteRequest = null;
-        else if (!this.disposed) this.grave.useSprite(sprite);
-      },
-      () => {
-        this.spriteRequest = null;
-      },
+  /** Loads a hand's frames once per page; a failed load is retried at the next target. */
+  private loadSprite(hand: number): void {
+    if (this.spriteRequests.has(hand) || !this.actions.sprite) return;
+    this.spriteRequests.set(
+      hand,
+      this.actions.sprite(hand).then(
+        (sprite) => {
+          if (!sprite) this.spriteRequests.delete(hand);
+          else if (!this.disposed) this.grave.useFootage(hand, sprite);
+        },
+        () => {
+          this.spriteRequests.delete(hand);
+        },
+      ),
     );
   }
 
   private startEffect(): void {
     this.hideEffect();
     if (!this.targetActive || !this.effectScene || this.disposed) return;
-    this.loadSprite();
+    // A different hand each time: never the one that played last.
+    const hand = this.nextHand;
+    this.nextHand = pickHand(hand);
+    this.loadSprite(hand);
     this.effect.dataset.phase = 'reach';
     this.effect.hidden = false;
-    this.grave.start(this.effectScene);
+    this.grave.start(this.effectScene, hand);
     if (this.reducedMotion()) this.grave.hold();
     this.effectStartedAt = this.document.defaultView?.performance.now() ?? 0;
     // The decorative hand must not obscure a passage while an offline queue waits.
     // Its neutral fade changes presentation only; the receipt retains the real save state.
+    const linger = this.grave.grabEnd + 1_100;
     this.later(() => {
       this.effect.dataset.phase = 'fade';
       this.grave.fade();
-    }, 1_800);
-    this.later(() => this.hideEffect(), 1_800 + GRAVE_DURATION.fade);
+    }, linger);
+    this.later(() => this.hideEffect(), linger + GRAVE_DURATION.fade);
   }
 
   private retreatEffect(saved: boolean): void {
@@ -541,13 +552,9 @@ export class HandView {
     const delay = saved ? Math.max(0, this.grave.grabEnd + 60 - elapsed) : 0;
     this.later(() => {
       this.effect.dataset.phase = saved ? 'bury' : 'release';
-      if (saved) this.grave.bury();
-      else this.grave.release();
+      const duration = saved ? this.grave.bury() : this.grave.release();
+      this.later(() => this.hideEffect(), duration);
     }, delay);
-    this.later(
-      () => this.hideEffect(),
-      delay + (saved ? GRAVE_DURATION.bury : GRAVE_DURATION.release),
-    );
   }
 
   private later(action: () => void, delay: number): void {

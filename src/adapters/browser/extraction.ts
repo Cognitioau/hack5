@@ -485,11 +485,11 @@ export function extractPage(document: Document): ExtractedCandidate | null {
   };
 }
 
-/** The type face and colours a grabbed copy should borrow from its source. */
+/** The type face, size and colours a grabbed copy (and the hand's scale) borrow from its source. */
 export function readingStyle(
   element: Element,
   document: Document,
-): { fontFamily: string; color: string; background: string } | undefined {
+): { fontFamily: string; color: string; background: string; fontSize: number } | undefined {
   const window = document.defaultView;
   if (!window) return undefined;
   const style = window.getComputedStyle(element);
@@ -503,9 +503,11 @@ export function readingStyle(
     if (value && value !== 'transparent' && !/^rgba\(.*,\s*0\s*\)$/u.test(value))
       background = value;
   }
+  const fontSize = Number.parseFloat(style.fontSize);
   return {
     fontFamily: style.fontFamily,
     color: style.color,
     background: background || 'rgb(255, 255, 255)',
+    fontSize: Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16,
   };
 }

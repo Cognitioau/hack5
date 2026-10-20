@@ -1,17 +1,18 @@
 /**
- * Decorative grave-hand choreography. The page tears open below the target, a
- * hand bursts up, snatches a paper copy of the words and drags it under.
+ * Decorative grave-hand choreography. The page cracks like plaster, a hand
+ * punches through it, slaps down on the target, snatches a paper copy of the
+ * words and drags it back through the hole, which then heals over.
  * It never decides persistence: the view starts, buries or releases it only in
  * response to real capture state, and the source page DOM is never touched.
  *
- * The hand is a pre-rendered frame atlas (scripts/hand) drawn on a canvas. The
- * atlas arrives as an already-decoded bitmap, so the page's CSP never sees a URL.
+ * The hand is generated footage matted onto a transparent layer (scripts/hand),
+ * one of several takes picked per grab. Its frames arrive as bytes and are
+ * decoded a few at a time around the one on screen, so the page's CSP never
+ * sees a URL and only a handful of frames are ever held decoded. The cracks,
+ * the torn hole, plaster, dust and the paper copy are drawn here around it.
  */
 
-import { GRAVE_SPRITE } from './grave-sprite';
-
-const SVG = 'http://www.w3.org/2000/svg';
-const XHTML = 'http://www.w3.org/1999/xhtml';
+import { GRAVE_FPS, GRAVE_HANDS, type GraveHand } from './grave-sprite';
 
 export type GraveKind = 'text' | 'page';
 export interface GraveRect {
@@ -24,11 +25,15 @@ export interface ScrapStyle {
   fontFamily: string;
   color: string;
   background: string;
+  /** Computed size of the reading text, in px; the hand is sized from it. */
+  fontSize?: number;
 }
 export interface GraveScene {
   kind: GraveKind;
   /** The highlighted passage; a page grab uses the viewport. */
   source: GraveRect;
+  /** The passage's line boxes, covered once the hand has taken the words. */
+  rectangles?: readonly GraveRect[];
   viewport: { width: number; height: number };
   /** Snippet copy for text, or the page title. Always rendered as text. */
   text: string;
@@ -37,94 +42,79 @@ export interface GraveScene {
   style?: ScrapStyle;
 }
 
-interface Timing {
-  riseStart: number;
-  riseEnd: number;
-  flyStart: number;
-  swap: number;
-  curlStart: number;
-  curlEnd: number;
-  grabEnd: number;
-}
-const TEXT_TIMING: Timing = {
-  riseStart: 150,
-  riseEnd: 480,
-  flyStart: 330,
-  swap: 560,
-  curlStart: 530,
-  curlEnd: 680,
-  grabEnd: 700,
-};
-const PAGE_TIMING: Timing = {
-  riseStart: 230,
-  riseEnd: 560,
-  flyStart: 360,
-  swap: 620,
-  curlStart: 590,
-  curlEnd: 740,
-  grabEnd: 760,
-};
+/** Steps (footage frames) of cracks spreading before the wall gives way. */
+const PRE = 5;
+/** Steps for the hole to tear open around the punch. */
+const OPEN = 3;
+/** Steps the empty hole stays after the hand has gone, then takes to heal. */
+const HOLD = 6;
+const HEAL = 12;
+/** A release rewinds the grab at least twice as fast, and never takes longer than this. */
+const RELEASE_MS = 450;
+const STEP_MS = 1_000 / GRAVE_FPS;
+/** The hands were tuned at 260 px across the footage frame over 17 px text. */
+const DISPLAY_PER_FONT_PX = 260 / 17;
+/** Radius in px of the hole's dark core when the debris and dust were tuned; they scale with it. */
+const TUNED_HOLE = 34;
+/** The page card a page grab peels the viewport into. */
+const CARD = { width: 168, height: 96 };
 /** Durations the view schedules its own state changes against. */
-export const GRAVE_DURATION = { bury: 1_000, release: 450, fade: 400 } as const;
+export const GRAVE_DURATION = { fade: 400 } as const;
 
 interface Point {
   x: number;
   y: number;
 }
-interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  spin: number;
+interface Chunk {
+  angle: number;
+  speed: number;
   size: number;
-  soil: boolean;
+  spin: number;
+  shape: [number, number][];
+  delay: number;
+  /** How fast it grows as it flies at the viewer. */
+  toward: number;
+  tone: number;
+}
+interface Puff {
+  angle: number;
+  distance: number;
+  size: number;
+  delay: number;
 }
 export interface GraveLayout {
   kind: GraveKind;
+  /** Index into GRAVE_HANDS. */
+  index: number;
+  hand: GraveHand;
+  /** CSS px per footage frame px. */
   scale: number;
-  /** Rig scale: the hand reads larger than the hole it climbs from. */
-  hand: number;
-  timing: Timing;
-  hole: Point & { rx: number; ry: number };
-  risen: Point;
-  buried: Point;
-  scrapSize: { width: number; height: number };
-  scrapStart: Point & { sx: number; sy: number };
-  /** Where a page sheet settles after peeling off the viewport. */
-  scrapRest: Point;
-  /** Rig-local placement of the held scrap. */
-  held: Point & { rotation: number; scale: number };
-  debris: Particle[];
-  puff: Particle[];
-}
-
-interface Transform {
-  x: number;
-  y: number;
-  rotation: number;
-  sx: number;
-  sy: number;
+  /** Top-left of the footage layer. */
+  place: Point;
+  hole: Point & { r: number };
+  /** Where the words are taken from: the passage's centre, or the page card's resting place. */
+  word: Point;
+  /** Page-coloured patches over the taken words. */
+  patches: GraveRect[];
+  /** The viewport a page grab's sheet peels off. */
+  sheet: GraveRect;
+  dark: boolean;
+  /** Crack polylines as [x, y, width] points, spreading from the hole. */
+  cracks: [number, number, number][][];
+  crackBox: GraveRect;
+  /** Effect sizes relative to the size the hands were tuned at. */
+  unit: number;
+  chunks: Chunk[];
+  puffs: Puff[];
+  /** The torn edge: a ragged radius profile shared by opening and healing. */
+  rim: number[];
 }
 export interface GravePose {
+  /** Footage steps since the cracks began; fractional between frames. */
+  step: number;
+  /** Debris and dust only fly while the grab plays forwards. */
+  forward: boolean;
   opacity: number;
-  shake: Point;
-  crack: number;
-  crackAlpha: number;
-  open: number;
-  /** Milliseconds since the burst, or negative before it. */
-  debris: number;
-  puff: number;
-  rig: Point & { rotation: number };
-  /** Rise progress: fingers bunched, flared, then hooked into a claw. */
-  reach: number;
-  /** Claw to fist. */
-  curl: number;
-  time: number;
-  scrap: { mode: 'page' | 'held'; world: Transform; opacity: number; crumple: number };
-  mound: number;
-  tomb: number;
-  restAlpha: number;
 }
 export type GraveState =
   | { phase: 'grab'; t: number }
@@ -136,283 +126,288 @@ const lerp = (from: number, to: number, amount: number): number => from + (to - 
 const progress = (t: number, start: number, end: number): number =>
   clamp((t - start) / (end - start), 0, 1);
 const outCubic = (x: number): number => 1 - (1 - x) ** 3;
-const inCubic = (x: number): number => x ** 3;
-const inOutCubic = (x: number): number => (x < 0.5 ? 4 * x ** 3 : 1 - (-2 * x + 2) ** 3 / 2);
-const outBack = (x: number, overshoot = 1.7): number =>
-  1 + (overshoot + 1) * (x - 1) ** 3 + overshoot * (x - 1) ** 2;
-const inBack = (x: number, overshoot = 1.5): number =>
-  (overshoot + 1) * x ** 3 - overshoot * x ** 2;
-const radians = (degrees: number): number => (degrees * Math.PI) / 180;
 
 /** A fixed seed keeps every burst identical, so reviews and tests see the same frames. */
-function particles(count: number, seed: number, scale: number, gentle: boolean): Particle[] {
-  let state = seed;
-  const random = (): number => {
-    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
-    return state / 2_147_483_648;
+function seeded(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return state / 4_294_967_296;
   };
-  return Array.from({ length: count }, (_, index) => ({
-    x: (random() - 0.5) * 70 * scale,
-    y: -random() * 6 * scale,
-    vx: (random() - 0.5) * (gentle ? 0.34 : 0.62) * scale,
-    vy: -(gentle ? 0.18 + random() * 0.2 : 0.32 + random() * 0.32) * scale,
-    spin: (random() - 0.5) * 1.6,
-    size: (gentle ? 2.2 + random() * 2 : 2.5 + random() * 3.5) * scale,
-    soil: gentle || index % 2 === 1,
-  }));
 }
 
-export function graveLayout(scene: GraveScene): GraveLayout {
+/** A random hand, never the one that played last, so consecutive grabs differ. */
+export function pickHand(previous?: number, random: () => number = Math.random): number {
+  const count = GRAVE_HANDS.length;
+  const draw = (range: number) => Math.min(range - 1, Math.floor(random() * range));
+  if (previous === undefined || count < 2) return draw(count);
+  const pick = draw(count - 1);
+  return pick >= previous ? pick + 1 : pick;
+}
+
+/** Splits a packaged hand into its WebP frames, which are stored back to back. */
+export function splitFrames(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer>[] {
+  const frames: Uint8Array<ArrayBuffer>[] = [];
+  const tag = (offset: number) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+  let offset = 0;
+  while (offset < bytes.length) {
+    if (offset + 12 > bytes.length || tag(offset) !== 'RIFF' || tag(offset + 8) !== 'WEBP')
+      throw new Error('The hand footage is not a run of WebP frames.');
+    const size = new DataView(bytes.buffer, bytes.byteOffset + offset + 4, 4).getUint32(0, true);
+    const end = offset + 8 + size + (size % 2);
+    if (end > bytes.length) throw new Error('The hand footage is truncated.');
+    frames.push(bytes.subarray(offset, end));
+    offset = end;
+  }
+  return frames;
+}
+
+const fistStep = (hand: GraveHand): number => PRE + hand.beats.fist;
+const lastStep = (hand: GraveHand): number => PRE + hand.frames - 1 + HOLD + HEAL;
+
+/** Milliseconds from the start of a grab until the fist has closed on the words. */
+export function grabEndFor(hand: GraveHand): number {
+  return (fistStep(hand) + 1) * STEP_MS;
+}
+
+export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
+  const hand = GRAVE_HANDS[index] ?? (GRAVE_HANDS[0] as GraveHand);
   const width = Math.max(1, scene.viewport.width);
   const height = Math.max(1, scene.viewport.height);
-  const scale = clamp(Math.min(width, height) / 760, 0.72, 1);
   const page = scene.kind === 'page';
+  const fist = hand.grip[hand.beats.fist] ?? { x: hand.hole.x, y: hand.hole.y / 2 };
+  const reach = hand.hole.radius * 1.5; // the crater's outer edge, in frame px
+  const below = hand.hole.y + reach - fist.y; // from the fist down to the crater's edge
+  const fontSize = clamp(scene.style?.fontSize ?? 16, 9, 32);
+  const display = Math.min(clamp(fontSize * DISPLAY_PER_FONT_PX, 180, 320), width * 0.75);
+  let scale = display / hand.source;
   const source = scene.source;
-  const sourceCenter = {
-    x: clamp(source.x + source.width / 2, 0, width),
-    y: clamp(source.y + source.height / 2, 0, height),
-  };
+  const word = page
+    ? { x: width / 2, y: Math.max(height / 2, height - 48 - below * scale) }
+    : {
+        x: clamp(source.x + source.width / 2, 0, width),
+        y: clamp(source.y + source.height / 2, 0, height),
+      };
+  // The hole opens below the words: near the foot of the viewport the hand
+  // shrinks to fit, and if it still cannot, it reaches up from lower down.
+  const room = height - 8 - word.y;
+  if (below * scale > room) scale = Math.max(scale * 0.7, room / below);
+  const place = { x: word.x - fist.x * scale, y: word.y - fist.y * scale };
+  const floor = place.y + (hand.hole.y + reach) * scale;
+  if (floor > height - 8) place.y -= floor - (height - 8);
+  const side = reach * scale + 8;
+  const holeX = place.x + hand.hole.x * scale;
+  place.x += clamp(holeX, side, Math.max(side, width - side)) - holeX;
   const hole = {
-    x: page ? width / 2 : clamp(sourceCenter.x, 84 * scale, width - 84 * scale),
-    y: page
-      ? height - 42 * scale
-      : clamp(source.y + source.height + 52 * scale, 176 * scale, height - 26 * scale),
-    rx: 68 * scale,
-    ry: 20 * scale,
+    x: place.x + hand.hole.x * scale,
+    y: place.y + hand.hole.y * scale,
+    r: hand.hole.radius * scale,
   };
-  const scrapSize = page ? { width: 224, height: 128 } : { width: 184, height: 70 };
-  const grip = GRAVE_SPRITE.grip[GRAVE_SPRITE.grip.length - 1] ?? { x: 0, y: -50 };
+  const unit = hole.r / TUNED_HOLE;
+
+  const random = seeded(7);
+  const rim = Array.from({ length: 48 }, () => 0.82 + random() * 0.36);
+  // Plaster cracks running out from where the wall will break.
+  const cracks: [number, number, number][][] = [];
+  const grow = (
+    x: number,
+    y: number,
+    direction: number,
+    length: number,
+    thickness: number,
+    depth: number,
+  ): void => {
+    const points: [number, number, number][] = [[x, y, thickness]];
+    for (let along = 0; along < length; along += 4 * unit) {
+      direction += (random() - 0.5) * 0.8;
+      x += Math.cos(direction) * 4 * unit;
+      y += Math.sin(direction) * 4 * unit;
+      points.push([x, y, thickness * (1 - along / length)]);
+      if (depth < 2 && random() < 0.1)
+        grow(
+          x,
+          y,
+          direction + (random() < 0.5 ? 0.9 : -0.9),
+          length * 0.45,
+          thickness * 0.6,
+          depth + 1,
+        );
+    }
+    cracks.push(points);
+  };
+  for (let index = 0; index < 9; index++) {
+    const angle = (index / 9) * Math.PI * 2 + random() * 0.5;
+    grow(
+      hole.x + Math.cos(angle) * hole.r * 0.5,
+      hole.y + Math.sin(angle) * hole.r * 0.5,
+      angle,
+      hole.r * 0.9 + random() * hole.r * 1.6,
+      1.4 + random() * 1.1,
+      0,
+    );
+  }
+  const xs = cracks.flat().map(([x]) => x);
+  const ys = cracks.flat().map(([, y]) => y);
+  const crackBox = {
+    x: Math.floor(Math.min(...xs) - 4),
+    y: Math.floor(Math.min(...ys) - 4),
+    width: Math.ceil(Math.max(...xs) - Math.min(...xs) + 8),
+    height: Math.ceil(Math.max(...ys) - Math.min(...ys) + 8),
+  };
+  // Plaster thrown out at the viewer, then falling down the wall.
+  const chunks = Array.from({ length: 34 }, (_, index): Chunk => {
+    const angle = random() * Math.PI * 2;
+    const speed = 120 + random() * 320;
+    const sides = 4 + Math.floor(random() * 3);
+    const shape = Array.from({ length: sides }, (_, corner): [number, number] => {
+      const theta = (corner / sides) * Math.PI * 2;
+      const radius = 0.6 + random() * 0.5;
+      return [Math.cos(theta) * radius, Math.sin(theta) * radius];
+    });
+    const big = index < 7;
+    return {
+      angle,
+      speed: speed * (big ? 0.8 : 1.3) * unit,
+      size: (big ? 3 + random() * 3.5 : 0.8 + random() * 1.6) * unit,
+      spin: (random() - 0.5) * 14,
+      shape,
+      delay: random() * 0.06,
+      toward: 0.6 + random() * 1.4,
+      tone: 165 + random() * 60,
+    };
+  });
+  const puffs = Array.from(
+    { length: 10 },
+    (): Puff => ({
+      angle: random() * Math.PI * 2,
+      distance: (20 + random() * 40) * unit,
+      size: (18 + random() * 26) * unit,
+      delay: random() * 0.08,
+    }),
+  );
+
+  const lines = page ? [] : scene.rectangles?.length ? scene.rectangles : [source];
+  const patches = lines
+    .slice(0, 64)
+    .filter((area) => [area.x, area.y, area.width, area.height].every(Number.isFinite))
+    .map((area) => ({
+      x: area.x - 2,
+      y: area.y - 1,
+      width: area.width + 4,
+      height: area.height + 2,
+    }));
+  const rgb = parseColor(scene.style?.background) ?? [255, 255, 255];
   return {
     kind: scene.kind,
+    index: GRAVE_HANDS[index] ? index : 0,
+    hand,
     scale,
-    hand: scale * HAND_SCALE,
-    timing: page ? PAGE_TIMING : TEXT_TIMING,
+    place,
     hole,
-    // The wrist clears the lip so a length of forearm thrusts up out of the grave.
-    risen: { x: hole.x, y: hole.y - 40 * scale },
-    buried: { x: hole.x, y: hole.y + 200 * scale },
-    scrapSize,
-    scrapStart: page
-      ? {
-          x: width / 2,
-          y: height / 2,
-          sx: Math.max(1, (width - 32) / scrapSize.width),
-          sy: Math.max(1, (height - 32) / scrapSize.height),
-        }
-      : { ...sourceCenter, sx: 1, sy: 1 },
-    scrapRest: page ? { x: width / 2, y: height / 2 - 30 * scale } : sourceCenter,
-    // The copy is gripped in the closed fist and sticks out either side of it.
-    held: page
-      ? { x: grip.x, y: grip.y, rotation: -5, scale: 0.42 }
-      : { x: grip.x, y: grip.y, rotation: -6, scale: 0.48 },
-    debris: particles(12, 7, scale, false),
-    puff: particles(7, 19, scale, true),
-  };
-}
-
-function rigAt(layout: GraveLayout, t: number): Point & { rotation: number } {
-  const { timing } = layout;
-  const rise = outBack(progress(t, timing.riseStart, timing.riseEnd), 1.4);
-  const settle = outCubic(progress(t, timing.riseEnd, timing.riseEnd + 140));
-  const swing = outCubic(progress(t, timing.riseStart, timing.riseEnd));
-  const tremble = t > timing.grabEnd ? t - timing.grabEnd : 0;
-  return {
-    x: layout.risen.x + Math.sin(tremble / 23) * 0.8 * layout.scale,
-    y: lerp(layout.buried.y, layout.risen.y, rise) + Math.sin(tremble / 31) * 1.1 * layout.scale,
-    rotation: lerp(lerp(-17, 6, swing), -2, settle) + Math.sin(tremble / 19) * 1.3,
-  };
-}
-
-/** World transform of the held scrap for a given rig pose. */
-function heldWorld(layout: GraveLayout, rig: Point & { rotation: number }, crumple = 0): Transform {
-  const angle = radians(rig.rotation);
-  const x = layout.held.x * layout.hand;
-  const y = layout.held.y * layout.hand;
-  const scale = layout.held.scale * layout.hand;
-  return {
-    x: rig.x + x * Math.cos(angle) - y * Math.sin(angle),
-    y: rig.y + x * Math.sin(angle) + y * Math.cos(angle),
-    rotation: rig.rotation + layout.held.rotation - crumple * 4,
-    sx: scale * (1 - crumple * 0.06),
-    sy: scale * (1 - crumple * 0.14),
-  };
-}
-
-function grabPose(layout: GraveLayout, t: number): GravePose {
-  const { timing } = layout;
-  const shakeAmount = t >= 60 && t <= 280 ? 3 * layout.scale * (1 - (t - 60) / 220) : 0;
-  const rig = rigAt(layout, t);
-  const curl = inOutCubic(progress(t, timing.curlStart, timing.curlEnd));
-  let scrap: GravePose['scrap'];
-  if (t < timing.swap) {
-    const target = heldWorld(layout, rigAt(layout, timing.swap));
-    const fly = inOutCubic(progress(t, timing.flyStart, timing.swap));
-    const start = layout.scrapStart;
-    let x: number;
-    let y: number;
-    let sx: number;
-    let sy: number;
-    let rotation: number;
-    let opacity: number;
-    if (layout.kind === 'page') {
-      // The page sheet peels away from the whole viewport into a card first.
-      const peel = outCubic(progress(t, 0, 300));
-      x = lerp(start.x, layout.scrapRest.x, peel);
-      y = lerp(start.y, layout.scrapRest.y, peel);
-      sx = lerp(start.sx, 1, peel);
-      sy = lerp(start.sy, 1, peel);
-      rotation = lerp(0, -4, peel);
-      opacity = progress(t, 0, 220);
-    } else {
-      // The words tear free of the passage and lift before being snatched.
-      const appear = outBack(progress(t, 0, 170), 2);
-      const lift = outCubic(progress(t, 90, 320));
-      x = start.x;
-      y = start.y - lift * 10 * layout.scale;
-      sx = lerp(0.55, 1, appear) * (1 + lift * 0.05);
-      sy = sx;
-      rotation = lift * -4;
-      opacity = progress(t, 0, 110);
-    }
-    scrap = {
-      mode: 'page',
-      world: {
-        x: lerp(x, target.x, fly),
-        y: lerp(y, target.y, fly),
-        rotation: lerp(rotation, target.rotation, fly),
-        sx: lerp(sx, target.sx, fly),
-        sy: lerp(sy, target.sy, fly),
-      },
-      opacity,
-      crumple: 0,
-    };
-  } else {
-    const crumple = outCubic(progress(t, timing.swap, timing.swap + 130));
-    scrap = { mode: 'held', world: heldWorld(layout, rig, crumple), opacity: 1, crumple };
-  }
-  return {
-    opacity: 1,
-    shake: { x: Math.sin(t * 0.9) * shakeAmount, y: Math.cos(t * 1.3) * shakeAmount },
-    crack: outCubic(progress(t, 0, 150)),
-    crackAlpha: 1,
-    open: outBack(progress(t, 50, 300), 1.9),
-    debris: t - 80,
-    puff: -1,
-    rig,
-    reach: progress(t, timing.riseStart, timing.curlStart),
-    curl,
-    time: t,
-    scrap,
-    mound: 0,
-    tomb: 0,
-    restAlpha: 1,
-  };
-}
-
-function buryPose(layout: GraveLayout, u: number, from: GravePose): GravePose {
-  const anticipation = outCubic(progress(u, 0, 90)) * -8 * layout.scale;
-  const drop = inCubic(progress(u, 90, 480)) * (layout.buried.y - from.rig.y + 24 * layout.scale);
-  const rig = {
-    x: from.rig.x,
-    y: from.rig.y + anticipation + drop,
-    rotation: from.rig.rotation - 8 * outCubic(progress(u, 90, 480)),
-  };
-  const scrap: GravePose['scrap'] =
-    from.scrap.mode === 'held'
-      ? { ...from.scrap, world: heldWorld(layout, rig, from.scrap.crumple) }
-      : {
-          ...from.scrap,
-          world: { ...from.scrap.world, y: from.scrap.world.y + (rig.y - from.rig.y) },
-        };
-  const rest = outBack(progress(u, 560, 700), 2.2);
-  return {
-    ...from,
-    shake: { x: 0, y: 0 },
-    crackAlpha: from.crackAlpha * (1 - progress(u, 300, 700)),
-    open: from.open * (1 - inBack(progress(u, 400, 620))),
-    debris: -1,
-    puff: u - 380,
-    rig,
-    time: from.time + u,
-    scrap,
-    mound: rest,
-    tomb: outBack(progress(u, 610, 750), 2.4),
-    restAlpha: 1 - progress(u, 800, GRAVE_DURATION.bury),
-  };
-}
-
-function releasePose(layout: GraveLayout, u: number, from: GravePose): GravePose {
-  const sink = inCubic(progress(u, 110, 380));
-  const rig = {
-    x: from.rig.x,
-    y: lerp(from.rig.y, layout.buried.y, sink),
-    rotation: from.rig.rotation + 6 * sink,
-  };
-  const opening = progress(u, 0, 130);
-  const flutter = progress(u, 130, 400);
-  // Fingers open first; the scrap then drifts back toward its passage and fades.
-  const base = from.scrap.mode === 'held' ? heldWorld(layout, from.rig) : from.scrap.world;
-  const scrap: GravePose['scrap'] =
-    from.scrap.mode === 'held' && u < 130
-      ? { ...from.scrap, world: heldWorld(layout, rig, from.scrap.crumple * (1 - opening)) }
-      : {
-          mode: 'page',
-          world: {
-            x: lerp(base.x, layout.scrapRest.x, outCubic(flutter) * 0.6),
-            y: lerp(base.y, layout.scrapRest.y, outCubic(flutter) * 0.6),
-            rotation: base.rotation + Math.sin(flutter * Math.PI * 2) * 9,
-            sx: base.sx,
-            sy: base.sy,
-          },
-          opacity: from.scrap.opacity * (1 - flutter),
-          crumple: 0,
-        };
-  return {
-    ...from,
-    shake: { x: 0, y: 0 },
-    crackAlpha: from.crackAlpha * (1 - progress(u, 200, 440)),
-    open: from.open * (1 - inCubic(progress(u, 250, 440))),
-    debris: -1,
-    puff: -1,
-    rig,
-    curl: from.curl * (1 - opening),
-    time: from.time + u,
-    scrap,
+    word,
+    patches,
+    sheet: { x: 0, y: 0, width, height },
+    dark: (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 < 0.4,
+    cracks,
+    crackBox,
+    unit,
+    chunks,
+    puffs,
+    rim,
   };
 }
 
 export function poseAt(layout: GraveLayout, state: GraveState): GravePose {
-  if (state.phase === 'grab') return grabPose(layout, Math.max(0, state.t));
+  const { hand } = layout;
+  if (state.phase === 'grab')
+    return {
+      step: Math.min(Math.max(0, state.t) / STEP_MS, fistStep(hand)),
+      forward: true,
+      opacity: 1,
+    };
   const u = Math.max(0, state.u);
-  if (state.phase === 'bury') return buryPose(layout, u, state.from);
-  if (state.phase === 'release') return releasePose(layout, u, state.from);
-  return { ...state.from, opacity: state.from.opacity * (1 - progress(u, 0, GRAVE_DURATION.fade)) };
+  const { from } = state;
+  if (state.phase === 'bury')
+    return { ...from, step: Math.min(from.step + u / STEP_MS, lastStep(hand)), forward: true };
+  if (state.phase === 'release') {
+    const duration = releaseDuration(from);
+    return {
+      ...from,
+      step: duration ? from.step * (1 - Math.min(1, u / duration)) : 0,
+      forward: false,
+    };
+  }
+  return { ...from, opacity: from.opacity * (1 - progress(u, 0, GRAVE_DURATION.fade)) };
+}
+
+/** Milliseconds a bury takes from a pose: the yank back through the hole, then the heal. */
+export function buryDuration(layout: GraveLayout, from: GravePose): number {
+  return Math.max(0, lastStep(layout.hand) - from.step) * STEP_MS;
+}
+
+/** Milliseconds a release takes from a pose: the grab rewound to the first crack. */
+export function releaseDuration(from: GravePose): number {
+  return Math.min(RELEASE_MS, (from.step * STEP_MS) / 2);
+}
+
+/** The footage frame shown at a step, or null before the wall gives way. */
+export function footageFrame(layout: GraveLayout, step: number): number | null {
+  const frame = Math.floor(step) - PRE;
+  return frame < 0 ? null : Math.min(frame, layout.hand.frames - 1);
+}
+
+/** How far the hole has healed over, 0 to 1. */
+export function healAt(layout: GraveLayout, step: number): number {
+  return progress(step - PRE - (layout.hand.frames - 1), HOLD, HOLD + HEAL);
+}
+
+export interface ScrapPose {
+  visible: boolean;
+  x: number;
+  y: number;
+  rotation: number;
+  sx: number;
+  sy: number;
+  skew: number;
 }
 
 /**
- * The visible region for anything climbing out of the grave, as an SVG clip
- * path. Both shapes wind clockwise, so where they overlap the nonzero rule
- * keeps the arm instead of cancelling it out.
+ * The paper copy: for text it appears where the fingers close on the words and
+ * rides in the fist, crumpling; a page's sheet first peels off the viewport
+ * into a card for the hand to slap down on.
  */
-export function graveClip(x: number, y: number, rx: number, ry: number): string {
-  const fixed = (value: number) => value.toFixed(2);
-  const above = `M-99999 -99999H99999V${fixed(y)}H-99999Z`;
-  if (rx <= 0.5) return above;
-  return `${above}M${fixed(x - rx)} ${fixed(y)}a${fixed(rx)} ${fixed(ry)} 0 1 1 ${fixed(2 * rx)} 0a${fixed(rx)} ${fixed(ry)} 0 1 1 ${fixed(-2 * rx)} 0Z`;
+export function scrapAt(layout: GraveLayout, step: number): ScrapPose {
+  const { hand, word, scale } = layout;
+  const frame = Math.floor(step) - PRE;
+  const resting = { visible: true, ...word, rotation: 0, sx: 1, sy: 1, skew: 0 };
+  if (frame < hand.beats.take) {
+    if (layout.kind === 'text') return { ...resting, visible: false };
+    const peel = outCubic(progress(step, 0, PRE + hand.beats.slam));
+    const { sheet } = layout;
+    return {
+      ...resting,
+      x: lerp(sheet.x + sheet.width / 2, word.x, peel),
+      y: lerp(sheet.y + sheet.height / 2, word.y, peel),
+      rotation: -4 * peel,
+      sx: lerp(sheet.width / CARD.width, 1, peel),
+      sy: lerp(sheet.height / CARD.height, 1, peel),
+    };
+  }
+  const grip = frame < hand.frames ? hand.grip[frame] : null;
+  if (!grip) return { ...resting, visible: false };
+  const k = Math.min(1, (step - PRE - hand.beats.take) / 4);
+  const crumple = 1 - 0.42 * k;
+  return {
+    visible: true,
+    // A crumpled end of the copy shows past the thumb.
+    x: lerp(word.x, layout.place.x + grip.x * scale, k) - 21 * scale * k,
+    y: lerp(word.y, layout.place.y + grip.y * scale, k),
+    rotation: (layout.kind === 'page' ? -4 : 0) - 14 * k,
+    sx: crumple,
+    sy: crumple * (1 - 0.25 * k),
+    skew: 8 * k,
+  };
 }
-
-/** The atlas frame for a pose: the rise until the fingers start to close, then the grab. */
-export function spriteFrame(pose: Pick<GravePose, 'reach' | 'curl'>): number {
-  const { rise, grab } = GRAVE_SPRITE;
-  if (pose.curl > 0) return rise + Math.round(clamp(pose.curl, 0, 1) * (grab - 1));
-  return Math.round(clamp(pose.reach, 0, 1) * (rise - 1));
-}
-
-// ---------------------------------------------------------------------------
-// Rendering
-
-/** The rig is drawn this much larger than the hole and debris. */
-const HAND_SCALE = 1.6;
 
 function parseColor(value: string | undefined): [number, number, number] | null {
   const match = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)/u.exec(
@@ -424,264 +419,225 @@ function parseColor(value: string | undefined): [number, number, number] | null 
   if (alpha < 0.5) return null;
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
-const shade = (rgb: [number, number, number], factor: number): string =>
-  `rgb(${rgb.map((channel) => Math.round(clamp(channel * factor, 0, 255))).join(',')})`;
+
+type Decode = (frame: Blob) => Promise<ImageBitmap>;
+
+/** One hand's frames: kept as compressed bytes, decoded only around the frame on screen. */
+class Footage {
+  private readonly decoded = new Map<number, ImageBitmap>();
+  private readonly pending = new Set<number>();
+  private generation = 0;
+
+  constructor(
+    readonly frames: readonly Blob[],
+    private readonly decode: Decode,
+    private readonly ready: () => void,
+  ) {}
+
+  /** Decodes the frames just ahead along the direction of play and lets the rest go. */
+  want(index: number, forward: boolean): void {
+    const low = forward ? index - 1 : index - 6;
+    const high = forward ? index + 6 : index + 1;
+    for (const [frame, bitmap] of this.decoded)
+      if (frame < low || frame > high) {
+        bitmap.close();
+        this.decoded.delete(frame);
+      }
+    const generation = this.generation;
+    for (let frame = Math.max(0, low); frame <= Math.min(high, this.frames.length - 1); frame++) {
+      const blob = this.frames[frame];
+      if (!blob || this.decoded.has(frame) || this.pending.has(frame)) continue;
+      this.pending.add(frame);
+      this.decode(blob).then(
+        (bitmap) => {
+          this.pending.delete(frame);
+          if (generation !== this.generation) bitmap.close();
+          else {
+            this.decoded.set(frame, bitmap);
+            this.ready();
+          }
+        },
+        () => {
+          this.pending.delete(frame);
+        },
+      );
+    }
+  }
+
+  /** The decoded frame at `index`, or failing that the nearest one already played. */
+  get(index: number, forward: boolean): ImageBitmap | null {
+    for (let back = 0; back < 4; back++) {
+      const bitmap = this.decoded.get(forward ? index - back : index + back);
+      if (bitmap) return bitmap;
+    }
+    return null;
+  }
+
+  release(): void {
+    this.generation += 1;
+    for (const bitmap of this.decoded.values()) bitmap.close();
+    this.decoded.clear();
+  }
+}
 
 export class GraveEffect {
-  readonly element: SVGSVGElement;
-  private readonly scene: SVGGElement;
-  private readonly clip: SVGPathElement;
-  private readonly cracks: SVGPathElement[] = [];
-  private readonly crackGroup: SVGGElement;
-  private readonly holeBack: SVGGElement;
-  private readonly holeFront: SVGGElement;
-  private readonly pitShade: SVGEllipseElement;
-  private readonly rig: SVGGElement;
-  private readonly canvas: HTMLCanvasElement;
-  private sprite: CanvasImageSource | null = null;
-  private drawnFrame = -1;
-  private readonly pageScrap: SVGGElement;
-  private readonly heldScrap: SVGGElement;
-  private readonly scrapObjects: SVGForeignObjectElement[] = [];
-  private readonly debris: SVGGElement[] = [];
-  private readonly puff: SVGGElement[] = [];
-  private readonly mound: SVGGElement;
-  private readonly tomb: SVGGElement;
+  readonly element: HTMLDivElement;
+  private readonly cracks: HTMLCanvasElement;
+  private readonly patches: HTMLDivElement;
+  private readonly scrap: HTMLDivElement;
+  private readonly sprite: HTMLCanvasElement;
+  private readonly fx: HTMLCanvasElement;
+  private readonly work: HTMLCanvasElement;
+  private readonly footage = new Map<number, Footage>();
   private layout: GraveLayout | null = null;
   private state: GraveState | null = null;
+  private painted: GravePose | null = null;
   private startedAt = 0;
   /** A held still keeps its pose; the clock no longer advances it. */
   private held = false;
   private frame: number | undefined;
 
-  constructor(private readonly document: Document) {
-    const svg = <K extends keyof SVGElementTagNameMap>(
-      tag: K,
-      attributes: Record<string, string | number> = {},
-      parent?: Element,
-    ): SVGElementTagNameMap[K] => {
-      const element = document.createElementNS(SVG, tag);
-      for (const [name, value] of Object.entries(attributes))
-        element.setAttribute(name, String(value));
-      parent?.append(element);
+  constructor(
+    private readonly document: Document,
+    private readonly decode: Decode = (frame) => {
+      const view = document.defaultView;
+      if (!view?.createImageBitmap) return Promise.reject(new Error('No image decoder'));
+      return view.createImageBitmap(frame);
+    },
+  ) {
+    const node = <T extends keyof HTMLElementTagNameMap>(tag: T, className: string) => {
+      const element = document.createElement(tag);
+      element.className = className;
       return element;
     };
-    this.element = svg('svg', { class: 'grave', 'aria-hidden': 'true' });
-    const defs = svg('defs', {}, this.element);
-    const gradient = (
-      id: string,
-      stops: [number, string, number?][],
-      attributes: Record<string, string | number> = {},
-      tag: 'linearGradient' | 'radialGradient' = 'linearGradient',
-    ): void => {
-      const element = svg(tag, { id, ...attributes }, defs);
-      for (const [offset, color, opacity = 1] of stops)
-        svg('stop', { offset, 'stop-color': color, 'stop-opacity': opacity }, element);
-    };
-    gradient(
-      'zh-pit',
-      [
-        [0, '#030302'],
-        [0.6, '#140e09'],
-        [1, '#3b2b1b'],
-      ],
-      { cx: 0.5, cy: 0.38, r: 0.62 },
-      'radialGradient',
-    );
-    // The arm darkens as it sinks into the pit, deepest under the front lip.
-    gradient(
-      'zh-depth',
-      [
-        [0, '#0b0704', 0.25],
-        [0.5, '#0b0704', 0.62],
-        [1, '#0b0704', 0.94],
-      ],
-      { x1: 0, y1: 0, x2: 0, y2: 1 },
-    );
-    gradient(
-      'zh-soil',
-      [
-        [0, '#7b6143'],
-        [1, '#4a3826'],
-      ],
-      { x1: 0, y1: 0, x2: 0, y2: 1 },
-    );
-    const clipPath = svg(
-      'clipPath',
-      { id: 'zh-grave-clip', clipPathUnits: 'userSpaceOnUse' },
-      defs,
-    );
-    this.clip = svg('path', {}, clipPath);
-
-    this.scene = svg('g', { class: 'grave-scene' }, this.element);
-    this.crackGroup = svg('g', { class: 'grave-cracks' }, this.scene);
-    const crackSpecs: [number, number][] = [
-      [-168, 64],
-      [-128, 46],
-      [-64, 72],
-      [-18, 54],
-      [22, 40],
-      [158, 50],
-    ];
-    for (const [index, [angle, length]] of crackSpecs.entries()) {
-      const points: string[] = ['M0 0'];
-      for (let step = 1; step <= 4; step++) {
-        const reach = (length * step) / 4;
-        const jitter = ((index * 7 + step * 13) % 9) - 4;
-        const direction = radians(angle + jitter * 3);
-        points.push(
-          `L${(Math.cos(direction) * reach).toFixed(1)} ${(Math.sin(direction) * reach * 0.62).toFixed(1)}`,
-        );
-      }
-      this.cracks.push(
-        svg('path', { d: points.join(''), pathLength: 1, class: 'crack' }, this.crackGroup),
-      );
-    }
-
-    this.holeBack = svg('g', { class: 'grave-hole' }, this.scene);
-    // The loose scrap stays behind the rising hand, so the hand is never hidden by paper.
-    this.pageScrap = svg('g', { class: 'grave-scrap' }, this.scene);
-    const clipped = svg('g', { 'clip-path': 'url(#zh-grave-clip)' }, this.scene);
-    this.rig = svg('g', { class: 'grave-rig' }, clipped);
-    this.pitShade = svg('ellipse', { fill: 'url(#zh-depth)' }, this.scene);
-    this.holeFront = svg('g', { class: 'grave-lip' }, this.scene);
-    const debrisGroup = svg('g', { class: 'grave-debris' }, this.scene);
-    const restGroup = svg('g', { class: 'grave-rest' }, this.scene);
-
-    // The held copy sits behind the hand, so the fist closes in front of it.
-    this.heldScrap = svg('g', { class: 'grave-scrap held' }, this.rig);
-    const { frame, anchor, unitsPerPx } = GRAVE_SPRITE;
-    const sprite = svg(
-      'foreignObject',
-      {
-        class: 'grave-hand',
-        x: -anchor.x * unitsPerPx,
-        y: -anchor.y * unitsPerPx,
-        width: frame.width * unitsPerPx,
-        height: frame.height * unitsPerPx,
-      },
-      this.rig,
-    );
-    this.canvas = document.createElementNS(XHTML, 'canvas') as HTMLCanvasElement;
-    this.canvas.width = frame.width;
-    this.canvas.height = frame.height;
-    sprite.append(this.canvas);
-    for (const [group, scrap] of [
-      [this.pageScrap, 'page'],
-      [this.heldScrap, 'held'],
-    ] as const) {
-      const object = svg('foreignObject', { class: `scrap-${scrap}` }, group);
-      this.scrapObjects.push(object);
-    }
-
-    for (const particle of [...particles(12, 7, 1, false), ...particles(7, 19, 1, true)]) {
-      const group = svg('g', { opacity: 0 }, debrisGroup);
-      if (particle.soil) svg('circle', { r: 1, class: 'clod' }, group);
-      else svg('path', { d: 'M-1 -0.7L1.1 -0.2L-0.2 1Z', class: 'shard' }, group);
-      (this.debris.length < 12 ? this.debris : this.puff).push(group);
-    }
-    this.mound = svg('g', { opacity: 0 }, restGroup);
-    svg(
-      'path',
-      {
-        d: 'M-42 0Q-30 -15 0 -16Q30 -15 42 0Z',
-        fill: 'url(#zh-soil)',
-        stroke: '#33261a',
-        'stroke-width': 1.2,
-      },
-      this.mound,
-    );
-    this.tomb = svg('g', { opacity: 0 }, restGroup);
-    svg(
-      'path',
-      {
-        d: 'M-9 0V-15A9 9 0 0 1 9 -15V0Z',
-        fill: '#a9aea5',
-        stroke: '#3a3e37',
-        'stroke-width': 1.4,
-      },
-      this.tomb,
-    );
-    svg(
-      'path',
-      { d: 'M0 -19V-6M-4 -14H4', stroke: '#4d524a', 'stroke-width': 1.6, fill: 'none' },
-      this.tomb,
-    );
-    this.element.setAttribute('hidden', '');
+    this.element = node('div', 'grave');
+    this.element.setAttribute('aria-hidden', 'true');
+    this.cracks = node('canvas', 'grave-cracks');
+    this.patches = node('div', 'grave-patches');
+    // The copy sits under the footage, so the fingers close over it.
+    this.scrap = node('div', 'grave-scrap');
+    this.sprite = node('canvas', 'grave-hand');
+    this.fx = node('canvas', 'grave-fx');
+    this.work = document.createElement('canvas');
+    this.element.append(this.cracks, this.patches, this.scrap, this.sprite, this.fx);
+    this.element.hidden = true;
   }
 
-  /** Supply the decoded frame atlas. Until it arrives the grave opens without a hand. */
-  useSprite(sprite: CanvasImageSource | null): void {
-    this.sprite = sprite;
-    this.drawnFrame = -1;
-    this.render();
+  /** Supply a hand's packaged frames. Until they arrive its grave opens without a hand. */
+  useFootage(index: number, bytes: Uint8Array<ArrayBuffer>): void {
+    let frames: Blob[];
+    try {
+      frames = splitFrames(bytes).map((frame) => new Blob([frame], { type: 'image/webp' }));
+    } catch {
+      return;
+    }
+    this.footage.get(index)?.release();
+    this.footage.set(
+      index,
+      new Footage(frames, this.decode, () => {
+        this.painted = null;
+        if (this.held || this.frame === undefined) this.render();
+      }),
+    );
+    if (this.layout?.index === index) {
+      this.painted = null;
+      this.render();
+    }
   }
 
-  /** Begin a new grab. Any previous scene is discarded. */
-  start(scene: GraveScene): void {
-    this.layout = graveLayout(scene);
-    const { width, height } = scene.viewport;
-    this.element.setAttribute('width', String(width));
-    this.element.setAttribute('height', String(height));
-    this.element.setAttribute('viewBox', `0 0 ${width} ${height}`);
-    const rgb = parseColor(scene.style?.background) ?? [246, 243, 234];
-    const ink = scene.style?.color ?? '#28301f';
-    this.element.style.setProperty('--paper', shade(rgb, 1));
-    this.element.style.setProperty('--paper-ink', ink);
-    this.element.style.setProperty('--crack', ink);
-    if (scene.style?.fontFamily)
-      this.element.style.setProperty('--paper-font', scene.style.fontFamily);
-    else this.element.style.removeProperty('--paper-font');
-    this.buildHole(rgb);
+  /** Begin a new grab with one of the hands. Any previous scene is discarded. */
+  start(scene: GraveScene, hand = 0): void {
+    this.releaseFrames();
+    const layout = graveLayout(scene, hand);
+    this.layout = layout;
+    const style = this.element.style;
+    style.setProperty('--paper', scene.style?.background || '#ffffff');
+    style.setProperty('--paper-ink', scene.style?.color || '#28301f');
+    if (scene.style?.fontFamily) style.setProperty('--paper-font', scene.style.fontFamily);
+    else style.removeProperty('--paper-font');
+    style.setProperty('--paper-size', `${clamp(scene.style?.fontSize ?? 16, 9, 32)}px`);
+    this.fillPatches(layout);
     this.fillScrap(scene);
+    const dpr = this.dpr();
+    this.size(this.cracks, layout.crackBox, dpr);
+    const { width, height } = layout.hand.size;
+    this.size(
+      this.sprite,
+      { ...layout.place, width: width * layout.scale, height: height * layout.scale },
+      dpr,
+    );
+    this.work.width = width;
+    this.work.height = height;
     this.state = { phase: 'grab', t: 0 };
+    this.painted = null;
     this.startedAt = this.now();
     this.held = false;
-    this.element.removeAttribute('hidden');
+    this.element.hidden = false;
     this.render();
     this.loop();
   }
 
-  bury(): void {
-    this.transition('bury');
+  /** Pull the copy under and heal the hole; returns how long that takes. */
+  bury(): number {
+    const from = this.transition('bury');
+    return from && this.layout ? buryDuration(this.layout, from) : 0;
   }
 
-  release(): void {
-    this.transition('release');
+  /** Rewind the grab, putting the words back; returns how long that takes. */
+  release(): number {
+    const from = this.transition('release');
+    return from ? releaseDuration(from) : 0;
   }
 
   fade(): void {
     this.transition('fade');
   }
 
-  /** Render one still pose without running the loop (reduced motion). */
+  /** Render the closed fist as a still pose without running the loop (reduced motion). */
   hold(): void {
     if (!this.layout) return;
     this.stop();
-    this.state = { phase: 'grab', t: this.layout.timing.grabEnd };
+    this.state = { phase: 'grab', t: this.grabEnd };
     this.held = true;
-    this.paint(poseAt(this.layout, this.state));
+    this.render();
   }
 
   hide(): void {
     this.stop();
+    this.releaseFrames();
     this.layout = null;
     this.state = null;
+    this.painted = null;
     this.held = false;
-    this.element.setAttribute('hidden', '');
+    this.element.hidden = true;
+    this.patches.replaceChildren();
+    this.scrap.replaceChildren();
+    // Full-size canvases are only held while a grab is on screen.
+    for (const canvas of [this.cracks, this.sprite, this.fx, this.work]) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
   }
 
   get active(): boolean {
     return this.layout !== null;
   }
 
-  /** Milliseconds from start until the scrap is firmly held. */
+  /** Milliseconds from start until the copy is firmly held. */
   get grabEnd(): number {
-    return this.layout?.timing.grabEnd ?? 0;
+    return this.layout ? grabEndFor(this.layout.hand) : 0;
   }
 
   private now(): number {
     return this.document.defaultView?.performance.now() ?? 0;
+  }
+
+  private dpr(): number {
+    return clamp(this.document.defaultView?.devicePixelRatio ?? 1, 1, 2);
+  }
+
+  private releaseFrames(): void {
+    if (this.layout) this.footage.get(this.layout.index)?.release();
   }
 
   private current(): GraveState | null {
@@ -692,15 +648,16 @@ export class GraveEffect {
       : { ...this.state, u: elapsed };
   }
 
-  private transition(phase: 'bury' | 'release' | 'fade'): void {
+  private transition(phase: 'bury' | 'release' | 'fade'): GravePose | null {
     const current = this.current();
-    if (!this.layout || !current) return;
+    if (!this.layout || !current) return null;
     const from = poseAt(this.layout, current);
     this.state = { phase, u: 0, from };
     this.startedAt = this.now();
     this.held = false;
     this.render();
     this.loop();
+    return from;
   }
 
   private loop(): void {
@@ -723,227 +680,290 @@ export class GraveEffect {
   private render(): void {
     const state = this.current();
     if (!this.layout || !state) return;
-    this.paint(poseAt(this.layout, state));
+    const pose = poseAt(this.layout, state);
+    const last = this.painted;
+    if (
+      last &&
+      last.step === pose.step &&
+      last.forward === pose.forward &&
+      last.opacity === pose.opacity
+    )
+      return;
+    this.painted = pose;
+    this.paint(this.layout, pose);
   }
 
-  private drawSprite(frame: number): void {
-    if (!this.sprite || frame === this.drawnFrame) return;
-    const context = this.canvas.getContext('2d');
-    if (!context) return;
-    const { width, height } = GRAVE_SPRITE.frame;
-    const column = frame % GRAVE_SPRITE.columns;
-    const row = Math.floor(frame / GRAVE_SPRITE.columns);
-    context.clearRect(0, 0, width, height);
-    context.drawImage(
-      this.sprite,
-      column * width,
-      row * height,
-      width,
-      height,
-      0,
-      0,
-      width,
-      height,
-    );
-    this.drawnFrame = frame;
+  /** Sizes a canvas to a page box; its context then draws in page px. */
+  private size(canvas: HTMLCanvasElement, box: GraveRect, dpr: number): void {
+    canvas.width = Math.max(1, Math.round(box.width * dpr));
+    canvas.height = Math.max(1, Math.round(box.height * dpr));
+    canvas.style.width = `${box.width}px`;
+    canvas.style.height = `${box.height}px`;
+    canvas.style.transform = `translate(${box.x}px, ${box.y}px)`;
   }
 
-  private buildHole(rgb: [number, number, number]): void {
-    const layout = this.layout;
-    if (!layout) return;
-    const { rx, ry } = layout.hole;
-    const paper = shade(rgb, 1);
-    const underside = shade(rgb, 0.8);
-    const edge = shade(rgb, 0.55);
-    const svg = (tag: string, attributes: Record<string, string | number>, parent: Element) => {
-      const element = this.document.createElementNS(SVG, tag);
-      for (const [name, value] of Object.entries(attributes))
-        element.setAttribute(name, String(value));
-      parent.append(element);
-      return element;
-    };
-    this.holeBack.replaceChildren();
-    this.holeFront.replaceChildren();
-    this.pitShade.setAttribute('rx', String(rx));
-    this.pitShade.setAttribute('ry', String(ry));
-    svg('ellipse', { rx: rx * 1.22, ry: ry * 1.5, fill: '#5b4630', opacity: 0.45 }, this.holeBack);
-    const flap = (angle: number, spread: number, reach: number, parent: Element, fill: string) => {
-      const point = (theta: number, factor = 1) =>
-        `${(Math.cos(theta) * rx * factor).toFixed(1)} ${(Math.sin(theta) * ry * factor).toFixed(1)}`;
-      const theta = radians(angle);
-      svg(
-        'path',
-        {
-          d: `M${point(theta - radians(spread))}L${point(theta, 1 + reach)}L${point(theta + radians(spread))}Z`,
-          fill,
-          stroke: edge,
-          'stroke-width': 1,
-          'stroke-linejoin': 'round',
-        },
-        parent,
-      );
-    };
-    for (const [angle, spread, reach] of [
-      [196, 15, 0.42],
-      [226, 13, 0.72],
-      [262, 16, 0.95],
-      [300, 12, 0.7],
-      [334, 15, 0.46],
-    ] as const)
-      flap(angle, spread, reach, this.holeBack, paper);
-    svg(
-      'ellipse',
-      { rx, ry, fill: 'url(#zh-pit)', stroke: '#2c2116', 'stroke-width': 2.5 },
-      this.holeBack,
+  private fillPatches(layout: GraveLayout): void {
+    this.patches.replaceChildren(
+      ...layout.patches.map((area) => {
+        const patch = this.document.createElement('div');
+        patch.style.left = `${area.x}px`;
+        patch.style.top = `${area.y}px`;
+        patch.style.width = `${area.width}px`;
+        patch.style.height = `${area.height}px`;
+        return patch;
+      }),
     );
-    svg(
-      'path',
-      {
-        d: `M${-rx} 0A${rx} ${ry} 0 0 0 ${rx} 0`,
-        fill: 'none',
-        stroke: '#4a3826',
-        'stroke-width': 4,
-        'stroke-linecap': 'round',
-      },
-      this.holeFront,
-    );
-    for (const [angle, spread, reach] of [
-      [22, 13, 0.6],
-      [62, 15, 1.1],
-      [104, 14, 0.9],
-      [146, 13, 0.62],
-    ] as const)
-      flap(angle, spread, reach, this.holeFront, underside);
-    for (const [x, y, r] of [
-      [-0.78, 0.55, 3.4],
-      [-0.3, 0.98, 2.6],
-      [0.42, 0.9, 3.8],
-      [0.86, 0.4, 2.8],
-    ] as const)
-      svg(
-        'circle',
-        {
-          cx: x * rx,
-          cy: y * ry,
-          r: r * layout.scale,
-          fill: '#5d4730',
-          stroke: '#2e2318',
-          'stroke-width': 0.8,
-        },
-        this.holeFront,
-      );
   }
 
   private fillScrap(scene: GraveScene): void {
-    const layout = this.layout;
-    if (!layout) return;
-    const { width, height } = layout.scrapSize;
-    const host = scene.detail ?? '';
-    for (const object of this.scrapObjects) {
-      object.setAttribute('x', String(-width / 2));
-      object.setAttribute('y', String(-height / 2));
-      object.setAttribute('width', String(width));
-      object.setAttribute('height', String(height));
-      const slip = this.document.createElementNS(XHTML, 'div') as HTMLDivElement;
-      slip.className = `slip ${scene.kind}`;
-      const words = this.document.createElementNS(XHTML, 'p') as HTMLParagraphElement;
-      words.className = 'grabbed';
-      words.textContent = scene.text.slice(0, 220) || 'Source reference';
-      slip.append(words);
-      if (scene.kind === 'page') {
-        const detail = this.document.createElementNS(XHTML, 'p') as HTMLParagraphElement;
-        detail.className = 'host';
-        detail.textContent = host.slice(0, 80);
-        slip.append(detail);
-        for (let line = 0; line < 3; line++) slip.append(this.document.createElementNS(XHTML, 'i'));
+    const slip = this.document.createElement('div');
+    slip.className = `slip ${scene.kind}`;
+    const words = this.document.createElement('p');
+    words.className = 'grabbed';
+    words.textContent = scene.text.slice(0, 220) || 'Source reference';
+    slip.append(words);
+    if (scene.kind === 'page') {
+      const detail = this.document.createElement('p');
+      detail.className = 'host';
+      detail.textContent = (scene.detail ?? '').slice(0, 80);
+      slip.append(detail);
+      for (let line = 0; line < 3; line++) slip.append(this.document.createElement('i'));
+    }
+    this.scrap.replaceChildren(slip);
+  }
+
+  private paint(layout: GraveLayout, pose: GravePose): void {
+    this.element.style.opacity = pose.opacity.toFixed(3);
+    this.drawCracks(layout, pose.step);
+    this.drawFootage(layout, pose);
+    this.drawFx(layout, pose);
+    this.placeWords(layout, pose.step);
+  }
+
+  private drawCracks(layout: GraveLayout, step: number): void {
+    const context = this.cracks.getContext('2d');
+    if (!context) return;
+    const dpr = this.dpr();
+    const box = layout.crackBox;
+    context.setTransform(dpr, 0, 0, dpr, -box.x * dpr, -box.y * dpr);
+    context.clearRect(box.x, box.y, box.width, box.height);
+    const spread = Math.min(1, (step + 1) / (PRE + 1));
+    const fade = 1 - healAt(layout, step);
+    if (fade <= 0) return;
+    context.lineCap = 'round';
+    for (const points of layout.cracks) {
+      const count = Math.max(1, Math.floor(points.length * spread));
+      for (let index = 1; index <= count && index < points.length; index++) {
+        const [x0, y0] = points[index - 1] as [number, number, number];
+        const [x1, y1, thickness] = points[index] as [number, number, number];
+        // A lit lower lip, then the dark split itself.
+        context.globalAlpha = fade;
+        context.strokeStyle = layout.dark ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.7)';
+        context.lineWidth = thickness * 0.7 + 0.4;
+        context.beginPath();
+        context.moveTo(x0 + 0.7, y0 + 0.8);
+        context.lineTo(x1 + 0.7, y1 + 0.8);
+        context.stroke();
+        context.globalAlpha = fade * 0.7;
+        context.strokeStyle = 'rgb(40,36,32)';
+        context.lineWidth = Math.max(0.35, thickness);
+        context.beginPath();
+        context.moveTo(x0, y0);
+        context.lineTo(x1, y1);
+        context.stroke();
       }
-      object.replaceChildren(slip);
+    }
+    context.globalAlpha = 1;
+  }
+
+  /** A ragged circle around the hole, in frame px. */
+  private ragged(context: CanvasRenderingContext2D, hand: GraveHand, radius: number): void {
+    const rim = this.layout?.rim ?? [1];
+    context.beginPath();
+    for (const [index, k] of rim.entries()) {
+      const angle = (index / rim.length) * Math.PI * 2;
+      const x = hand.hole.x + Math.cos(angle) * radius * k;
+      const y = hand.hole.y + Math.sin(angle) * radius * k;
+      if (index) context.lineTo(x, y);
+      else context.moveTo(x, y);
+    }
+    context.closePath();
+  }
+
+  private drawFootage(layout: GraveLayout, pose: GravePose): void {
+    const context = this.sprite.getContext('2d');
+    if (!context) return;
+    const { hand } = layout;
+    const { width, height } = hand.size;
+    const frame = footageFrame(layout, pose.step);
+    const footage = this.footage.get(layout.index);
+    const scale = this.dpr() * layout.scale;
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+    if (frame === null) {
+      context.clearRect(0, 0, width, height);
+      return;
+    }
+    footage?.want(frame, pose.forward);
+    const image = footage?.get(frame, pose.forward);
+    // A frame still decoding keeps the last one drawn rather than blinking out.
+    if (!image) return;
+    context.clearRect(0, 0, width, height);
+    const reach = hand.hole.radius * 1.5; // the crater's outer edge
+    const opened = Math.floor(pose.step) - PRE;
+    if (opened < OPEN) {
+      // The wall tears open: only what is inside the growing tear shows.
+      context.save();
+      this.ragged(context, hand, reach * (0.35 + (0.65 * (opened + 1)) / OPEN));
+      context.clip();
+      context.drawImage(image, 0, 0, width, height);
+      context.restore();
+      return;
+    }
+    const heal = healAt(layout, pose.step);
+    if (heal === 0) {
+      context.drawImage(image, 0, 0, width, height);
+      return;
+    }
+    // Healing: the gouges fade where they are; the crater draws in on its own
+    // centre, paling as it shrinks, under a soft edge.
+    const work = this.work.getContext('2d');
+    if (!work) return;
+    const k = heal * heal * (3 - 2 * heal);
+    const { x, y } = hand.hole;
+    const soft = (mode: GlobalCompositeOperation, inner: number, outer: number) => {
+      const gradient = work.createRadialGradient(x, y, inner, x, y, outer);
+      gradient.addColorStop(0, '#000');
+      gradient.addColorStop(1, 'rgba(0,0,0,0)');
+      work.globalCompositeOperation = mode;
+      work.fillStyle = gradient;
+      work.fillRect(0, 0, width, height);
+      work.globalCompositeOperation = 'source-over';
+    };
+    work.setTransform(1, 0, 0, 1, 0, 0);
+    work.clearRect(0, 0, width, height);
+    work.drawImage(image, 0, 0, width, height);
+    soft('destination-out', reach * 0.9, reach * 1.25);
+    context.globalAlpha = 1 - k;
+    context.drawImage(this.work, 0, 0);
+    work.clearRect(0, 0, width, height);
+    const shrink = 1 - 0.8 * k;
+    work.setTransform(shrink, 0, 0, shrink, x * (1 - shrink), y * (1 - shrink));
+    work.drawImage(image, 0, 0, width, height);
+    work.setTransform(1, 0, 0, 1, 0, 0);
+    soft('destination-in', reach * 0.9 * shrink, reach * 1.25 * shrink);
+    context.globalAlpha = (1 - k) ** 0.8;
+    context.drawImage(this.work, 0, 0);
+    context.globalAlpha = 1;
+  }
+
+  private drawFx(layout: GraveLayout, pose: GravePose): void {
+    const { hand, hole, unit } = layout;
+    const burst = (pose.step - PRE + 0.5) / GRAVE_FPS; // seconds since the wall gave way
+    const slap = (pose.step - PRE - hand.beats.slam + 0.5) / GRAVE_FPS;
+    const flying = pose.forward && ((burst >= 0 && burst < 0.9) || (slap > 0 && slap < 0.45));
+    if (!flying) {
+      // The full-viewport layer is only held while something is in the air.
+      if (this.fx.width) {
+        this.fx.width = 0;
+        this.fx.height = 0;
+      }
+      return;
+    }
+    const view = { x: 0, y: 0, width: layout.sheet.width, height: layout.sheet.height };
+    if (!this.fx.width) this.size(this.fx, view, 1);
+    const context = this.fx.getContext('2d');
+    if (!context) return;
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, view.width, view.height);
+    const tone = layout.dark ? '200,196,186' : '214,208,196';
+    const dust = (x: number, y: number, size: number, alpha: number) => {
+      const gradient = context.createRadialGradient(x, y, 0, x, y, size);
+      gradient.addColorStop(0, `rgba(${tone},${alpha})`);
+      gradient.addColorStop(1, `rgba(${tone},0)`);
+      context.fillStyle = gradient;
+      context.beginPath();
+      context.arc(x, y, size, 0, Math.PI * 2);
+      context.fill();
+    };
+    if (burst >= 0 && burst < 0.9) {
+      for (const puff of layout.puffs) {
+        const t = burst - puff.delay;
+        if (t < 0) continue;
+        const k = Math.min(1, t / 0.7);
+        dust(
+          hole.x + Math.cos(puff.angle) * puff.distance * (0.4 + k),
+          hole.y + Math.sin(puff.angle) * puff.distance * (0.4 + k) + 30 * unit * k * k,
+          puff.size * (0.6 + k * 1.4),
+          0.42 * (1 - k),
+        );
+      }
+      for (const chunk of layout.chunks) {
+        const t = burst - chunk.delay;
+        if (t < 0 || t > 0.8) continue;
+        const grow = 1 + chunk.toward * Math.min(t, 0.35);
+        const at = (u: number): [number, number] => [
+          hole.x + Math.cos(chunk.angle) * (hole.r + chunk.speed * u),
+          hole.y + Math.sin(chunk.angle) * (hole.r + chunk.speed * u) + 750 * unit * u * u,
+        ];
+        const [x, y] = at(t);
+        if (t < 0.25) {
+          // A short streak behind it while it is fast.
+          const [px, py] = at(Math.max(0, t - 0.03));
+          context.strokeStyle = `rgba(${chunk.tone},${chunk.tone - 4},${chunk.tone - 12},${0.35 * (1 - t / 0.25)})`;
+          context.lineWidth = chunk.size * grow * 0.9;
+          context.lineCap = 'round';
+          context.beginPath();
+          context.moveTo(px, py);
+          context.lineTo(x, y);
+          context.stroke();
+        }
+        context.save();
+        context.translate(x, y);
+        context.rotate(chunk.spin * t);
+        context.scale(chunk.size * grow, chunk.size * grow);
+        context.globalAlpha = clamp((0.8 - t) / 0.25, 0, 1);
+        context.beginPath();
+        for (const [index, [px, py]] of chunk.shape.entries()) {
+          if (index) context.lineTo(px, py);
+          else context.moveTo(px, py);
+        }
+        context.closePath();
+        const shade = context.createLinearGradient(-1, -1, 1, 1);
+        shade.addColorStop(0, `rgb(${chunk.tone + 30},${chunk.tone + 27},${chunk.tone + 20})`);
+        shade.addColorStop(1, `rgb(${chunk.tone - 50},${chunk.tone - 54},${chunk.tone - 60})`);
+        context.fillStyle = shade;
+        context.fill();
+        context.restore();
+      }
+    }
+    // The slap kicks dust out from under the palm.
+    const palm = hand.grip[hand.beats.slam];
+    if (palm && slap > 0 && slap < 0.45) {
+      const x = layout.place.x + palm.x * layout.scale;
+      const y = layout.place.y + palm.y * layout.scale;
+      const k = slap / 0.45;
+      for (let index = 0; index < 8; index++) {
+        const angle = (index / 8) * Math.PI * 2;
+        dust(
+          x + Math.cos(angle) * (50 + 40 * k) * unit,
+          y + 40 * unit + Math.sin(angle) * (40 + 30 * k) * unit,
+          (10 + 16 * k) * unit,
+          0.32 * (1 - k),
+        );
+      }
     }
   }
 
-  private paint(pose: GravePose): void {
-    const layout = this.layout;
-    if (!layout) return;
-    const { hole, scale } = layout;
+  private placeWords(layout: GraveLayout, step: number): void {
+    const frame = Math.floor(step) - PRE;
+    const taken = layout.kind === 'text' && frame >= layout.hand.beats.take;
+    this.patches.hidden = !taken;
+    if (taken) this.patches.style.opacity = (1 - healAt(layout, step)).toFixed(3);
+    const scrap = scrapAt(layout, step);
+    this.scrap.hidden = !scrap.visible;
+    if (!scrap.visible) return;
     const fixed = (value: number) => value.toFixed(2);
-    this.scene.setAttribute('opacity', fixed(pose.opacity));
-    this.scene.setAttribute(
-      'transform',
-      `translate(${fixed(pose.shake.x)} ${fixed(pose.shake.y)})`,
-    );
-
-    this.crackGroup.setAttribute(
-      'transform',
-      `translate(${fixed(hole.x)} ${fixed(hole.y)}) scale(${fixed(scale)})`,
-    );
-    this.crackGroup.setAttribute('opacity', fixed(pose.crackAlpha * 0.7));
-    for (const crack of this.cracks) crack.setAttribute('stroke-dashoffset', fixed(1 - pose.crack));
-
-    const open = Math.max(0, pose.open);
-    const holeTransform = `translate(${fixed(hole.x)} ${fixed(hole.y)}) scale(${fixed(open)})`;
-    this.holeBack.setAttribute('transform', holeTransform);
-    this.pitShade.setAttribute('transform', holeTransform);
-    this.holeFront.setAttribute('transform', holeTransform);
-    const rx = hole.rx * open;
-    const ry = hole.ry * open;
-    // Everything above the hole's centre line, plus the opening itself: an arm
-    // below the front lip is underground.
-    this.clip.setAttribute('d', graveClip(hole.x, hole.y, rx, ry));
-
-    this.rig.setAttribute(
-      'transform',
-      `translate(${fixed(pose.rig.x)} ${fixed(pose.rig.y)}) rotate(${fixed(pose.rig.rotation)}) scale(${fixed(layout.hand)})`,
-    );
-    this.drawSprite(spriteFrame(pose));
-
-    const held = pose.scrap.mode === 'held';
-    const scrapTransform = (transform: Transform) =>
-      `translate(${fixed(transform.x)} ${fixed(transform.y)}) rotate(${fixed(transform.rotation)}) scale(${fixed(transform.sx)} ${fixed(transform.sy)})`;
-    this.pageScrap.setAttribute('visibility', held ? 'hidden' : 'visible');
-    this.pageScrap.setAttribute('opacity', fixed(pose.scrap.opacity));
-    this.pageScrap.setAttribute('transform', scrapTransform(pose.scrap.world));
-    this.heldScrap.setAttribute('visibility', held ? 'visible' : 'hidden');
-    const local = layout.held;
-    this.heldScrap.setAttribute(
-      'transform',
-      `translate(${local.x} ${local.y}) rotate(${fixed(local.rotation - pose.scrap.crumple * 4)}) scale(${fixed(local.scale * (1 - pose.scrap.crumple * 0.06))} ${fixed(local.scale * (1 - pose.scrap.crumple * 0.14))})`,
-    );
-
-    const gravity = 0.0021 * scale;
-    const throwParticles = (
-      groups: SVGGElement[],
-      specs: Particle[],
-      elapsed: number,
-      life: number,
-    ) => {
-      for (const [index, group] of groups.entries()) {
-        const particle = specs[index];
-        if (!particle || elapsed < 0 || elapsed > life) {
-          group.setAttribute('opacity', '0');
-          continue;
-        }
-        const x = hole.x + particle.x + particle.vx * elapsed;
-        const y = hole.y + particle.y + particle.vy * elapsed + 0.5 * gravity * elapsed ** 2;
-        group.setAttribute('opacity', fixed(1 - progress(elapsed, life * 0.6, life)));
-        group.setAttribute(
-          'transform',
-          `translate(${fixed(x)} ${fixed(y)}) rotate(${fixed(particle.spin * elapsed)}) scale(${fixed(particle.size)})`,
-        );
-      }
-    };
-    throwParticles(this.debris, layout.debris, pose.debris, 640);
-    throwParticles(this.puff, layout.puff, pose.puff, 420);
-
-    const rest = `translate(${fixed(hole.x)} ${fixed(hole.y + 4 * scale)})`;
-    this.mound.setAttribute('opacity', fixed(Math.min(1, pose.mound) * pose.restAlpha));
-    this.mound.setAttribute(
-      'transform',
-      `${rest} scale(${fixed(scale)} ${fixed(scale * pose.mound)})`,
-    );
-    this.tomb.setAttribute('opacity', fixed(Math.min(1, pose.tomb) * pose.restAlpha));
-    this.tomb.setAttribute(
-      'transform',
-      `${rest} translate(${fixed(-14 * scale)} ${fixed(-6 * scale)}) scale(${fixed(scale * Math.max(0, pose.tomb))})`,
-    );
+    this.scrap.style.transform = `translate(${fixed(scrap.x)}px, ${fixed(scrap.y)}px) rotate(${fixed(scrap.rotation)}deg) scale(${fixed(scrap.sx)}, ${fixed(scrap.sy)}) skewX(${fixed(scrap.skew)}deg) translate(-50%, -50%)`;
+    this.scrap.style.opacity = layout.kind === 'page' ? fixed(progress(step, 0, 3)) : '1';
   }
 }

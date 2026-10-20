@@ -503,12 +503,11 @@ function activate(): () => void {
     chipTimer = setTimeout(showSelectionChip, delay);
   };
 
-  /** The background hands over the packaged atlas as bytes; decoding them needs no URL the page CSP could block. */
-  const loadSprite = async (): Promise<ImageBitmap | null> => {
-    const response = await request({ v: 1, type: 'HAND_SPRITE' });
+  /** The background hands over a packaged hand as bytes; decoding them needs no URL the page CSP could block. */
+  const loadSprite = async (hand: number): Promise<Uint8Array<ArrayBuffer> | null> => {
+    const response = await request({ v: 1, type: 'HAND_SPRITE', hand });
     if (!response.ok || !response.sprite) return null;
-    const bytes = Uint8Array.from(atob(response.sprite), (character) => character.charCodeAt(0));
-    return createImageBitmap(new Blob([bytes], { type: 'image/webp' }));
+    return Uint8Array.from(atob(response.sprite), (character) => character.charCodeAt(0));
   };
 
   const view = new HandView(document, {

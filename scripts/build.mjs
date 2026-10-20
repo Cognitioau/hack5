@@ -96,7 +96,13 @@ for (const model of [metadata, ...(gazeMetadata ? [gazeMetadata] : [])])
     await cp(resolve(root, '.cache/models', model.model, file.path), target);
   }
 await mkdir(resolve(destination, 'assets'), { recursive: true });
-await cp(resolve(root, 'assets/grave-hand.webp'), resolve(destination, 'assets/grave-hand.webp'));
+// One packaged grave hand per footage take; src/ui/grave-sprite.ts names them in the same order.
+const { takes } = JSON.parse(await readFile(resolve(root, 'scripts/hand/takes.json'), 'utf8'));
+for (const [index] of takes.entries())
+  await cp(
+    resolve(root, `assets/grave-hand-${index}.bin`),
+    resolve(destination, `assets/grave-hand-${index}.bin`),
+  );
 await mkdir(resolve(destination, 'runtime'), { recursive: true });
 await cp(
   resolve(root, 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm'),

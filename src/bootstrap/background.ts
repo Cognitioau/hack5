@@ -30,7 +30,7 @@ import { cropSnapshot, downloadImage } from '../adapters/browser/media';
 import { preserveImage } from '../features/image/preserve';
 import { createCoordinator } from '../application/coordinator';
 import { parseImportedTranscript, youtubeVideoId } from '../features/youtube/transcript';
-import { GRAVE_SPRITE } from '../ui/grave-sprite';
+import { GRAVE_HANDS } from '../ui/grave-sprite';
 
 type Arm = {
   token: string;
@@ -239,10 +239,14 @@ async function executeCapture(arm: Arm): Promise<void> {
   }
 }
 
-let handSprite: Promise<string> | undefined;
-/** The packaged frame atlas, read from the extension origin so it never needs to be web accessible. */
-function readHandSprite(): Promise<string> {
-  handSprite ??= fetch(chrome.runtime.getURL(GRAVE_SPRITE.path))
+const handSprites = new Map<number, Promise<string>>();
+/** A packaged hand's frames, read from the extension origin so they never need to be web accessible. */
+function readHandSprite(hand: number): Promise<string> {
+  const known = handSprites.get(hand);
+  if (known) return known;
+  const entry = GRAVE_HANDS[hand];
+  if (!entry) return Promise.reject(new Error('There is no such hand in the package.'));
+  const read = fetch(chrome.runtime.getURL(entry.path))
     .then(async (response) => {
       if (!response.ok) throw new Error('The hand sprite is missing from the package.');
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -252,10 +256,11 @@ function readHandSprite(): Promise<string> {
       return btoa(binary);
     })
     .catch((error: unknown) => {
-      handSprite = undefined;
+      handSprites.delete(hand);
       throw error;
     });
-  return handSprite;
+  handSprites.set(hand, read);
+  return read;
 }
 
 async function contentRequest(
@@ -273,7 +278,7 @@ async function contentRequest(
       await handActivation.pause();
       return { ok: true, activation: handActivation.getMode() };
     case 'HAND_SPRITE':
-      return { ok: true, sprite: await readHandSprite() };
+      return { ok: true, sprite: await readHandSprite(message.hand) };
     case 'CONTENT_STATUS': {
       const settings = await readSettings();
       const features = __CORE_ONLY__
