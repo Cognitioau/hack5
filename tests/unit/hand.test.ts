@@ -67,24 +67,35 @@ function fakeCanvas() {
     return frame as unknown as ImageBitmap;
   });
   Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: decode });
+  // What each laid frame was made of, in order: the wall half, its pixels read
+  // back and tinted (to these values, from a wall of 200s), then the hand half.
+  const laid: (string | number[])[][] = [];
   class Layers {
     private last = -1;
+    private steps: (string | number[])[] = [];
     getContext() {
       return {
         clearRect: vi.fn(),
-        drawImage: (image: FakeFrame) => {
+        drawImage: (image: FakeFrame, sx: number) => {
           this.last = image.frame;
+          this.steps.push(sx === 0 ? 'hand' : 'wall');
+        },
+        getImageData: () => ({ data: new Uint8ClampedArray([200, 200, 200, 200]) }),
+        putImageData: ({ data }: { data: Uint8ClampedArray }) => {
+          this.steps.push([...data]);
         },
       };
     }
     transferToImageBitmap() {
       const frame = { frame: this.last, close: vi.fn() };
       frames.push(frame);
+      laid.push(this.steps);
+      this.steps = [];
       return frame;
     }
   }
   Object.defineProperty(window, 'OffscreenCanvas', { configurable: true, value: Layers });
-  return { drawImage, decode, packed };
+  return { drawImage, decode, packed, laid };
 }
 
 function element<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -174,7 +185,7 @@ describe('target-local hand presentation', () => {
   });
 
   it('loads each hand once per page, plays its frames in order and never repeats a hand', async () => {
-    const { drawImage, decode, packed } = fakeCanvas();
+    const { drawImage, decode, packed, laid } = fakeCanvas();
     const sprite = vi
       .fn<(hand: number) => Promise<Uint8Array<ArrayBuffer> | null>>()
       .mockRejectedValueOnce(new Error('Synthetic interrupted read'))
@@ -207,6 +218,9 @@ describe('target-local hand presentation', () => {
     // Each packed frame is let go as soon as its layers are laid together.
     expect(packed.length).toBe(decode.mock.calls.length);
     for (const frame of packed) expect(frame.close).toHaveBeenCalledOnce();
+    // On a white page the wall is the footage as filmed: no pixels are read back.
+    expect(laid.length).toBe(packed.length);
+    for (const steps of laid) expect(steps).toEqual(['wall', 'hand']);
     view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(element('.effect').hidden).toBe(true);
@@ -216,6 +230,29 @@ describe('target-local hand presentation', () => {
     const second = sprite.mock.lastCall?.[0];
     expect(second).not.toBe(first);
     expect(GRAVE_HANDS[second ?? -1]).toBeDefined();
+  });
+
+  it('tints the wall behind the hand to a dark page, never the hand', async () => {
+    const { laid } = fakeCanvas();
+    const sprite = vi.fn(async (hand: number) => packedHand(GRAVE_HANDS[hand]?.frames ?? 0));
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'Words on a dark page', undefined, {
+      style: { background: 'rgb(29, 33, 38)', color: 'rgb(217, 220, 214)', fontFamily: 'serif' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    await vi.advanceTimersByTimeAsync(900);
+    expect(laid.length).toBeGreaterThan(5);
+    // The wall goes down first and is multiplied by the page's colour, its
+    // alpha kept; the hand is laid over it as filmed.
+    const tinted = [
+      Math.round((200 * 29) / 255),
+      Math.round((200 * 33) / 255),
+      Math.round((200 * 38) / 255),
+      200,
+    ];
+    for (const steps of laid) expect(steps).toEqual(['wall', tinted, 'hand']);
   });
 
   it('covers where the page highlights a selection, not only the trimmed evidence', () => {
