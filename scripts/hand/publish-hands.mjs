@@ -1,8 +1,10 @@
-// Publishes the matted grave-hand takes into the extension: each take's frames
-// become assets/grave-hand-<n>.bin and their metadata src/ui/grave-sprite.ts.
+// Publishes the matted grave-hand takes into the extension: each take's frames,
+// then its heal's, become assets/grave-hand-<n>.bin and their metadata
+// src/ui/grave-sprite.ts.
 //   node scripts/hand/publish-hands.mjs <matte-dir> <matte-dir> <matte-dir>
 // The directories are matte.py output, one per take in scripts/hand/takes.json
-// order. Needs ffmpeg and cwebp.
+// order, each with the heal matted onto it beside it as <matte-dir>-heal.
+// Needs ffmpeg and cwebp.
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,6 +24,9 @@ const hands = [];
 for (const [index, folder] of folders.entries()) {
   const meta = JSON.parse(await readFile(join(folder, 'matte.json'), 'utf8'));
   if (meta.fps !== fps) throw new Error(`${folder} was matted at ${meta.fps} fps, not ${fps}`);
+  const heal = JSON.parse(await readFile(join(`${folder}-heal`, 'matte.json'), 'utf8'));
+  if (heal.size.join() !== meta.size.join() || heal.crop.join() !== meta.crop.join())
+    throw new Error(`${folder}-heal is not matted onto ${folder}: pass --like to matte.py`);
   const { beats } = takes[index];
   const width = Math.round(meta.size[0] * pack);
   const height = Math.round(meta.size[1] * pack);
@@ -30,24 +35,28 @@ for (const [index, folder] of folders.entries()) {
   const scratch = await mkdtemp(join(tmpdir(), 'grave-hand-'));
   try {
     // Downscale with premultiplied alpha, so the transparent wall's colour
-    // never bleeds into the hand's edge.
-    execFileSync('ffmpeg', [
-      '-v',
-      'error',
-      '-start_number',
-      '0',
-      '-i',
-      join(folder, 'm%03d.png'),
-      '-vf',
-      `format=rgba,premultiply=inplace=1,scale=${width}:${height}:flags=area,unpremultiply=inplace=1`,
-      '-start_number',
-      '0',
-      join(scratch, 'p%03d.png'),
-    ]);
+    // never bleeds into the hand's edge. The heal's frames follow the take's.
+    for (const [from, prefix] of [
+      [folder, 'p'],
+      [`${folder}-heal`, 'q'],
+    ])
+      execFileSync('ffmpeg', [
+        '-v',
+        'error',
+        '-start_number',
+        '0',
+        '-i',
+        join(from, 'm%03d.png'),
+        '-vf',
+        `format=rgba,premultiply=inplace=1,scale=${width}:${height}:flags=area,unpremultiply=inplace=1`,
+        '-start_number',
+        '0',
+        join(scratch, `${prefix}%03d.png`),
+      ]);
     const frames = (await readdir(scratch)).filter((name) => name.endsWith('.png')).sort();
-    if (frames.length !== meta.frames.length)
+    if (frames.length !== meta.frames.length + heal.frames.length)
       throw new Error(
-        `${folder}: ${frames.length} frames on disk, ${meta.frames.length} in matte.json`,
+        `${folder}: ${frames.length} frames on disk, ${meta.frames.length + heal.frames.length} in matte.json`,
       );
     const parts = [];
     for (const frame of frames) {
@@ -97,6 +106,7 @@ for (const [index, folder] of folders.entries()) {
     },
     beats,
     grip,
+    heal: heal.frames.length,
   });
 }
 
@@ -111,6 +121,7 @@ const entries = hands
     hole: { x: ${hand.hole.x}, y: ${hand.hole.y}, radius: ${hand.hole.radius} },
     beats: { slam: ${hand.beats.slam}, take: ${hand.beats.take}, fist: ${hand.beats.fist} },
     grip: [${hand.grip.map(point).join(', ')}],
+    heal: ${hand.heal},
   },`,
   )
   .join('\n');
@@ -121,8 +132,9 @@ await writeFile(
  * footage takes in scripts/hand/takes.json. Do not edit by hand.
  *
  * Each hand is its footage frames as WebP files packed back to back, played
- * at ${fps} frames a second. Points are in frame pixels; \`source\` is the width
- * of the uncropped footage frame, which the effect sizes a hand by.
+ * at ${fps} frames a second, then its heal's. Points are in frame pixels;
+ * \`source\` is the width of the uncropped footage frame, which the effect
+ * sizes a hand by.
  */
 export interface GraveHand {
   /** Packaged path, read by the background and handed to the page as bytes. */
@@ -136,6 +148,11 @@ export interface GraveHand {
   beats: { slam: number; take: number; fist: number };
   /** Centre of the hand's head for each frame; null once it has gone back through the hole. */
   grip: readonly ({ x: number; y: number } | null)[];
+  /**
+   * Frames packed after the take's: the wall bursting open into the same hole,
+   * played backwards, so the plaster flies back in and the hole heals.
+   */
+  heal: number;
 }
 
 export const GRAVE_FPS = ${fps};

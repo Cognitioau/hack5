@@ -5,12 +5,14 @@ art or a 3D render. There are three takes; each grab plays one at random, never
 the one that played last.
 
 - `assets/grave-hand-{0,1,2}.bin`: each take's frames as WebP files packed back
-  to back (48, 62 and 50 frames at 24 fps; 1.5, 1.6 and 1.7 MB). They are 2×
-  the 260 px display size, so they stay sharp on retina screens.
-- `src/ui/grave-sprite.ts`: frame size, hole, beats and the grip point of every
-  frame. Generated; do not edit.
-- `takes.json`: where each take came from, which of its frames are kept, and
-  its beats. The publish script and `tests/unit/grave.test.ts` both read it.
+  to back (48, 62 and 50 frames at 24 fps), then the 35 frames of the heal
+  matted onto that take. They are 2× the 260 px display size, so they stay
+  sharp on retina screens.
+- `src/ui/grave-sprite.ts`: frame size, hole, beats, the grip point of every
+  frame and the heal's frame count. Generated; do not edit.
+- `takes.json`: where each take and the heal came from, which of their frames
+  are kept, and each take's beats. The publish script and
+  `tests/unit/grave.test.ts` both read it.
 
 The pack is not web-accessible. The content script asks for one hand with
 `HAND_SPRITE {hand}`, and the background returns its bytes. The page splits
@@ -67,16 +69,46 @@ Take 1:
 
 A fourth take from the first prompt was generated and dropped.
 
+### The heal
+
+Once the hand has gone, the hole mends: footage of the wall bursting open into
+the same hole plays backwards, so the plaster flies back in, the star of cracks
+closes and the wall is whole.
+
+1. **Wall:** Nano Banana 2 (2K, 1:1) repaired the plate, removing the hole, its
+   crater and every crack, with the framing and light unchanged (`heal.wall`).
+2. **Burst:** a Seedance 2.5 draft, 4 s, 1:1, 640×640 at 24 fps, with no audio,
+   starting on the wall and ending on the plate, so it ends on the takes' own
+   hole (within a pixel of where every take ends). The job id is `heal.job`.
+   A second draft from a shorter prompt drifted in exposure and ended 4 px off
+   the hole, and was dropped.
+
+> Locked-off static camera, perfectly still; the framing never changes: a
+> smooth white painted plaster wall seen head-on. For the first half second
+> nothing moves. Then the wall is struck very hard from behind at the lower
+> centre: the plaster bulges toward the camera, cracks shoot out from the
+> impact point, and the wall bursts open. Jagged chunks of white plaster with
+> grey broken edges and a little powdery dust are blown out toward the lens,
+> tumbling, then fall down and out of the bottom of the frame. What is left is
+> a ragged dark round hole with a crumbly grey crater rim and hairline cracks.
+> Nothing comes through the hole: no hand, no fist, no object, only the
+> breaking wall. The dust clears completely; the final second is the still
+> wall with the empty hole. Soft daylight from the upper left. Photoreal,
+> sharp, natural motion blur, real-time speed, no camera shake, no zoom.
+
 ## Regenerate
 
 Download each take's MP4 from the Higgsfield job in `takes.json`, in order, as
-`.cache/hand-takes/t0.mp4` to `t2.mp4`. Then:
+`.cache/hand-takes/t0.mp4` to `t2.mp4`, and the heal's as
+`.cache/hand-takes/heal.mp4`. Then:
 
 ```sh
 PY=/Applications/Blender.app/Contents/Resources/5.2/python/bin/python3.13  # any Python with numpy
 for i in 0 1 2; do
   "$PY" -I scripts/hand/matte.py ".cache/hand-takes/t$i.mp4" ".cache/hand-matte/t$i" \
     "$(node -p "require('./scripts/hand/takes.json').takes[$i].edit")"
+  "$PY" -I scripts/hand/matte.py .cache/hand-takes/heal.mp4 ".cache/hand-matte/t$i-heal" \
+    "$(node -p "require('./scripts/hand/takes.json').heal.edit")" --reverse --like ".cache/hand-matte/t$i"
 done
 node scripts/hand/publish-hands.mjs .cache/hand-matte/t0 .cache/hand-matte/t1 .cache/hand-matte/t2
 npx biome format --write src/ui/grave-sprite.ts
@@ -94,15 +126,25 @@ This needs ffmpeg and cwebp on the path.
   removed, so a dark page shows no pale fringe. It also records the hole, and
   a grip point per frame: the head of whatever stays joined to the hole.
 - **`edit`** (in `takes.json`) picks source frames. `49-75:2` keeps every
-  second frame, which quickens the slow drag. The leading `0` and trailing
-  `120` keep the empty hole at both ends.
+  second frame, which quickens the slow drag; a fractional step such as `:1.5`
+  quickens a span by that much. The leading `0` and trailing `120` keep the
+  empty hole at both ends.
+- **`--reverse --like`** mattes the heal onto a take. `--reverse` plays the
+  burst backwards, so the heal's `edit` counts from its last frame: it starts
+  on the empty hole, quickens the dust and the flying plaster, and ends as
+  the cracks close. `--like` crops it to that take's frame and moves its hole
+  onto the take's (they differ by a pixel), and fades it out over the crop's
+  last 24 px, so plaster flying in from beyond the take's frame fades in
+  rather than appearing cut off. It also drops the heal's thin cracks before
+  closing gaps: they are shading on the wall, and where they meet the closing
+  would fuse them into a patch that hides the page's text.
 - **`beats`** are indexes into the edited frames: `slam` (palm flat on the
   wall), `take` (fingers closing on the words) and `fist` (shut). The effect
   lands the fist on the passage and holds it there until the save settles.
   `beats.py` prints per-frame motion to find them.
 - **`publish-hands.mjs`** scales every frame to `pack` (0.8125) with
   premultiplied alpha, so the transparent wall's colour never bleeds into the
-  hand's edge. It encodes each frame with `cwebp -q 80 -alpha_q 100` and writes
+  hand's edge. Each take's heal frames follow its own in the pack. It encodes each frame with `cwebp -q 80 -alpha_q 100` and writes
   the packs and `grave-sprite.ts`. After the fist it keeps the previous grip
   wherever the matte jumps to the hole's rim, and it fails if any beat has no
   grip.

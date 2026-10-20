@@ -3,8 +3,9 @@
  * footage takes in scripts/hand/takes.json. Do not edit by hand.
  *
  * Each hand is its footage frames as WebP files packed back to back, played
- * at 24 frames a second. Points are in frame pixels; `source` is the width
- * of the uncropped footage frame, which the effect sizes a hand by.
+ * at 24 frames a second, then its heal's. Points are in frame pixels;
+ * `source` is the width of the uncropped footage frame, which the effect
+ * sizes a hand by.
  */
 export interface GraveHand {
   /** Packaged path, read by the background and handed to the page as bytes. */
@@ -18,6 +19,11 @@ export interface GraveHand {
   beats: { slam: number; take: number; fist: number };
   /** Centre of the hand's head for each frame; null once it has gone back through the hole. */
   grip: readonly ({ x: number; y: number } | null)[];
+  /**
+   * Frames packed after the take's: the wall bursting open into the same hole,
+   * played backwards, so the plaster flies back in and the hole heals.
+   */
+  heal: number;
 }
 
 export const GRAVE_FPS = 24;
@@ -80,6 +86,7 @@ export const GRAVE_HANDS: readonly GraveHand[] = [
       null,
       null,
     ],
+    heal: 35,
   },
   {
     path: 'assets/grave-hand-1.bin',
@@ -152,6 +159,7 @@ export const GRAVE_HANDS: readonly GraveHand[] = [
       null,
       null,
     ],
+    heal: 35,
   },
   {
     path: 'assets/grave-hand-2.bin',
@@ -212,5 +220,6 @@ export const GRAVE_HANDS: readonly GraveHand[] = [
       null,
       null,
     ],
+    heal: 35,
   },
 ];

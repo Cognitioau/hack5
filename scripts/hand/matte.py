@@ -13,9 +13,16 @@ which the layer carries as black at alpha 1-s. Over a white page this is the
 footage exactly, whatever `a` is; `a` only decides what happens over text.
 
   python3 -I matte.py TAKE.mp4 OUT_DIR EDIT   (EDIT like "42-56,57-60,68-91:2")
+  python3 -I matte.py HEAL.mp4 OUT_DIR EDIT --reverse --like TAKE_OUT_DIR
 
 Needs numpy and ffmpeg; Blender's bundled Python has numpy. Writes the picked
 frames as OUT_DIR/m000.png onwards and their metadata as OUT_DIR/matte.json.
+
+`--reverse` plays the clip backwards first, so EDIT counts from its last frame.
+`--like` mattes it to overlay a take: cropped to that take's frame, its hole
+moved onto the take's, and fading out over the last FEATHER px of the crop,
+so what flies in from beyond the take's frame fades in rather than appearing
+cut off.
 """
 
 import json
@@ -25,20 +32,28 @@ import sys
 
 import numpy as np
 
-path, out, edit = sys.argv[1], sys.argv[2], sys.argv[3]
+args = sys.argv[1:]
+reverse = "--reverse" in args
+like = args[args.index("--like") + 1] if "--like" in args else None
+path, out, edit = [arg for at, arg in enumerate(args) if not arg.startswith("--") and (at == 0 or args[at - 1] != "--like")]
 os.makedirs(out, exist_ok=True)
+FEATHER = 24
 probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
                         "-of", "csv=p=0", path], capture_output=True, text=True).stdout.strip().split(",")
 W, H = int(probe[0]), int(probe[1])
 raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                      capture_output=True).stdout
 video = np.frombuffer(raw, np.uint8).reshape(-1, H, W, 3)
+if reverse:
+    video = video[::-1]
 
 picks = []
 for part in edit.split(","):
     span, _, step = part.partition(":")
     a, _, b = span.partition("-")
-    picks += list(range(int(a), int(b or a) + 1, int(step or 1)))
+    first, last, every = int(a), int(b or a), float(step or 1)
+    # A fractional step (44-74:1.5) quickens a span by that much, alternating skips.
+    picks += [int(first + k * every + 0.5) for k in range(int((last - first) / every) + 1)]
 
 
 def smoothstep(lo, hi, x):
@@ -145,7 +160,15 @@ for n in picks:
     # Highlights on knuckles and nails read as wall: close gaps up to ~12 px,
     # which leaves the wider gaps between fingers open (on a dark page they
     # would print as white).
-    core = shifted(shifted(core, 6, np.maximum), 6, np.minimum)
+    if like:
+        # A heal's thin cracks are shading on the wall, not something in front
+        # of it: drop them first, or where they meet the closing below fuses
+        # them into a patch that would hide the page's text.
+        core = shifted(core, 1, np.minimum)
+    # A heal has no knuckles: closing only ~6 px gaps keeps its dust grit, not
+    # a white mass on a dark page.
+    close = 3 if like else 6
+    core = shifted(shifted(core, close, np.maximum), close, np.minimum)
     core = shifted(core, 1, np.minimum)  # drop single-pixel speckle
     # Edges (and the whole hand when it is out of focus near the lens) mix hand
     # and white wall: N = a*hand + (1-a). Coverage `a` is the pixel's darkening
@@ -187,31 +210,54 @@ def attached(mask, seed):
         reached = spread
 
 
-# The grip: the head of the arm, which is whatever stays joined to the hole.
-# Marks the hand leaves on the wall come loose from it once the fingers lift,
-# and any still there at the last frame are excluded outright.
-mouth = np.hypot(xs - cx, ys - cy)
-left = shifted(hands[-1] & (mouth > radius * 1.25), 3, np.maximum)
-for hand, entry in zip(hands, meta):
-    hand = attached(hand, mouth < radius * 1.6) & (mouth > radius * 1.25) & ~left
-    entry["cover"] = round(float(hand.mean()) * 100, 2)
-    rows = np.where(hand.sum(1) >= 15)[0]  # a real row of hand, not a stray speck
-    if hand.sum() > 400 and len(rows):
-        top = int(rows[0])
-        head = hand & (ys < top + 70)  # the fist, or the fingers' reach
-        entry.update(top=top, grip=[round(float(xs[head].mean()), 1), round(float(ys[head].mean()), 1)])
+if like:
+    # Overlay the take: its crop, with this clip's hole moved onto the take's.
+    take = json.load(open(os.path.join(like, "matte.json")))
+    if take["source"] != [W, H]:
+        raise SystemExit(f"{path} is {W}x{H}, the take is {take['source'][0]}x{take['source'][1]}")
+    x0, y0 = take["crop"]
+    x1, y1 = x0 + take["size"][0], y0 + take["size"][1]
+    dx = round(x0 + take["hole"][0] - cx)
+    dy = round(y0 + take["hole"][1] - cy)
+    across, down = np.arange(x1 - x0) + 0.5, np.arange(y1 - y0) + 0.5
+    inset = np.minimum(np.minimum(across, across[::-1])[None, :], np.minimum(down, down[::-1])[:, None])
+    edge = smoothstep(0, FEATHER, inset)
+    shifted_layers = []
+    for layer in layers:
+        moved = np.zeros_like(layer)
+        moved[max(dy, 0):H + min(dy, 0), max(dx, 0):W + min(dx, 0)] = layer[max(-dy, 0):H - max(dy, 0), max(-dx, 0):W - max(dx, 0)]
+        moved = moved[y0:y1, x0:x1].copy()
+        moved[..., 3] = (moved[..., 3] * edge + 0.5).astype(np.uint8)
+        shifted_layers.append(moved)
+    stack = np.stack(shifted_layers)
+    cx, cy = cx + dx, cy + dy
+    print("shift", dx, dy)
+else:
+    # The grip: the head of the arm, which is whatever stays joined to the hole.
+    # Marks the hand leaves on the wall come loose from it once the fingers lift,
+    # and any still there at the last frame are excluded outright.
+    mouth = np.hypot(xs - cx, ys - cy)
+    left = shifted(hands[-1] & (mouth > radius * 1.25), 3, np.maximum)
+    for hand, entry in zip(hands, meta):
+        hand = attached(hand, mouth < radius * 1.6) & (mouth > radius * 1.25) & ~left
+        entry["cover"] = round(float(hand.mean()) * 100, 2)
+        rows = np.where(hand.sum(1) >= 15)[0]  # a real row of hand, not a stray speck
+        if hand.sum() > 400 and len(rows):
+            top = int(rows[0])
+            head = hand & (ys < top + 70)  # the fist, or the fingers' reach
+            entry.update(top=top, grip=[round(float(xs[head].mean()), 1), round(float(ys[head].mean()), 1)])
 
-# Crop to everything any frame touches, with a margin.
-touched = np.zeros((H, W), bool)
-for layer in layers:
-    touched |= layer[..., 3] > 3
-rows, cols = np.where(touched.any(1))[0], np.where(touched.any(0))[0]
-pad = 6
-y0, y1 = max(rows[0] - pad, 0), min(rows[-1] + pad + 1, H)
-x0, x1 = max(cols[0] - pad, 0), min(cols[-1] + pad + 1, W)
-stack = np.stack([layer[y0:y1, x0:x1] for layer in layers])
+    # Crop to everything any frame touches, with a margin.
+    touched = np.zeros((H, W), bool)
+    for layer in layers:
+        touched |= layer[..., 3] > 3
+    rows, cols = np.where(touched.any(1))[0], np.where(touched.any(0))[0]
+    pad = 6
+    y0, y1 = max(rows[0] - pad, 0), min(rows[-1] + pad + 1, H)
+    x0, x1 = max(cols[0] - pad, 0), min(cols[-1] + pad + 1, W)
+    stack = np.stack([layer[y0:y1, x0:x1] for layer in layers])
 encoder = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{x1 - x0}x{y1 - y0}",
-                            "-i", "-", "-start_number", "0", os.path.join(out, "m%03d.png")], stdin=subprocess.PIPE)
+                           "-i", "-", "-start_number", "0", os.path.join(out, "m%03d.png")], stdin=subprocess.PIPE)
 encoder.communicate(stack.tobytes())
 for entry in meta:
     if "grip" in entry:
