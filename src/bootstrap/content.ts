@@ -1,9 +1,11 @@
 import type { AppResponse, ContentMessage, Features, PublicCapture } from '../core/contracts/index';
 import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core/domain/gestures';
 import {
-  cleanText,
   extractCandidate,
+  extractPage,
+  extractSelection,
   isEditable,
+  readingStyle,
   targetRectangle,
   type ExtractedCandidate,
 } from '../adapters/browser/extraction';
@@ -41,6 +43,10 @@ function activate(): () => void {
   let armExpiry: ReturnType<typeof setTimeout> | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+  let chipTimer: ReturnType<typeof setTimeout> | undefined;
+  let pointerHeld = false;
+  /** The selection text just grabbed; its chip stays away until the selection changes. */
+  let grabbedSelection: string | null = null;
   let hiddenForSnapshot = false;
   let ghostEpoch = 0;
   let lastGhostAt = Number.NEGATIVE_INFINITY;
@@ -69,7 +75,7 @@ function activate(): () => void {
   };
 
   const idle = (
-    detail = 'Hold Shift or Ctrl and circle a passage. Release early to cancel. Alt+Shift+Z captures a selection.',
+    detail = 'Select text and click the hand, or click it with nothing selected to grab the page. Hold Shift or Ctrl and circle a sentence; release early to cancel.',
   ): void => {
     if (disposed) return;
     phase = 'idle';
@@ -136,9 +142,11 @@ function activate(): () => void {
           ? 'A local attachment is saved.'
           : capture.preservation === 'screenshot'
             ? 'A cropped screenshot is saved.'
-            : capture.preservation === 'link'
-              ? 'The source link is saved; media bytes were not retained.'
-              : 'Your words are saved.';
+            : capture.candidate.kind === 'link'
+              ? 'The link and its readable text are saved.'
+              : capture.preservation === 'link'
+                ? 'The source link is saved; media bytes were not retained.'
+                : 'Your words are saved.';
       const transcript = capture.candidate.video?.transcript;
       const transcriptDetail = transcript
         ? transcript.cues.length > 0
@@ -342,7 +350,11 @@ function activate(): () => void {
     });
   };
 
-  const arm = async (candidate: ExtractedCandidate, captureImmediately = false): Promise<void> => {
+  const arm = async (
+    candidate: ExtractedCandidate,
+    captureImmediately = false,
+    whole: 'page' | 'text' = 'text',
+  ): Promise<void> => {
     if (disposed || phase === 'saving') return;
     clearArmTimers();
     const epoch = ++generation;
@@ -351,15 +363,26 @@ function activate(): () => void {
     locked = candidate;
     const frozenPage = location.href;
     view.setUndoAvailable(false);
+    const style = readingStyle(candidate.target, document);
     view.setTarget(
       candidate.rectangle,
-      candidate.candidate.text || candidate.candidate.title,
+      whole === 'page'
+        ? candidate.candidate.title
+        : candidate.candidate.text || candidate.candidate.title,
       candidate.rectangles,
+      {
+        kind: whole,
+        detail: location.hostname,
+        ...(style ? { style } : {}),
+        ...(candidate.highlight ? { highlight: candidate.highlight } : {}),
+      },
     );
     view.setState(
       'arming',
-      'Taking this passage…',
-      'Locking the highlighted evidence and its source…',
+      whole === 'page' ? 'Taking this page…' : 'Taking this passage…',
+      whole === 'page'
+        ? 'Locking the page title, link and readable text…'
+        : 'Locking the highlighted evidence and its source…',
     );
     const response = await request({
       v: 1,
@@ -388,7 +411,9 @@ function activate(): () => void {
       candidate.candidate.kind === 'youtube' &&
         candidate.candidate.video?.transcript.cues.length === 0
         ? 'Open Show transcript before your next capture to include available captions.'
-        : 'The highlighted passage and its source are ready to capture.',
+        : whole === 'page'
+          ? 'The page title, link and readable text are ready to capture.'
+          : 'The highlighted passage and its source are ready to capture.',
     );
     armExpiry = setTimeout(() => {
       void release();
@@ -397,30 +422,109 @@ function activate(): () => void {
     if (captureImmediately) await confirm();
   };
 
-  const captureAccessible = async (): Promise<void> => {
+  /** Clears any unfinished lasso; false while an earlier grab is still in flight. */
+  const beginManualGrab = async (): Promise<boolean> => {
     if (phase === 'armed') {
       await confirm();
-      return;
+      return false;
     }
-    if (phase === 'saving' || phase === 'arming') return;
+    if (phase === 'saving' || phase === 'arming') return false;
     clearArmTimers();
     circle = null;
     trail = [];
     consumedHold = true;
     view.setTrail([]);
+    return true;
+  };
+
+  const grabSelected = async (candidate: ExtractedCandidate): Promise<void> => {
+    grabbedSelection = candidate.candidate.text;
+    await arm(candidate, true);
+  };
+
+  const grabPage = async (): Promise<void> => {
+    const page = extractPage(document);
+    if (!page) {
+      showError('This page cannot be grabbed. Only public http(s) pages are captured.');
+      return;
+    }
+    await arm(page, true, 'page');
+  };
+
+  /** Alt+Shift+Z: the selection wherever the pointer is, else what the pointer is on. */
+  const captureAccessible = async (): Promise<void> => {
+    if (!(await beginManualGrab())) return;
     const candidate = candidateAt(true);
     if (!candidate) {
       showError(
-        'Select page text or point at a phrase, image or video first. Form fields are excluded.',
+        'Select page text or point at a phrase, image or video first. Click the hand to grab the whole page.',
       );
       return;
     }
+    if (candidate.candidate.kind === 'text') grabbedSelection = candidate.candidate.text;
     await arm(candidate, true);
+  };
+
+  const captureSelection = async (): Promise<void> => {
+    if (!(await beginManualGrab())) return;
+    const selected = extractSelection(document);
+    if (!selected) {
+      showError('Select some page text first, or click the hand to grab the whole page.');
+      return;
+    }
+    await grabSelected(selected);
+  };
+
+  /** The hand button: the selection when there is one, otherwise the page. */
+  const grab = async (): Promise<void> => {
+    if (!(await beginManualGrab())) return;
+    const selected = extractSelection(document);
+    if (selected) await grabSelected(selected);
+    else await grabPage();
+  };
+
+  const showSelectionChip = (): void => {
+    chipTimer = undefined;
+    if (disposed) return;
+    const selected = extractSelection(document);
+    if (!selected) grabbedSelection = null;
+    const end = selected?.rectangles?.[selected.rectangles.length - 1] ?? selected?.rectangle;
+    const point = end ? { x: end.x + end.width, y: end.y + end.height } : null;
+    const usable =
+      point !== null &&
+      !pointerHeld &&
+      !hiddenForSnapshot &&
+      ['idle', 'saved', 'error'].includes(phase) &&
+      selected?.candidate.text !== grabbedSelection &&
+      point.x >= 0 &&
+      point.y >= 0 &&
+      point.x <= innerWidth &&
+      point.y <= innerHeight;
+    view.setSelectionChip(usable ? point : null, selected !== null);
+  };
+
+  const scheduleSelectionChip = (delay = 160): void => {
+    clearTimeout(chipTimer);
+    chipTimer = setTimeout(showSelectionChip, delay);
+  };
+
+  /** The background hands over a packaged hand as bytes; decoding them needs no URL the page CSP could block. */
+  const loadSprite = async (hand: number): Promise<Uint8Array<ArrayBuffer> | null> => {
+    const response = await request({ v: 1, type: 'HAND_SPRITE', hand });
+    if (!response.ok || !response.sprite) return null;
+    // An indexed loop: Uint8Array.from with a mapper stalls the page ~60 ms per hand.
+    const text = atob(response.sprite);
+    const bytes = new Uint8Array(text.length);
+    for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index);
+    return bytes;
   };
 
   const view = new HandView(document, {
     capture: () => {
-      void captureAccessible();
+      void captureSelection();
+    },
+    grab: () => {
+      void grab();
     },
     cancel: () => {
       void release();
@@ -429,33 +533,13 @@ function activate(): () => void {
       void archive();
     },
     page: () => {
-      if (phase === 'saving' || phase === 'arming') return;
-      clearArmTimers();
-      circle = null;
-      trail = [];
-      consumedHold = true;
-      view.setTrail([]);
-      const title = cleanText(document.title || location.href, 300);
-      void arm(
-        {
-          candidate: { kind: 'link', url: location.href, title, text: title },
-          target: document.documentElement,
-          rectangle: {
-            x: Math.max(0, innerWidth / 2 - 120),
-            y: Math.max(0, innerHeight / 2 - 20),
-            width: Math.min(240, innerWidth),
-            height: 40,
-            viewportWidth: innerWidth,
-            viewportHeight: innerHeight,
-          },
-        },
-        true,
-      );
+      void beginManualGrab().then((ready) => (ready ? grabPage() : undefined));
     },
     close: () => {
       void request({ v: 1, type: 'PAUSE_HAND' });
       dispose();
     },
+    sprite: loadSprite,
   });
 
   // A modifier hold owns exactly one lasso. Its release never cancels a
@@ -694,6 +778,7 @@ function activate(): () => void {
     clearArmTimers();
     clearTimeout(pollTimer);
     clearTimeout(restoreTimer);
+    clearTimeout(chipTimer);
     clearInterval(navigationTimer);
     listeners.abort();
     chrome.runtime.onMessage.removeListener(runtimeListener);
@@ -705,12 +790,39 @@ function activate(): () => void {
     passive: true,
     signal: listeners.signal,
   });
-  document.addEventListener('scroll', invalidateTarget, {
+  // Moving the page invalidates a target; the selection chip steps aside and returns.
+  const pageMoved = (): void => {
+    invalidateTarget();
+    view.setSelectionChip(null, document.getSelection()?.isCollapsed === false);
+    scheduleSelectionChip(220);
+  };
+  document.addEventListener('scroll', pageMoved, {
     passive: true,
     capture: true,
     signal: listeners.signal,
   });
-  window.addEventListener('resize', invalidateTarget, { passive: true, signal: listeners.signal });
+  window.addEventListener('resize', pageMoved, { passive: true, signal: listeners.signal });
+  document.addEventListener(
+    'selectionchange',
+    () => {
+      if (pointerHeld) view.setSelectionChip(null, false);
+      else scheduleSelectionChip();
+    },
+    { signal: listeners.signal },
+  );
+  const pointerReleased = (event: PointerEvent): void => {
+    if (!event.isTrusted || !pointerHeld) return;
+    pointerHeld = false;
+    scheduleSelectionChip(60);
+  };
+  document.addEventListener('pointerup', pointerReleased, {
+    passive: true,
+    signal: listeners.signal,
+  });
+  document.addEventListener('pointercancel', pointerReleased, {
+    passive: true,
+    signal: listeners.signal,
+  });
   window.addEventListener('pagehide', dispose, { signal: listeners.signal });
   window.addEventListener('blur', invalidateTarget, { signal: listeners.signal });
   document.addEventListener(
@@ -723,7 +835,9 @@ function activate(): () => void {
   document.addEventListener(
     'pointerdown',
     (event) => {
-      if (event.isTrusted && !view.contains(event)) endInput(true);
+      if (!event.isTrusted || view.contains(event)) return;
+      pointerHeld = true;
+      endInput(true);
     },
     { passive: true, signal: listeners.signal },
   );

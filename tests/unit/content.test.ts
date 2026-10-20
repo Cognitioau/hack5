@@ -562,3 +562,107 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('one-click grabs (mocked browser boundary)', () => {
+  const control = (selector: string): HTMLButtonElement =>
+    shadow?.querySelector(selector) as HTMLButtonElement;
+  function selectPassage(): void {
+    const range = document.createRange();
+    range.setStart(target.firstChild as Node, 0);
+    range.setEnd(target.firstChild as Node, passage.length);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+  }
+
+  it('grabs a live selection with Alt+Shift+Z even when the pointer rests on a control', async () => {
+    selectPassage();
+    const menu = document.createElement('button');
+    menu.textContent = 'Menu';
+    document.body.append(menu);
+    target = menu;
+    await accessibleCapture();
+    expect(messages('ARM')[0]).toMatchObject({ candidate: { kind: 'text', text: passage } });
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it('grabs the selection from the hand button when text is selected', async () => {
+    selectPassage();
+    control('.grab').click();
+    await flush();
+    expect(messages('ARM')[0]).toMatchObject({ candidate: { kind: 'text', text: passage } });
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it('grabs the whole page from the hand button when nothing is selected', async () => {
+    document.body.innerHTML =
+      '<nav><p>Menu</p></nav><main><h1>Fixture heading</h1><p>Readable body text.</p></main>';
+    send.mockImplementation(async (message: ContentMessage) =>
+      message.type === 'CAPTURE'
+        ? {
+            ok: true,
+            capture: {
+              ...record(message.operationId),
+              candidate: {
+                kind: 'link',
+                title: 'Public fixture',
+                text: 'Fixture heading',
+                url: 'https://example.org/article',
+              },
+              preservation: 'link',
+            },
+          }
+        : handleMessage(message),
+    );
+    control('.grab').click();
+    await flush();
+    expect(messages('ARM')[0]).toMatchObject({
+      candidate: {
+        kind: 'link',
+        url: 'https://example.org/article',
+        title: 'Public fixture',
+        text: 'Fixture heading\n\nReadable body text.',
+      },
+    });
+    expect(messages('CAPTURE')).toHaveLength(1);
+    expect(shadow?.textContent).toContain('The link and its readable text are saved.');
+  });
+
+  it('asks for a selection instead of guessing when Grab selection has nothing to take', async () => {
+    control('.button.primary').click();
+    await flush();
+    expect(messages('ARM')).toHaveLength(0);
+    expect(shadow?.textContent).toContain('Select some page text first');
+  });
+
+  it('offers a selection chip once a selection settles, never mid-drag or for a grabbed selection', async () => {
+    const chip = control('.chip');
+    expect(chip.hidden).toBe(true);
+    dispatch('pointerdown');
+    selectPassage();
+    dispatch('selectionchange');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(chip.hidden).toBe(true);
+    dispatch('pointerup');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(chip.hidden).toBe(false);
+    expect([chip.style.left, chip.style.top]).toEqual(['286px', '134px']);
+    expect(control('.grab').getAttribute('aria-label')).toBe('Grab the selected text');
+
+    chip.click();
+    await flush();
+    expect(messages('ARM')[0]).toMatchObject({ candidate: { kind: 'text', text: passage } });
+    expect(chip.hidden).toBe(true);
+    dispatch('scroll');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(chip.hidden).toBe(true);
+
+    document.getSelection()?.removeAllRanges();
+    dispatch('selectionchange');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(control('.grab').getAttribute('aria-label')).toBe('Grab this page');
+    selectPassage();
+    dispatch('selectionchange');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(chip.hidden).toBe(false);
+  });
+});
