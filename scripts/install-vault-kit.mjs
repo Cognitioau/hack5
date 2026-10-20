@@ -87,4 +87,4 @@ console.log(`
 Next, from that folder:
   cd ${JSON.stringify(folder)}
   claude
-Accept the trust prompt (it lists the wiki-only rules and the hook that enforces them), then type /ingest.`);
+Accept the trust prompt, then type /ingest.`);
