@@ -17,6 +17,14 @@ export interface HandActions {
   grab?: () => void;
   /** Reads one grave hand's packaged frames; its grave opens without a hand until they arrive. */
   sprite?: (hand: number) => Promise<Uint8Array<ArrayBuffer> | null>;
+  /** Open the extension's settings page. */
+  settings?: () => void;
+}
+export interface StateOptions {
+  /** An error whose capture is kept on this device: its grab plays out and fades, as a queued save does. */
+  kept?: boolean;
+  /** The receipt offers the settings page, where the problem is put right. */
+  settings?: boolean;
 }
 export interface TargetPresentation {
   kind?: GraveKind;
@@ -52,7 +60,7 @@ const STYLE = `
 .title{font-size:13px;font-weight:680;letter-spacing:-.1px;line-height:1.35;margin:2px 0 5px}.detail{font-size:11px;line-height:1.5;color:var(--muted);margin:0;overflow-wrap:anywhere}.snippet{font-size:11px;line-height:1.45;margin:10px 0 0;padding:7px 9px;background:#ffffff04;border-left:2px solid #a9c985;color:#dce5d3;white-space:pre-wrap;overflow:hidden;max-height:48px;overflow-wrap:anywhere}
 .announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .dock[data-state="error"]{border-color:#b58a5b}.dock[data-state="error"] .title{color:#f1d4a5}.dock[data-state="error"] .mark{fill:#e2b36f}.dock[data-state="saving"] .mark{fill:#d3b779}.dock[data-state="arming"] .mark,.dock[data-state="armed"] .mark{fill:var(--acid)}
-.panel{border-top:1px solid #344132;padding:11px 14px 13px;width:270px;max-width:calc(100vw - 26px)}.controls{display:flex;gap:7px;flex-wrap:wrap}.key{font-size:10px;line-height:1.6;color:#a5b59e;margin:10px 0 0}.instruction{font-size:11px;color:#d7e2ce;line-height:1.5;margin:0 0 10px}.close{margin-top:10px;border:0;background:none;color:#a7b3a6;font-size:10px;padding:2px 0;text-decoration:underline;text-underline-offset:2px}.close:hover{color:#fff}
+.panel{border-top:1px solid #344132;padding:11px 14px 13px;width:270px;max-width:calc(100vw - 26px)}.controls{display:flex;gap:7px;flex-wrap:wrap}.key{font-size:10px;line-height:1.6;color:#a5b59e;margin:10px 0 0}.instruction{font-size:11px;color:#d7e2ce;line-height:1.5;margin:0 0 10px}.links{display:flex;gap:14px}.close,.link{margin-top:10px;border:0;background:none;color:#a7b3a6;font-size:10px;padding:2px 0;text-decoration:underline;text-underline-offset:2px}.close:hover,.link:hover{color:#fff}.receipt .settings{margin-top:9px}
 .ghost{border-top:1px solid #344132;padding:11px 14px 13px;width:270px;max-width:calc(100vw - 26px)}.ghost-label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#a7c78d;margin:0 0 6px}.ghost a{font-size:12px;font-weight:640;color:#e4f6d4;text-decoration:none;overflow-wrap:anywhere}.ghost a:hover{text-decoration:underline}.ghost p{font-size:11px;line-height:1.45;color:var(--muted);margin:6px 0 0;overflow-wrap:anywhere}.ghost-dismiss{float:right;border:0;background:none;color:var(--muted);font-size:10px;cursor:pointer;padding:0 0 4px 7px}
 .ghost-indicator{position:absolute;top:5px;right:5px;width:7px;height:7px;background:#cff890;border-radius:50%;box-shadow:0 0 6px #cff890a0}
 .chip{position:fixed;z-index:2147483647;display:grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid #2c3a26;border-radius:15px;background:var(--acid);box-shadow:0 3px 10px #10201440;animation:chip-in .16s ease-out}.chip:hover{background:#dffaaf;transform:scale(1.08)}.chip .mark{width:15px;height:17px;fill:#24361a;stroke:none}
@@ -99,6 +107,7 @@ export class HandView {
   private readonly ghostIndicator: HTMLSpanElement;
   private readonly ghostLink: HTMLAnchorElement;
   private readonly ghostText: HTMLParagraphElement;
+  private readonly receiptSettings: HTMLButtonElement | null;
   private readonly listeners = new AbortController();
   private readonly effectTimers = new Set<number>();
   private quietTimer: number | undefined;
@@ -219,6 +228,13 @@ export class HandView {
     this.snippet = node('p', 'snippet');
     this.snippet.hidden = true;
     receipt.append(this.title, this.detail, this.snippet);
+    this.receiptSettings = actions.settings
+      ? button('button settings', 'Open settings', 'Open Zombie Hand settings', actions.settings)
+      : null;
+    if (this.receiptSettings) {
+      this.receiptSettings.hidden = true;
+      receipt.append(this.receiptSettings);
+    }
 
     this.panel = node('div', 'panel');
     this.panel.id = 'zombie-hand-secondary-controls';
@@ -240,11 +256,13 @@ export class HandView {
         )
       : null;
     if (this.pageButton) controls.append(this.pageButton);
-    const close = button(
-      'close',
-      'Pause everywhere',
-      'Pause Zombie Hand everywhere',
-      actions.close,
+    const links = node('div', 'links');
+    if (actions.settings)
+      links.append(
+        button('link settings', 'Settings', 'Open Zombie Hand settings', actions.settings),
+      );
+    links.append(
+      button('close', 'Pause everywhere', 'Pause Zombie Hand everywhere', actions.close),
     );
     this.panel.append(
       node(
@@ -258,7 +276,7 @@ export class HandView {
         'key',
         'Alt + Shift + Z: grab the selection or what the pointer is on · Escape: cancel',
       ),
-      close,
+      links,
     );
     this.ghost = node('div', 'ghost');
     this.ghost.hidden = true;
@@ -388,7 +406,7 @@ export class HandView {
     this.chip.hidden = false;
   }
 
-  setState(state: HandState, title: string, detail: string): void {
+  setState(state: HandState, title: string, detail: string, options: StateOptions = {}): void {
     const previous = this.state;
     this.state = state;
     this.dock.dataset.state = state;
@@ -404,6 +422,8 @@ export class HandView {
     if (this.pageButton) this.pageButton.disabled = busy;
     this.captureButton.textContent = state === 'armed' ? 'Grab this' : 'Grab selection';
     this.cancelButton.hidden = !['arming', 'armed', 'saving'].includes(state);
+    if (this.receiptSettings)
+      this.receiptSettings.hidden = !(state === 'error' && options.settings);
     if (['arming', 'armed', 'saving'].includes(state)) this.chip.hidden = true;
     this.updateUndo();
     this.updateGrabLabel();
@@ -416,7 +436,9 @@ export class HandView {
     if (state === 'saving' && previous !== 'saving') this.startEffect();
     else if (state === 'saved' && previous !== 'saved') this.retreatEffect(true);
     else if (['arming', 'armed'].includes(state) && state !== previous) this.hideEffect();
-    else if (['idle', 'archived', 'error'].includes(state) && state !== previous)
+    // A capture kept on this device is held like a queued save: the vault can
+    // refuse before the hand has surfaced, and its grab still plays out.
+    else if (['idle', 'archived', 'error'].includes(state) && state !== previous && !options.kept)
       this.retreatEffect(false);
   }
 

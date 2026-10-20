@@ -1,7 +1,13 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { configureVault, launchExtension, state, wake } from './helpers/extension-fixture';
+import {
+  configureVault,
+  isolatedMessage,
+  launchExtension,
+  state,
+  wake,
+} from './helpers/extension-fixture';
 import { startVaultFixture } from './helpers/vault-fixture';
 
 /** A trusted mouse drag across part of a passage; returns the selected words. */
@@ -164,6 +170,49 @@ test('the footage hand bursts through a page whose CSP forbids every image', asy
   } finally {
     await fixture.close();
     await vault.close();
+  }
+});
+
+test('with no vault connected the hand still climbs out, and the page can open settings', async () => {
+  test.setTimeout(60_000);
+  // Only the fixture's pages are used: the extension is never told about its vault.
+  const pages = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    const strict = await fixture.context.newPage();
+    await strict.goto(`${pages.origin}/strict`);
+    const tabId = await wake(fixture, strict);
+    const words = await dragSelect(strict, '#strict');
+    const { bounds } = await selectionArea(strict);
+    const region = {
+      x: Math.round(bounds.x + bounds.width / 2 - 90),
+      y: Math.round(bounds.y + bounds.height - 150),
+      width: 180,
+      height: 200,
+    };
+    const { shots, count } = await filmGrab(fixture, strict, region);
+    const haunted: number[] = [];
+    for (const shot of shots) haunted.push(await count(shot, region));
+    const peak = Math.max(...haunted);
+    await frame(strict, 'grab-no-vault', shots[haunted.indexOf(peak)]);
+    // Without a vault the capture fails over at once; the hand must not let go before it surfaces.
+    expect(peak).toBeGreaterThan(3_000);
+    await expect
+      .poll(async () => (await state(fixture)).map((c) => [c.candidate.text, c.persistence]))
+      .toContainEqual([words, 'failed']);
+    // The receipt's Settings button sends this from the page in front; Chrome
+    // brings up the options page, opening it again once it has been closed.
+    await fixture.options.close();
+    await strict.bringToFront();
+    const [opened, response] = await Promise.all([
+      fixture.context.waitForEvent('page', { timeout: 10_000 }),
+      isolatedMessage(fixture, tabId, { v: 1, type: 'OPEN_SETTINGS' }),
+    ]);
+    expect(response.ok).toBe(true);
+    expect(opened.url()).toBe(`chrome-extension://${fixture.id}/options.html`);
+  } finally {
+    await fixture.close();
+    await pages.close();
   }
 });
 

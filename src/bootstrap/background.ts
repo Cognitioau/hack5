@@ -277,6 +277,9 @@ async function contentRequest(
       activationIntent += 1;
       await handActivation.pause();
       return { ok: true, activation: handActivation.getMode() };
+    case 'OPEN_SETTINGS':
+      await chrome.runtime.openOptionsPage();
+      return { ok: true };
     case 'HAND_SPRITE':
       return { ok: true, sprite: await readHandSprite(message.hand) };
     case 'CONTENT_STATUS': {

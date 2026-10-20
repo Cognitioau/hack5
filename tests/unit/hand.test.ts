@@ -2,6 +2,7 @@
 // @vitest-environment-options {"url":"https://example.org/article","pretendToBeVisual":true}
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '../../src/core/contracts/index';
+import { grabEndFor } from '../../src/ui/grave';
 import { GRAVE_HANDS } from '../../src/ui/grave-sprite';
 import { HandView } from '../../src/ui/hand';
 
@@ -348,6 +349,62 @@ describe('target-local hand presentation', () => {
     expect(element('.title').textContent).toBe('Queued locally.');
     expect(element('.detail').textContent).toBe('Waiting for the vault connection.');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('finishes the grab of a capture kept on this device even when the vault refuses at once', async () => {
+    const sprite = vi.fn(async (_hand: number) => null);
+    view.dispose();
+    view = new HandView(document, { ...actions, sprite });
+    view.setTarget(rectangle, 'Kept until the vault is connected.');
+    view.setState('saving', 'Taking hold…', 'Preparing a durable local capture.');
+    const hand = GRAVE_HANDS[sprite.mock.calls[0]?.[0] ?? -1];
+    if (!hand) throw new Error('No hand was loaded');
+    const grabEnd = grabEndFor(hand);
+    await vi.advanceTimersByTimeAsync(40);
+    view.setState('error', 'Still here. Still yours.', 'Connect your vault in Settings.', {
+      kept: true,
+    });
+    // Still reaching for the words just before the fist closes on them.
+    await vi.advanceTimersByTimeAsync(grabEnd - 140);
+    expect(element('.effect').hidden).toBe(false);
+    expect(element('.effect').dataset.phase).toBe('reach');
+    // Then it fades as a queued save does; it never buries what the vault has not confirmed.
+    await vi.advanceTimersByTimeAsync(1_300);
+    expect(element('.effect').dataset.phase).toBe('fade');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(element('.effect').hidden).toBe(true);
+    expect(element('.dock').dataset.state).toBe('error');
+  });
+
+  it('lets go at once when nothing was kept', async () => {
+    view.setTarget(rectangle, 'Never captured.');
+    view.setState('saving', 'Taking hold…', 'Preparing a durable local capture.');
+    await vi.advanceTimersByTimeAsync(40);
+    view.setState('error', 'Still here. Still yours.', 'The capture was refused.');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(element('.effect').dataset.phase).toBe('release');
+  });
+
+  it('offers settings from the panel, and from the receipt when the fix is there', () => {
+    const settings = vi.fn();
+    view.dispose();
+    view = new HandView(document, { ...actions, settings });
+    const receiptSettings = element<HTMLButtonElement>('.receipt .settings');
+    expect(receiptSettings.hidden).toBe(true);
+    view.setState('error', 'Still here. Still yours.', 'Connect your vault in Settings.', {
+      kept: true,
+      settings: true,
+    });
+    expect(receiptSettings.hidden).toBe(false);
+    receiptSettings.click();
+    element('.toggle').click();
+    element<HTMLButtonElement>('.panel .settings').click();
+    expect(settings).toHaveBeenCalledTimes(2);
+    // Any later state takes the receipt's offer away again.
+    view.setState('idle', 'Ready when you are.', 'Select text or click the hand.');
+    expect(receiptSettings.hidden).toBe(true);
+    view.setState('error', 'Still here. Still yours.', 'Select some page text first.');
+    expect(receiptSettings.hidden).toBe(true);
   });
 
   it('does not grab an old passage again when archiving its completed capture', async () => {

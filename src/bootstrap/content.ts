@@ -10,7 +10,7 @@ import {
   type ExtractedCandidate,
 } from '../adapters/browser/extraction';
 import { currentVideoSeconds, extractYouTubeCandidate } from '../features/youtube/transcript';
-import { HandView } from '../ui/hand';
+import { HandView, type StateOptions } from '../ui/hand';
 
 type Phase = 'idle' | 'aiming' | 'arming' | 'armed' | 'saving' | 'saved' | 'error';
 type SessionWindow = Window & { __zombieHandDispose?: () => void };
@@ -91,13 +91,13 @@ function activate(): () => void {
     view.setState('idle', 'Ready when you are.', detail);
   };
 
-  const showError = (detail: string): void => {
+  const showError = (detail: string, options: StateOptions = {}): void => {
     phase = 'error';
     circle = null;
     trail = [];
     view.setTrail([]);
     view.setTarget(null);
-    view.setState('error', 'Still here. Still yours.', detail);
+    view.setState('error', 'Still here. Still yours.', detail, options);
   };
 
   const renderCapture = (capture: PublicCapture): void => {
@@ -182,6 +182,7 @@ function activate(): () => void {
         ? 'Kept locally. The vault contains a conflicting change; review it in the graveyard.'
         : capture.lastError ||
             'Kept locally, but the vault save failed. Check the connection in the graveyard.',
+      { kept: true, settings: capture.persistence !== 'conflict' },
     );
   };
 
@@ -538,6 +539,9 @@ function activate(): () => void {
     close: () => {
       void request({ v: 1, type: 'PAUSE_HAND' });
       dispose();
+    },
+    settings: () => {
+      void request({ v: 1, type: 'OPEN_SETTINGS' });
     },
     sprite: loadSprite,
   });

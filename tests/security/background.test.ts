@@ -485,6 +485,7 @@ describe('production background capability boundary', () => {
   const pageMessages: Record<string, () => Promise<Record<string, unknown>>> = {
     CONTENT_STATUS: async () => ({ v: 1, type: 'CONTENT_STATUS' }),
     PAUSE_HAND: async () => ({ v: 1, type: 'PAUSE_HAND' }),
+    OPEN_SETTINGS: async () => ({ v: 1, type: 'OPEN_SETTINGS' }),
     HAND_SPRITE: async () => {
       context.network.mockImplementation(async () => new Response(new Uint8Array([1, 2, 3])));
       return { v: 1, type: 'HAND_SPRITE', hand: 0 };
@@ -593,6 +594,14 @@ describe('production background capability boundary', () => {
       ok: true,
       sprite: btoa('\x01\x02\x03'),
     });
+  });
+
+  it('opens the settings page for a page, and nothing else', async () => {
+    const before = await store.list();
+    expect((await context.send({ v: 1, type: 'OPEN_SETTINGS' })).ok).toBe(true);
+    expect(context.api.runtime.openOptionsPage).toHaveBeenCalledOnce();
+    expect(context.local.values.handActivation).not.toBe('paused');
+    expect(await store.list()).toEqual(before);
   });
 
   it('lets a page pause globally, then rejects stale arming and confirmation', async () => {
