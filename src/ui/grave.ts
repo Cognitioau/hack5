@@ -1,7 +1,8 @@
 /**
  * Decorative grave-hand choreography. The page cracks like plaster, a hand
  * punches through it, slaps down on the target, snatches a paper copy of the
- * words and drags it back through the hole, which then heals over.
+ * words and drags it back through the hole. The plaster it threw out then
+ * flies back in, the pieces fitting together, and the cracks close into the page.
  * It never decides persistence: the view starts, buries or releases it only in
  * response to real capture state, and the source page DOM is never touched.
  *

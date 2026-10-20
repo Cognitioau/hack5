@@ -19,7 +19,7 @@ TypeScript is strict. Biome checks formatting/lint. AST checks enforce layer and
 
 | Suite | Evidence | Limit |
 | --- | --- | --- |
-| Unit | Gestures, extraction, captions/imports, queue/lifecycle races, model disposal, calibration math, grave-hand packs, timing and placement (the hole on screen and the fist on the passage for every hand) | Synthetic DOM, fake IndexedDB or injected ports |
+| Unit | Gestures, extraction, captions/imports, queue/lifecycle races, model disposal, calibration math, grave-hand packs, timing and placement (the hole on screen and the fist on the passage for every hand), and the plaster that plugs the hole (pieces tile the crater, fly back in, core last) | Synthetic DOM, fake IndexedDB or injected ports |
 | Vault contracts | Paths, malicious content, preconditions, conflicts, uncertain writes, attachments and recovery | Protocol fixture, not a running plugin |
 | Security | Real background listener authorization and revocation interleavings; message/media policies | Synthetic Chrome and transport APIs |
 | Capture browser | Bundled extension, trusted inputs, crop pixels, storage isolation, fixture captions, semantic retrieval, archive/restart and core | Synthetic sites/vault; scoped test-only pregrants |
