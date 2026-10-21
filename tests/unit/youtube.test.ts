@@ -111,7 +111,7 @@ describe('native YouTube transcript evidence', () => {
       modern('1:02:03', '1 hour, 2 minutes, 3 seconds', 'You know the rules.');
     const stale = segment('0:05', 'A closed panel from earlier.');
     for (const id of ['target-id="PAmodern_transcript_view"', '']) {
-      document.body.innerHTML = `<div id="movie_player"><video class="html5-main-video"></video></div><ytd-engagement-panel-section-list-renderer target-id="engagement-panel-searchable-transcript" visibility="ENGAGEMENT_PANEL_VISIBILITY_HIDDEN">${stale}</ytd-engagement-panel-section-list-renderer><ytd-engagement-panel-section-list-renderer ${id} visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED">${cues}</ytd-engagement-panel-section-list-renderer>`;
+      document.body.innerHTML = `<div id="movie_player"><video class="html5-main-video"></video></div><ytd-engagement-panel-section-list-renderer target-id="engagement-panel-structured-description" visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"><p>An open description, holding no cues.</p></ytd-engagement-panel-section-list-renderer><ytd-engagement-panel-section-list-renderer target-id="engagement-panel-searchable-transcript" visibility="ENGAGEMENT_PANEL_VISIBILITY_HIDDEN">${stale}</ytd-engagement-panel-section-list-renderer><ytd-engagement-panel-section-list-renderer ${id} visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED">${cues}</ytd-engagement-panel-section-list-renderer>`;
       expect(readYouTubeTranscript(document, 'abcdefghijk'), id).toMatchObject({
         status: 'partial',
         cues: [
