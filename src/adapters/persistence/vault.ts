@@ -150,12 +150,20 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.byteLength === b.byteLength && a.every((byte, index) => byte === b[index]);
 }
 
-function escapeMarkdown(value: string): string {
+/**
+ * Punctuation a backslash shows as written outside the fences, newest first: Obsidian
+ * also reads `%%` as a comment it hides, `$` as maths, `==` as a highlight and `^` as a
+ * block reference. Notes saved before those four joined keep the earlier set.
+ */
+const PUNCTUATION = [/[\\`*_[\]{}()#+\-!|~%$=^]/g, /[\\`*_[\]{}()#+\-!|~]/g] as const;
+type Punctuation = (typeof PUNCTUATION)[number];
+
+function escapeMarkdown(value: string, punctuation: Punctuation): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/[\\`*_[\]{}()#+\-!|~]/g, '\\$&')
+    .replace(punctuation, '\\$&')
     .replace(/[\r\n]+/g, ' ');
 }
 
@@ -189,7 +197,9 @@ function renderNote(
   config: NormalizedConfig,
   record: CaptureRecord,
   asset?: AssetDescriptor,
+  punctuation: Punctuation = PUNCTUATION[0],
 ): Uint8Array {
+  const escaped = (value: string) => escapeMarkdown(value, punctuation);
   const { byline, context, passageUrl } = record.candidate;
   const frontmatter = stringifyYaml(
     {
@@ -216,7 +226,7 @@ function renderNote(
     frontmatter.trimEnd(),
     '---',
     '',
-    `# ${escapeMarkdown(record.candidate.title)}`,
+    `# ${escaped(record.candidate.title)}`,
     '',
     passageUrl
       ? `${sourceLink(record.candidate.url)} · ${sourceLink(passageUrl, 'Open passage')}`
@@ -226,7 +236,7 @@ function renderNote(
   const credit = [byline?.author && `By ${byline.author}`, byline?.site, byline?.published]
     .filter(Boolean)
     .join(' · ');
-  if (credit) lines.push(escapeMarkdown(credit), '');
+  if (credit) lines.push(escaped(credit), '');
   lines.push(`Preservation: ${record.preservation}.`, '');
   if (asset) {
     const path = attachmentPath(config, record.id, asset.extension);
@@ -234,7 +244,7 @@ function renderNote(
   }
   if (context?.heading || context?.paragraph) {
     lines.push('## Context', '');
-    if (context.heading) lines.push(`Under the heading “${escapeMarkdown(context.heading)}”.`, '');
+    if (context.heading) lines.push(`Under the heading “${escaped(context.heading)}”.`, '');
     if (context.paragraph) lines.push(quoteEvidence(context.paragraph), '');
   }
   if (record.candidate.text)
@@ -253,7 +263,7 @@ function renderNote(
       const seconds = Math.floor(cue.start);
       const time = `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
       lines.push(
-        `[${time}](https://www.youtube.com/watch?v=${video.id}&t=${seconds}s) ${escapeMarkdown(cue.text)}`,
+        `[${time}](https://www.youtube.com/watch?v=${video.id}&t=${seconds}s) ${escaped(cue.text)}`,
         '',
       );
     }
@@ -314,7 +324,11 @@ function validateAsset(record: CaptureRecord): void {
     throw new VaultFailure('failed', 'Attachment bytes do not match their declared file type.');
 }
 
-async function prepare(config: NormalizedConfig, input: CaptureRecord): Promise<PreparedCapture> {
+async function prepare(
+  config: NormalizedConfig,
+  input: CaptureRecord,
+  punctuation: Punctuation = PUNCTUATION[0],
+): Promise<PreparedCapture> {
   const validation = captureRecordSchema.safeParse(input);
   if (!validation.success) throw new VaultFailure('failed', 'The capture record is invalid.');
   const record = validation.data;
@@ -334,7 +348,7 @@ async function prepare(config: NormalizedConfig, input: CaptureRecord): Promise<
         extension: record.asset.extension,
       }
     : undefined;
-  const note = renderNote(config, record, asset);
+  const note = renderNote(config, record, asset, punctuation);
   const metadata: VaultMetadata = {
     marker,
     schemaVersion: 1,
@@ -769,7 +783,7 @@ export function createVaultClient(
     let hasRemoteEvidence = false;
     try {
       const resolved = settings();
-      const prepared = await prepare(resolved, input);
+      let prepared = await prepare(resolved, input);
       if (!verified) {
         const outcome = await probe(signal);
         if (!outcome.ok) return { status: 'failed', message: outcome.message };
@@ -783,12 +797,20 @@ export function createVaultClient(
         );
         hasRemoteEvidence = true;
       }
-      await createFile(
-        notePath(resolved, prepared.record.id),
-        prepared.note,
-        'text/markdown; charset=utf-8',
-        signal,
-      );
+      const note = notePath(resolved, prepared.record.id);
+      try {
+        await createFile(note, prepared.note, 'text/markdown; charset=utf-8', signal);
+      } catch (error) {
+        // A note saved before the newer escapes keeps its bytes, so archiving or
+        // restoring it is not a conflict.
+        const earlier =
+          error instanceof VaultFailure && error.status === 'conflict'
+            ? await prepare(resolved, input, PUNCTUATION[1])
+            : undefined;
+        if (!earlier || equalBytes(earlier.note, prepared.note)) throw error;
+        await createFile(note, earlier.note, 'text/markdown; charset=utf-8', signal);
+        prepared = earlier;
+      }
       hasRemoteEvidence = true;
       const etag = await ensureMetadata(prepared, signal);
       return {
@@ -953,8 +975,16 @@ export function createVaultClient(
             ...(metadata.metadata ? { metadata: metadata.metadata } : {}),
           });
           validateAsset(recovered);
-          // Regenerate the raw note to confirm its marker, operation, and source match the metadata.
-          if (!equalBytes(renderNote(resolved, recovered, metadata.evidence.asset), note.bytes)) {
+          // Regenerate the raw note to confirm its marker, operation, and source match the metadata,
+          // in the escaping of the version that saved it.
+          if (
+            !PUNCTUATION.some((punctuation) =>
+              equalBytes(
+                renderNote(resolved, recovered, metadata.evidence.asset, punctuation),
+                note.bytes,
+              ),
+            )
+          ) {
             observeUnavailable(
               'conflict',
               'The saved vault note no longer matches its original capture format. Existing evidence was preserved.',
