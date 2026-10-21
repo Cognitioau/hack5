@@ -40,6 +40,8 @@ function activate(): () => void {
   let phase: Phase = 'idle';
   /** A whole-page grab waiting on the reader: in flight, though nothing is armed yet. */
   let reading = false;
+  /** Counts page reads, so one dropped and outlived by the next leaves the next's hold alone. */
+  let reads = 0;
   let features: Features = {
     images: false,
     youtube: false,
@@ -232,6 +234,8 @@ function activate(): () => void {
     const previousToken = token;
     const previousOperation = operationId;
     const epoch = ++generation;
+    // A page still being read is let go now; its read is dropped when it returns.
+    reading = false;
     ghostEpoch += 1;
     view.setGhost(null);
     circle = null;
@@ -475,7 +479,7 @@ function activate(): () => void {
   };
 
   /** The page's readable article, from the reader the background loads on demand. */
-  const readArticle = async (): Promise<Article | null> => {
+  const readArticle = async (wanted: () => boolean): Promise<Article | null> => {
     // Only what page-reader.js set: a page element with that id shows through
     // the window's named properties, never as its own property.
     const reader = (): ((page: Document) => Article | null) | undefined => {
@@ -484,27 +488,32 @@ function activate(): () => void {
     };
     try {
       if (!reader() && !(await request({ v: 1, type: 'READ_PAGE' })).ok) return null;
-      return reader()?.(document) ?? null;
+      // A grab dropped while the reader loaded is not read at all.
+      return wanted() ? (reader()?.(document) ?? null) : null;
     } catch {
       // The reader improves a page grab but is never required: the excerpt still saves.
       return null;
     }
   };
 
-  const grabPage = async (): Promise<void> => {
-    const refuse = (): void =>
+  /** `dropped` when Escape, a settings change or the hand going away let go while the page was read. */
+  const grabPage = async (): Promise<'dropped' | undefined> => {
+    const refuse = (): undefined => {
       showError('This page cannot be grabbed. Only public http(s) pages are captured.');
+      return undefined;
+    };
     if (!extractPage(document)) return refuse();
-    // Escape, a settings change or the hand going away while the reader loads drops this grab.
     const epoch = generation;
+    const wanted = (): boolean => !disposed && epoch === generation;
+    const read = ++reads;
     reading = true;
     let article: Article | null;
     try {
-      article = await readArticle();
+      article = await readArticle(wanted);
     } finally {
-      reading = false;
+      if (read === reads) reading = false;
     }
-    if (disposed || epoch !== generation) return;
+    if (!wanted()) return 'dropped';
     // Taken after the wait, with the reader's read: a page that moved on
     // meanwhile is the one both describe, and the one its link points to.
     const page = extractPage(document);
@@ -514,6 +523,7 @@ function activate(): () => void {
       ? { ...excerpt, ...article, wholePage: true as const }
       : { ...page.candidate, wholePage: true as const };
     await arm({ ...page, candidate }, true, 'page');
+    return undefined;
   };
 
   /** Alt+Shift+Z: the selection wherever the pointer is, else what the pointer is on. */
@@ -559,7 +569,8 @@ function activate(): () => void {
     // An armed lasso target is taken as it stands.
     if (!(await beginManualGrab())) return { ok: true };
     if (selected) await grabSelected(selected);
-    else await grabPage();
+    else if ((await grabPage()) === 'dropped')
+      return { ok: false, error: 'Let go. Nothing new was captured.' };
     return phase === 'error' && failure ? { ok: false, error: failure } : { ok: true };
   };
 
@@ -821,6 +832,7 @@ function activate(): () => void {
         return false;
       case 'SETTINGS_CHANGED':
         generation += 1;
+        reading = false;
         endInput();
         clearArmTimers();
         clearTimeout(pollTimer);
