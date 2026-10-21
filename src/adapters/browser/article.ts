@@ -71,8 +71,11 @@ function unseen(element: Element): boolean {
     }
   ).checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true });
   if (visible !== false) return false;
-  // `display: contents` has no box of its own, yet its children still show.
-  return element.ownerDocument.defaultView?.getComputedStyle(element).display !== 'contents';
+  // `display: contents` has no box of its own, as a slot has none, yet what it
+  // holds still shows, unless the element is itself invisible: then its own
+  // text, slotted or fallback, is hidden with it.
+  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+  return style?.display !== 'contents' || style.visibility !== 'visible';
 }
 
 /** Linked data without the article text it can carry; null when it does not parse. */

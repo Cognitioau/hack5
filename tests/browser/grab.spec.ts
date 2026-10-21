@@ -486,7 +486,14 @@ test('a whole-page grab keeps the article and who wrote it, not the page around 
     // Highlighted as Prism marks an HTTP header, which the reader would cut to its colon.
     expect(text).toContain('Cache-Control: private');
     expect(text).toContain('The crab hid under weed.');
-    for (const unseen of ['MARK_UNSLOTTED', 'MARK_SHADOW_HIDDEN'])
+    // Nor text in a slot, or a box-less element, the page has made invisible.
+    for (const unseen of [
+      'MARK_UNSLOTTED',
+      'MARK_SHADOW_HIDDEN',
+      'MARK_SLOT_HIDDEN',
+      'MARK_FALLBACK_HIDDEN',
+      'MARK_CONTENTS_HIDDEN',
+    ])
       expect(text).not.toContain(unseen);
     for (const chrome of ['Subscribe to the newsletter', 'Counting moths', 'All rights reserved'])
       expect(text).not.toContain(chrome);
