@@ -55,21 +55,12 @@ const MAX_WINDOW_TEXT = 6_000;
 const MAX_WINDOW_SIDE_NODES = (MAX_SOURCE_NODES - 128) / 2;
 /** Transparent layers looked through to find an image under the pointer. */
 const MAX_OVERLAYS = 4;
-/** Elements that draw at the pointer whatever their style: media, frames and drawings. */
-const PAINTING_TAGS = new Set([
-  'audio',
-  'canvas',
-  'embed',
-  'iframe',
-  'img',
-  'input',
-  'object',
-  'picture',
-  'select',
-  'svg',
-  'textarea',
-  'video',
-]);
+/**
+ * Elements that draw at the pointer whatever their style: media and frames.
+ * Fields are editable, SVG and MathML draw by their namespace, and an image
+ * ends the lookup.
+ */
+const PAINTING_TAGS = new Set(['audio', 'canvas', 'embed', 'iframe', 'object', 'video']);
 const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
 const PARAGRAPH_SELECTOR = 'p,li,blockquote,dd,td,pre,figcaption';
 const MAX_CONTEXT_PARAGRAPH = 1_500;
@@ -298,8 +289,8 @@ function paragraphWindow(block: Element, anchor: Node): Set<Node> | null {
           );
         } else if (node.nodeType === 1) {
           const element = node as Element;
-          if (!home.contains(element) || stops(element) || holder(element) !== home)
-            items.push({ kind: 'stop', at, length: 0, blank: false });
+          // Other elements end nothing themselves: text held outside `home` is a stop.
+          if (stops(element)) items.push({ kind: 'stop', at, length: 0, blank: false });
           else if (element.tagName === 'BR')
             items.push({ kind: 'line', at, length: 0, blank: false });
         }
@@ -827,8 +818,7 @@ function paints(element: Element, document: Document): boolean {
     fill(style.backgroundColor) ||
     drawn(style.backgroundImage) ||
     drawn(style.boxShadow) ||
-    drawn(style.backdropFilter) ||
-    drawn(style.getPropertyValue('-webkit-backdrop-filter'))
+    drawn(style.backdropFilter)
   )
     return true;
   for (const pseudo of ['::before', '::after']) {

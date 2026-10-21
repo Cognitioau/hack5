@@ -410,10 +410,14 @@ describe('bounded untrusted page extraction', () => {
       cover((element) => {
         element.style.setProperty('backdrop-filter', 'blur(8px)');
       }),
-      cover(() => {}, 'video'),
-      cover(() => {}, 'canvas'),
-      cover(() => {}, 'iframe'),
+      ...['audio', 'canvas', 'embed', 'iframe', 'object', 'video'].map((tag) =>
+        cover(() => {}, tag),
+      ),
       parsed('<svg aria-hidden="true" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>'),
+      // The shape of a play icon, the element Chromium finds at the pointer.
+      parsed('<svg aria-hidden="true" viewBox="0 0 1 1"><path d="M0 0L1 .5L0 1z"/></svg>')
+        .firstElementChild as Element,
+      parsed('<math aria-hidden="true"><mi>x</mi></math>'),
       cover((element) => {
         element.style.backgroundColor = 'rgb(255, 255, 255)';
       }),
@@ -489,7 +493,7 @@ describe('bounded untrusted page extraction', () => {
           `${label} paragraph ${index} goes on about work for a while, as essays do.<br><br>`,
       ).join('');
     fixture(
-      `<table><tr><td id="essay"><font>${filler('Early', 500)}<blockquote>A quoted aside.</blockquote>Develop a habit of working on your own <a href="/x">projects</a>. Don't let "work"\nmean something other people tell you to do. If you do manage it, it will be yours.<br><br>${filler('Late', 500)}</font></td></tr></table>`,
+      `<table><tr><td id="essay"><font>${filler('Early', 500)}<blockquote>A quoted aside.</blockquote><div>A line laid out as a block.</div>Develop a habit of working on your own <a href="/x">projects</a>. Don't let "work"\nmean something other people tell you to do. If you do manage it, it will be yours.<br><br>${filler('Late', 500)}</font></td></tr></table>`,
       '#essay font',
     );
     expect(document.querySelector('#essay')?.textContent?.length).toBeGreaterThan(64_000);
