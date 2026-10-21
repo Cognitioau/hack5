@@ -1244,8 +1244,10 @@ describe('background settings and asynchronous revocation', () => {
     for (const saved of [
       note('related', 0.54),
       note('near', 0.31),
+      note('boundary', 0.3),
       note('unrelated', 0.29),
-      note('keyword', null),
+      // Notes not yet indexed match every word, and outnumber the 20 a search returns.
+      ...Array.from({ length: 20 }, (_, index) => note(`keyword-${index}`, null)),
     ])
       await seed(saved);
     const query = { v: 1, type: 'SEARCH', query: 'Orchids need controlled light and water.' };
@@ -1254,9 +1256,12 @@ describe('background settings and asynchronous revocation', () => {
     expect(urls(await context.send(query))).toEqual([
       'https://notes.example/related',
       'https://notes.example/near',
+      'https://notes.example/boundary',
     ]);
-    // The graveyard's own search still lists every match, keyword ones included.
-    expect(urls(await context.sendTrusted(query))).toHaveLength(4);
+    // The graveyard's own search still ranks the keyword matches first.
+    const listed = urls(await context.sendTrusted(query));
+    expect(listed).toHaveLength(20);
+    expect(listed?.every((url) => url?.startsWith('https://notes.example/keyword-'))).toBe(true);
   });
 
   it('discards a semantic query result revoked while capture records are loading', async () => {

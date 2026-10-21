@@ -191,7 +191,11 @@ export function createCoordinator(deps: CoordinatorDependencies) {
         )
           void index(record.id);
     },
-    async search(query: string): Promise<SearchResult[]> {
+    /** The 20 closest saved captures; `accept` drops a match before that cut, not after it. */
+    async search(
+      query: string,
+      accept: (result: SearchResult) => boolean = () => true,
+    ): Promise<SearchResult[]> {
       const epoch = featureEpoch;
       const trimmed = query.trim().slice(0, 2000);
       const features = await deps.features();
@@ -220,14 +224,15 @@ export function createCoordinator(deps: CoordinatorDependencies) {
             : semantic
               ? cosine(queryVector ?? [], indexed?.vector ?? [])
               : keywordScore(trimmed, chunk.text);
-          if (score > 0 && (!best || score > best.score))
-            best = {
-              capture: publicCapture(record),
-              excerpt: chunk.text,
-              sourceUrl: chunk.sourceUrl,
-              mode: semantic ? 'semantic' : 'keyword',
-              score,
-            };
+          if (score <= 0 || (best && score <= best.score)) continue;
+          const result: SearchResult = {
+            capture: publicCapture(record),
+            excerpt: chunk.text,
+            sourceUrl: chunk.sourceUrl,
+            mode: semantic ? 'semantic' : 'keyword',
+            score,
+          };
+          if (accept(result)) best = result;
         }
         if (best) results.push(best);
       }

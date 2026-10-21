@@ -418,13 +418,13 @@ async function contentRequest(
     }
     case 'SEARCH': {
       if (!(await readSettings()).features.haunting) return { ok: true, results: [] };
-      const results = await coordinator.search(message.query);
+      const results = await coordinator.search(message.query, haunts);
       await currentDocument(sender, context.pageUrl);
       if (!(await readSettings()).features.haunting) return { ok: true, results: [] };
       return {
         ok: true,
         results: results
-          .filter((item) => item.capture.candidate.url !== context.pageUrl && haunts(item))
+          .filter((item) => item.capture.candidate.url !== context.pageUrl)
           .slice(0, 3),
       };
     }

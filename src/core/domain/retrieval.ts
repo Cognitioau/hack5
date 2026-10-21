@@ -55,7 +55,7 @@ export function keywordScore(query: string, text: string): number {
 }
 /**
  * How close in meaning a saved note must be to come back as a ghost. On real pages related
- * notes scored 0.51–0.54 and the best unrelated one 0.17, so this sits between them.
+ * notes scored 0.51–0.54 and the best unrelated one 0.18, so this sits between them.
  */
 export const GHOST_MIN_SCORE = 0.3;
 /**
