@@ -1,5 +1,5 @@
 import { boundedMessage } from '../core/domain/security';
-import { publicCapture } from '../core/domain/retrieval';
+import { haunts, publicCapture } from '../core/domain/retrieval';
 import {
   contentMessageSchema,
   trustedMessageSchema,
@@ -424,7 +424,7 @@ async function contentRequest(
       return {
         ok: true,
         results: results
-          .filter((item) => item.capture.candidate.url !== context.pageUrl)
+          .filter((item) => item.capture.candidate.url !== context.pageUrl && haunts(item))
           .slice(0, 3),
       };
     }

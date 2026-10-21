@@ -1,4 +1,4 @@
-import type { CaptureRecord, PublicCapture } from '../contracts';
+import type { CaptureRecord, PublicCapture, SearchResult } from '../contracts';
 
 export function publicCapture(record: CaptureRecord): PublicCapture {
   const { asset: _asset, vectors: _vectors, ...safe } = record;
@@ -52,4 +52,16 @@ export function keywordScore(query: string, text: string): number {
   if (!words.length) return 0;
   const lower = text.toLocaleLowerCase();
   return words.filter((word) => lower.includes(word)).length / words.length;
+}
+/**
+ * How close in meaning a saved note must be to come back as a ghost. On real pages related
+ * notes scored 0.51–0.54 and the best unrelated one 0.17, so this sits between them.
+ */
+export const GHOST_MIN_SCORE = 0.3;
+/**
+ * Whether a search result is related enough to haunt a page. A keyword match never is: a long
+ * note holds most common words, so it can outscore the related one.
+ */
+export function haunts(result: SearchResult): boolean {
+  return result.mode === 'semantic' && result.score >= GHOST_MIN_SCORE;
 }

@@ -1222,6 +1222,43 @@ describe('background settings and asynchronous revocation', () => {
     expect(ports.prepare).not.toHaveBeenCalled();
   });
 
+  it('haunts a page only with a note close in meaning, never a keyword match', async () => {
+    const settings = context.local.values.settings as Settings;
+    settings.features.semantic = true;
+    settings.features.haunting = true;
+    // The query embeds to [1, 0], so each note's score is the first part of its vector.
+    const note = (name: string, score: number | null): CaptureRecord => {
+      const saved = record({
+        indexState: score === null ? 'disabled' : 'ready',
+        candidate: { ...candidate(), url: `https://notes.example/${name}` },
+      });
+      if (score !== null)
+        saved.vectors = searchableChunks(saved).map((chunk) => ({
+          ...chunk,
+          hash: 'synthetic-hash',
+          model: 'fixture-model',
+          vector: [score, Math.sqrt(1 - score * score)],
+        }));
+      return saved;
+    };
+    for (const saved of [
+      note('related', 0.54),
+      note('near', 0.31),
+      note('unrelated', 0.29),
+      note('keyword', null),
+    ])
+      await seed(saved);
+    const query = { v: 1, type: 'SEARCH', query: 'Orchids need controlled light and water.' };
+    const urls = (response: AppResponse) =>
+      response.ok ? response.results?.map((item) => item.capture.candidate.url) : undefined;
+    expect(urls(await context.send(query))).toEqual([
+      'https://notes.example/related',
+      'https://notes.example/near',
+    ]);
+    // The graveyard's own search still lists every match, keyword ones included.
+    expect(urls(await context.sendTrusted(query))).toHaveLength(4);
+  });
+
   it('discards a semantic query result revoked while capture records are loading', async () => {
     const enabled = context.local.values.settings as Settings;
     enabled.features.semantic = true;
