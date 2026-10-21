@@ -483,6 +483,8 @@ test('a whole-page grab keeps the article and who wrote it, not the page around 
     // What an open shadow root shows is read as the page composes it (MDN's code samples).
     expect(text).toContain('A journal entry, as the sample shows it');
     expect(text).toContain('date: 2024-03-05; tide: low');
+    // Highlighted as Prism marks an HTTP header, which the reader would cut to its colon.
+    expect(text).toContain('Cache-Control: private');
     expect(text).toContain('The crab hid under weed.');
     for (const unseen of ['MARK_UNSLOTTED', 'MARK_SHADOW_HIDDEN'])
       expect(text).not.toContain(unseen);

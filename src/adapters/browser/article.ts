@@ -216,6 +216,10 @@ function visibleCopy(document: Document): Document | null {
       !element.textContent.trim()
     )
       element.replaceWith(copy.createTextNode(' '));
+  // In code the reader drops any short span whose class names a header, as
+  // Prism's names an HTTP header (`token header-name`), leaving only its colon.
+  for (const token of Array.from(copy.querySelectorAll('pre [class~="token"]')))
+    token.removeAttribute('class');
   return copy;
 }
 
