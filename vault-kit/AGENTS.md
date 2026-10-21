@@ -18,6 +18,7 @@ This folder is the graveyard: Zombie Hand buries what you grab on the web. A cod
 3. **Work from the vault alone.** No web, no shell, no other tools. When the captures don't cover something, say so rather than filling the gap from memory.
 4. **Every factual sentence cites a capture.** Synthesis across captures is welcome, but label it ("Taken together, …") and cite every capture it rests on.
 5. **Never copy secrets.** If a capture contains something that looks like a password, key, token or private address, leave it out of the wiki and note in the log that you did.
+6. **Wiki pages show everything, load nothing from the web and run nothing, in code too.** Obsidian hides some Markdown, fetches some from the web, and its plugins run some of it. So a wiki page holds no HTML or `<!-- -->` comment, no `%%` comment, no Markdown image and no embed of a web address (embed a saved attachment with `![[…]]`), no Templater `<%` command, no Dataview query in inline code (`` `= …` `` or `` `$= …` ``), and no code fence named anything but a common language. Where a capture's words hold such text, write it so it shows as written: `\%\%`, `\![`, `&lt;tag&gt;`, `&lt;%`. Code that needs it stays in its capture; link to that instead. The hook in `.claude/` refuses a new line that breaks this rule, and its message lists the fence names it allows.
 
 ## Wiki pages
 

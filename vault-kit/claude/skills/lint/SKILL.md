@@ -17,7 +17,8 @@ Check the whole of `wiki/` for each of these:
 7. **Contradictions**: pages that disagree without a `## Disagreements` section saying so.
 8. **Waiting captures**: captures whose ids appear in no `capture:` or `skipped:` line of `wiki/log.md`, and skipped ones whose metadata is `active` again.
 9. **Index drift**: pages missing from `wiki/index.md`, or index lines for pages that no longer exist.
+10. **Hidden or active text**: a line that rule 6 of `AGENTS.md` forbids, such as one the person wrote themselves. The hook only refuses new lines, so these can still be there.
 
-Fix inside `wiki/` what has one right answer: index drift, a link to a renamed page, a missing `## Connections` back-link, a stale `sources:` list. Leave judgement calls (merging duplicates, archived evidence, contradictions) for the person and list them. Never delete a wiki page; never touch anything outside `wiki/`.
+Fix inside `wiki/` what has one right answer: index drift, a link to a renamed page, a missing `## Connections` back-link, a stale `sources:` list. Leave judgement calls (merging duplicates, archived evidence, contradictions, lines rule 6 forbids) for the person and list them. Never delete a wiki page; never touch anything outside `wiki/`.
 
 Append a `lint` entry to `wiki/log.md` listing what you fixed and what needs a decision. Then report the same in a few lines, with the most important decision first.
