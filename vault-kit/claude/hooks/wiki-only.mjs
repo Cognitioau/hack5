@@ -1,8 +1,9 @@
 // Refuses any file change outside this folder's wiki/, whatever other settings
-// allow, and any new wiki line that Obsidian would hide, load from the web or
-// run. Claude Code runs it before each Edit, Write or NotebookEdit; exit 2
-// blocks the call even where your own settings would let it through, and the
-// kit's settings block the call if this script cannot run at all.
+// allow, and any wiki page a change would leave holding something Obsidian
+// would hide, load from the web or run. Claude Code runs it before each Edit,
+// Write or NotebookEdit; exit 2 blocks the call even where your own settings
+// would let it through, and the kit's settings block the call if this script
+// cannot run at all.
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,14 +59,12 @@ const at = (pattern, line, index) => {
 /**
  * What in one line Obsidian would hide, fetch or run, wherever it sits, code
  * included: HTML (comments too), a Markdown image, a `%%` comment, an embed of a
- * web address, a Templater command, a Dataview query or a fence a plugin may
- * run. A web or mail address in angle brackets is a link, and a character after
- * a backslash shows as written, except to Templater, which reads the raw file.
+ * web address, a Templater command or a fence a plugin may run. A web or mail
+ * address in angle brackets is a link, and a character after a backslash shows
+ * as written, except to Templater, which reads the raw file.
  */
 function trouble(line) {
   if (line.includes('<%')) return 'a Templater command (<%)';
-  // Dataview's default prefixes, `= …` and `$= …`, wherever a code span could open.
-  if (/`\s*\$?=/u.test(line)) return 'a Dataview query in inline code';
   for (const [, language] of line.matchAll(/(?:`{3,}|~{3,})\s*([^\s`~]*)/gu))
     if (language && !FENCE_LANGUAGES.has(language.toLowerCase()))
       return `a code fence named ${JSON.stringify(language)}`;
@@ -91,25 +90,35 @@ function trouble(line) {
 
 const lines = (text) => text.split(/\r\n|\r|\n/u);
 
-/** The lines of `after` beyond the copies of them `before` already holds. */
-function added(before, after) {
-  const held = new Map();
-  for (const line of lines(before)) held.set(line, (held.get(line) ?? 0) + 1);
-  return lines(after).filter((line) => {
-    const left = held.get(line) ?? 0;
-    held.set(line, left - 1);
-    return left <= 0;
-  });
+/**
+ * The first thing in a page Obsidian would hide, fetch or run, and where. Dataview
+ * runs inline code that opens with its default prefixes, `= …` or `$= …`, and a
+ * code span may run across a line break.
+ */
+function pageTrouble(text) {
+  const query = /`\s*\$?=/u.exec(text);
+  if (query) {
+    const start = text.lastIndexOf('\n', query.index) + 1;
+    return { kind: 'a Dataview query in inline code', at: text.slice(start, start + 120) };
+  }
+  for (const line of lines(text)) {
+    const kind = trouble(line);
+    if (kind) return { kind, at: line };
+  }
+  return null;
 }
 
 /**
- * The lines a Write, Edit or MultiEdit would add to the file, beyond those it
- * already holds, so a line a person wrote stays theirs. When an edit's text is
- * not in the file Claude Code refuses the call itself, and every line of the
- * new text counts. Null when the call's shape is unknown.
+ * Every text a Write, Edit or MultiEdit could leave in the file. An edit that
+ * empties its text may also take the line break after it, as Claude Code's does,
+ * so each such edit is checked with and without those breaks (and, replacing
+ * every copy, with only the copies before a break gone). Null when the call's
+ * shape is unknown, when there are too many texts to check, or when an edit's old
+ * text is not in the file word for word: Claude Code may then match it loosely
+ * (curly quotes as straight, `\uXXXX` decoded) and write text this hook never saw.
  */
-function written(tool, current) {
-  if (typeof tool.content === 'string') return added(current, tool.content);
+function results(tool, current) {
+  if (typeof tool.content === 'string') return [tool.content];
   const edits = Array.isArray(tool.edits) ? tool.edits : [tool];
   if (
     !edits.every(
@@ -117,13 +126,23 @@ function written(tool, current) {
     )
   )
     return null;
-  let text = current;
+  let texts = new Set([current]);
   for (const { old_string: from, new_string: to, replace_all: all } of edits) {
-    if (from === '' ? text !== '' : !text.includes(from))
-      return edits.flatMap((edit) => lines(edit.new_string));
-    text = all === true ? text.split(from).join(to) : text.replace(from, () => to);
+    const next = new Set();
+    for (const text of texts) {
+      if (from === '' ? text !== '' : !text.includes(from)) return null;
+      const swap = (target) =>
+        all === true ? text.split(target).join(to) : text.replace(target, () => to);
+      next.add(swap(from));
+      if (to === '' && from !== '' && !from.endsWith('\n') && text.includes(`${from}\n`)) {
+        next.add(swap(`${from}\n`));
+        if (all === true) next.add(swap(`${from}\n`).split(from).join(''));
+      }
+    }
+    if (next.size > 64) return null;
+    texts = next;
   }
-  return added(current, text);
+  return [...texts];
 }
 
 /** Why a change to this wiki file is refused, or '' when it may go ahead. */
@@ -136,12 +155,13 @@ function refusal(tool, lands) {
   } catch {
     // A new file, or one that cannot be read: every line counts as new.
   }
-  const change = written(tool, current);
-  if (!change) return 'The hook could not read this change, so it is refused.\n';
-  for (const line of change) {
-    const kind = trouble(line);
-    if (kind)
-      return `This change writes ${kind} into a wiki page: ${JSON.stringify(line.slice(0, 120))}. Wiki pages show everything they hold, load nothing from the web and run nothing, in code too: no HTML or <!-- --> comments, no %% comments, no image or embed from a web address (embed a saved attachment with ![[…]]), no Templater <% command, no Dataview query in inline code, and code fences named only ${[...FENCE_LANGUAGES].join(', ')}, or nothing. Where a capture's words hold such text, write it so it shows as written: \\%\\%, \\![, &lt;tag&gt;, &lt;%. Code that needs it stays in its capture; link to that instead.\n`;
+  const texts = results(tool, current);
+  if (!texts)
+    return "The hook could not read this change, or an edit's old text is not in the page word for word, so it is refused. Copy the old text exactly as the page has it.\n";
+  for (const text of texts) {
+    const found = pageTrouble(text);
+    if (found)
+      return `This change leaves ${found.kind} in a wiki page: ${JSON.stringify(found.at.slice(0, 120))}. Wiki pages show everything they hold, load nothing from the web and run nothing, in code too: no HTML or <!-- --> comments, no %% comments, no image or embed from a web address (embed a saved attachment with ![[…]]), no Templater <% command, no Dataview query in inline code (no = straight after inline code, even across a line break), and code fences named only ${[...FENCE_LANGUAGES].join(', ')}, or nothing. Where a capture's words hold such text, write it so it shows as written: \\%\\%, \\! before [, &lt;tag&gt;, &lt;%. Code that needs it stays in its capture; link to that instead. If the line was already in the page, a person may have written it: leave that page to them, and /lint will list it.\n`;
   }
   return '';
 }

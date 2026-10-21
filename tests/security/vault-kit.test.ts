@@ -140,6 +140,8 @@ describe('the wiki-only hook', () => {
       'Escaped for Markdown, not for Templater: \\<% tp.file.title %>',
       'A query `= this.file.name` inline',
       'A script `$= dv.current()` inline',
+      'A query split over a line break `\n= this.file.name` more',
+      'A script split over a line break `\n  $= dv.current()` more',
       '```dataviewjs',
       '~~~dataview',
       '```mermaid',
@@ -191,33 +193,81 @@ describe('the wiki-only hook', () => {
       ).status,
     ).toBe(2);
     expect(change({ old_string: 'Great.', new_string: 'Fine.' }).status).toBe(0);
-    // Text that is not in the page: Claude Code refuses the edit, and its new text is still checked.
-    expect(change({ old_string: 'Absent', new_string: '<img src=x>' }).status).toBe(2);
-    expect(change({ old_string: 'Absent', new_string: 'Plain words' }).status).toBe(0);
+    // Emptying an edit may also take the line break after it, as Claude Code's does.
+    writeFileSync(page, 'Wow! abc\n[x](https://tracker.example/p.png)\n');
+    expect(change({ old_string: ' abc', new_string: '' }).status).toBe(2);
+    writeFileSync(page, 'Keep.\nDrop me.\nKeep too.\n');
+    expect(change({ old_string: 'Drop me.', new_string: '' }).status).toBe(0);
+    // Replacing every copy: only the copies before a line break gone, then all of them.
+    writeFileSync(page, '\\Q!Q\n[x](https://tracker.example/p.png)\n');
+    expect(change({ old_string: 'Q', new_string: '', replace_all: true }).status).toBe(2);
+    writeFileSync(page, 'Wow!Q\nQ[x](https://tracker.example/p.png)\n');
+    expect(change({ old_string: 'Q', new_string: '', replace_all: true }).status).toBe(2);
+    // Each emptying edit can double the texts to check; past 64 the change is refused.
+    writeFileSync(page, 'a\n1\nb\n2\nc\n3\nd\n4\ne\n5\nf\n6\ng\n7\n');
+    const emptying = (count: number) =>
+      change(
+        {
+          edits: [...'abcdefg'.slice(0, count)].map((line) => ({
+            old_string: line,
+            new_string: '',
+          })),
+        },
+        'MultiEdit',
+      );
+    expect(emptying(6).status).toBe(0);
+    expect(emptying(7).stderr).toContain('could not read this change');
   });
 
-  it('leaves lines a person wrote alone, but refuses copying or changing them', () => {
+  it('refuses an edit whose old text is not in the page word for word', () => {
     const folder = vault();
     mkdirSync(join(folder, 'wiki'));
     const page = join(folder, 'wiki', 'page.md');
-    const own = 'Underlined by hand: <u>this</u>';
-    writeFileSync(page, `Intro.\n${own}\n`);
     const change = (old_string: string, new_string: string) =>
       ask(folder, {
         tool_name: 'Edit',
         tool_input: { file_path: page, old_string, new_string },
         cwd: folder,
-      }).status;
-    expect(change('Intro.', 'A better intro.')).toBe(0);
-    expect(change('Intro.', `Intro.\n${own}`)).toBe(2);
-    expect(change('<u>this</u>', '<u>that</u>')).toBe(2);
+      });
+    // Claude Code may match such text loosely and write what the hook never saw.
+    writeFileSync(page, 'Wow! \u2018a\u2019\n');
+    expect(change(" 'a'", '[x](https://tracker.example/p.png)').status).toBe(2);
+    writeFileSync(page, 'Hello!\n');
     expect(
+      change(
+        'Hello\\u0021',
+        'Hello\\u0021 \\u003cimg src=\\u0022https://tracker.example/p\\u0022\\u003e',
+      ).status,
+    ).toBe(2);
+    const absent = change('Absent', 'Plain words');
+    expect(absent.status).toBe(2);
+    expect(absent.stderr).toContain('word for word');
+    expect(change('Hello!', 'Hello again!').status).toBe(0);
+  });
+
+  it('refuses any change to a page that holds such a line, even one a person wrote', () => {
+    const folder = vault();
+    mkdirSync(join(folder, 'wiki'));
+    const page = join(folder, 'wiki', 'page.md');
+    const change = (old_string: string, new_string: string) =>
       ask(folder, {
-        tool_name: 'Write',
-        tool_input: { file_path: page, content: `New intro.\n${own}\n` },
+        tool_name: 'Edit',
+        tool_input: { file_path: page, old_string, new_string },
         cwd: folder,
-      }).status,
-    ).toBe(0);
+      });
+    writeFileSync(page, 'Intro.\nUnderlined by hand: <u>this</u>\n');
+    const run = change('Intro.', 'A better intro.');
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('/lint');
+    // Each line the agent adds is clean; what it makes of the person's lines is not.
+    writeFileSync(page, "```dataviewjs\ndv.paragraph('hi')\n```\n");
+    expect(change("dv.paragraph('hi')", "require('child_process').exec('id')").status).toBe(2);
+    writeFileSync(page, 'Intro.\n%%\nA note.\n%%\n');
+    expect(change('A note.', 'Words the person never sees.').status).toBe(2);
+    writeFileSync(page, 'Example:\n```text\n<img src="https://tracker.example/p.png">\n```\n');
+    expect(change('```text\n', '').status).toBe(2);
+    writeFileSync(page, 'Intro.\nPlain words.\n');
+    expect(change('Intro.', 'A better intro.').status).toBe(0);
   });
 
   it('refuses a change to a wiki page it cannot read', () => {
