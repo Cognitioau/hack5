@@ -481,7 +481,7 @@ function parseColor(value: string | undefined): [number, number, number] | null 
 type Rgb = readonly [number, number, number];
 type Decode = (frame: Blob) => Promise<ImageBitmap>;
 
-/** Relative luminance below which a page counts as dark. */
+/** Luma (Rec. 709 weights on the sRGB values, 0 to 1) below which a page counts as dark. */
 const DARK_PAGE = 0.4;
 /**
  * How far the torn rim is lifted toward white on the darkest page. Multiplied by a
@@ -509,14 +509,23 @@ export function rimLift(
 ): Float32Array | null {
   const amount = DARK_RIM_LIFT * clamp(1 - luminance(paper) / DARK_PAGE, 0, 1);
   if (amount <= 0) return null;
-  const scale = width / hand.size.width;
+  const across = width / hand.size.width;
+  const down = height / hand.size.height;
   const { x, y, radius } = hand.hole;
+  const outer = 2.2;
   const lift = new Float32Array(width * height);
-  for (let row = 0; row < height; row++)
-    for (let column = 0; column < width; column++) {
-      const distance = Math.hypot((column + 0.5) / scale - x, (row + 0.5) / scale - y) / radius;
+  // Beyond the ring there is no lift, so only the square around it is filled.
+  const left = Math.max(0, Math.floor((x - outer * radius) * across));
+  const right = Math.min(width, Math.ceil((x + outer * radius) * across));
+  const top = Math.max(0, Math.floor((y - outer * radius) * down));
+  const bottom = Math.min(height, Math.ceil((y + outer * radius) * down));
+  for (let row = top; row < bottom; row++)
+    for (let column = left; column < right; column++) {
+      const dx = (column + 0.5) / across - x;
+      const dy = (row + 0.5) / down - y;
+      const distance = Math.sqrt(dx * dx + dy * dy) / radius;
       lift[row * width + column] =
-        amount * progress(distance, 0.8, 1) * (1 - progress(distance, 1.6, 2.2));
+        amount * progress(distance, 0.8, 1) * (1 - progress(distance, 1.6, outer));
     }
   return lift;
 }
@@ -683,7 +692,7 @@ export class GraveEffect {
       index,
       new Footage(
         frames,
-        (frame) => this.decode(frame).then((both) => this.layered(both)),
+        (frame) => this.decode(frame).then((both) => this.layered(both, index)),
         () => {
           this.painted = null;
           if (this.held || this.frame === undefined) this.render();
@@ -790,10 +799,13 @@ export class GraveEffect {
     if (this.layout) this.footage.get(this.layout.index)?.release();
   }
 
-  /** The current grab's rim lift, worked out once per grab and frame size. */
-  private rimLift(width: number, height: number): Float32Array | null {
+  /**
+   * The current grab's rim lift, worked out once per grab and frame size. A frame
+   * of another hand, still decoding as a new grab starts, is never shown: it gets none.
+   */
+  private rimLift(hand: number, width: number, height: number): Float32Array | null {
     const layout = this.layout;
-    if (!layout) return null;
+    if (layout?.index !== hand) return null;
     if (this.lift?.layout !== layout || this.lift.width !== width || this.lift.height !== height)
       this.lift = {
         layout,
@@ -811,7 +823,7 @@ export class GraveEffect {
    * own dark, the torn rim lifted just enough to show (see rimLift), while the hand
    * keeps its colour.
    */
-  private layered(both: ImageBitmap): ImageBitmap {
+  private layered(both: ImageBitmap, hand: number): ImageBitmap {
     try {
       const view = this.document.defaultView;
       if (!view?.OffscreenCanvas) throw new Error('No offscreen canvas');
@@ -827,7 +839,7 @@ export class GraveEffect {
         (c) => c / 255,
       );
       if (red !== 1 || green !== 1 || blue !== 1) {
-        const lift = this.rimLift(width, height);
+        const lift = this.rimLift(hand, width, height);
         const wall = context.getImageData(0, 0, width, height);
         const { data } = wall;
         for (let at = 0; at < data.length; at += 4) {

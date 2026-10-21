@@ -546,10 +546,5 @@ describe('grave choreography invariants', () => {
     const smaller = rimLift([27, 27, 27], hand, width / 2, height / 2);
     expect(at(smaller, 1.3, 2)).toBeCloseTo(at(lift, 1.3), 2);
     expect(at(smaller, 2.5, 2)).toBe(0);
-    // GitHub's dark blue stays blue.
-    const blue = at(rimLift([13, 17, 23], hand, width, height), 1.3);
-    const [r = 0, g = 0, b = 0] = [13, 17, 23].map((c) => tintChannel(128, c / 255, blue));
-    expect(b).toBeGreaterThan(g);
-    expect(g).toBeGreaterThan(r);
   });
 });

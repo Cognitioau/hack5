@@ -46,8 +46,8 @@ function packedHand(count: number): Uint8Array<ArrayBuffer> {
 /**
  * 2D contexts that record drawImage, a decoder that names each packed frame by
  * its size, and the offscreen canvas that lays each one's hand over its wall.
+ * `size` is each packed frame's layer size; a test may set it once a hand is picked.
  */
-/** `size` is each packed frame's layer size; a test may set it once a hand is picked. */
 function fakeCanvas(size = { width: 1, height: 1 }) {
   const drawn: Record<string | symbol, unknown> = {};
   // Each image laid on a canvas: its frame, how it was composited, and when.
@@ -95,9 +95,10 @@ function fakeCanvas(size = { width: 1, height: 1 }) {
   Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: decode });
   // What each laid frame was made of, in order: the wall half, its pixels read
   // back and tinted (to its first pixel's values, from a wall of 200s), then the
-  // hand half; and the lightest red any tinted wall pixel came out at.
+  // hand half; and, for each tinted wall, the box around its pixels that came
+  // out clearly lighter than its corner.
   const laid: (string | number[])[][] = [];
-  const lightest: number[] = [];
+  const lit: { left: number; top: number; right: number; bottom: number }[] = [];
   class Layers {
     private last = -1;
     private steps: (string | number[])[] = [];
@@ -117,9 +118,17 @@ function fakeCanvas(size = { width: 1, height: 1 }) {
         }),
         putImageData: ({ data }: { data: Uint8ClampedArray }) => {
           this.steps.push([...data.subarray(0, 4)]);
-          let red = 0;
-          for (let at = 0; at < data.length; at += 4) red = Math.max(red, data[at] ?? 0);
-          lightest.push(red);
+          const box = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+          for (let at = 0; at < data.length; at += 4) {
+            if ((data[at] ?? 0) <= (data[0] ?? 0) + 30) continue;
+            const column = (at / 4) % this.width;
+            const row = Math.floor(at / 4 / this.width);
+            box.left = Math.min(box.left, column);
+            box.right = Math.max(box.right, column + 1);
+            box.top = Math.min(box.top, row);
+            box.bottom = Math.max(box.bottom, row + 1);
+          }
+          lit.push(box);
         },
       };
     }
@@ -132,7 +141,7 @@ function fakeCanvas(size = { width: 1, height: 1 }) {
     }
   }
   Object.defineProperty(window, 'OffscreenCanvas', { configurable: true, value: Layers });
-  return { drawImage, decode, packed, laid, lightest, colours, layers };
+  return { drawImage, decode, packed, laid, lit, colours, layers };
 }
 
 /**
@@ -293,7 +302,7 @@ describe('target-local hand presentation', () => {
   it('tints the wall behind the hand to a dark page, never the hand', async () => {
     // Frames decode at the picked hand's own size, so its wall has a torn rim.
     const size = { width: 1, height: 1 };
-    const { laid, lightest, colours } = fakeCanvas(size);
+    const { laid, lit, colours } = fakeCanvas(size);
     const sprite = vi.fn(async (hand: number) => {
       Object.assign(size, GRAVE_HANDS[hand]?.size);
       return packedHand(GRAVE_HANDS[hand]?.frames ?? 0);
@@ -316,9 +325,20 @@ describe('target-local hand presentation', () => {
       200,
     ];
     for (const steps of laid) expect(steps).toEqual(['wall', tinted, 'hand']);
-    // Around the hole the torn rim is lifted, so it shows lighter than the page.
-    expect(lightest.length).toBe(laid.length);
-    for (const red of lightest) expect(red).toBeGreaterThan((tinted[0] ?? 0) + 30);
+    // Around this hand's hole the torn rim is lifted, so it shows lighter than the
+    // page: a ring centred on the hole, reaching out between 1.6 and 2.2 radii.
+    const rimAround = (hand: number) => {
+      const hole = GRAVE_HANDS[hand]?.hole;
+      if (!hole) throw new Error('No hand was requested');
+      expect(lit.length).toBe(laid.length);
+      for (const { left, top, right, bottom } of lit.splice(0)) {
+        expect((left + right) / 2).toBeCloseTo(hole.x, 0);
+        expect((top + bottom) / 2).toBeCloseTo(hole.y, 0);
+        expect((right - left) / 2 / hole.radius).toBeGreaterThan(1.6);
+        expect((right - left) / 2 / hole.radius).toBeLessThan(2.2);
+      }
+    };
+    rimAround(sprite.mock.lastCall?.[0] ?? -1);
     // Nothing drawn around it reads lighter than the page: cracks, dust and
     // debris are the page's own plaster. Only a faint lit edge may be lighter.
     view.setState('saved', 'Buried, safely.', 'Saved to Obsidian.');
@@ -333,6 +353,18 @@ describe('target-local hand presentation', () => {
     expect(
       drawn.filter(({ alpha, lightness: value }) => alpha >= 0.3 && value > lightness(29, 33, 38)),
     ).toEqual([]);
+    // The next grab plays a different hand, and its rim rings that hand's hole.
+    laid.splice(0);
+    lit.splice(0);
+    view.setTarget(rectangle, 'More words on the dark page', undefined, {
+      style: { background: 'rgb(29, 33, 38)', color: 'rgb(217, 220, 214)', fontFamily: 'serif' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    view.setState('saving', 'Taking hold…', 'Waiting for the vault.');
+    await vi.advanceTimersByTimeAsync(900);
+    expect(laid.length).toBeGreaterThan(5);
+    expect(sprite.mock.calls[1]?.[0]).not.toBe(sprite.mock.calls[0]?.[0]);
+    rimAround(sprite.mock.lastCall?.[0] ?? -1);
   });
 
   it('mixes each footage frame into the next as the display frame’s own time passes', async () => {
