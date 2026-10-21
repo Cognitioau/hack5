@@ -11,7 +11,7 @@ Start from [the critique](PLAN_REVIEW.md), [architecture](ARCHITECTURE.md), and 
 | Planned demo track | Local gaze calibration and shared focus-point adapter | Gaze can be absent or disabled; camera stops and mouse confirmation remains functional |
 | Optional | Cloud summaries/tags, OCR/vision, Jev, chat, daily Resurrection, full transcript archiving, graph links, recording, other video sites | Each feature has its own setting/capability, disposal, failure fallback and retained data |
 
-Cut optional breadth in this order if time compresses: short clips/additional sites, OCR/vision, chat, Jev, daily Resurrection. Full long-video transcript archiving and graph links are time permitting; nearby transcript excerpts retain priority. Preserve the gaze demo attempt without making the mouse build wait for it.
+Cut optional breadth in this order if time compresses: short clips/additional sites, OCR/vision, chat, Jev, daily Resurrection. Full long-video transcript archiving and graph links are time permitting; nearby transcript excerpts retain priority. Preserve the gaze demo attempt without making the mouse build wait for it. (Gaze was shelved on 21 October after one human session; see STATUS.)
 
 ## M0 Establish the engineering baseline
 

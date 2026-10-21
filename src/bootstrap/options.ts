@@ -204,11 +204,6 @@ if (!__CORE_ONLY__) {
         );
       }),
   );
-  const link = document.createElement('a');
-  link.href = 'gaze.html';
-  link.className = 'button';
-  link.textContent = 'Try the experimental gaze lab →';
-  element('gaze-link').append(link);
 }
 void load().catch((error: unknown) =>
   notice(error instanceof Error ? error.message : 'Could not load settings', 'error'),

@@ -10,7 +10,7 @@ Page-access permission does not itself authorize downloading original image byte
 
 The plugin key is available only to trusted extension contexts. Session storage is the default; browser restart requires re-entering it. Remembered keys are stored locally in the browser profile, not an encrypted password vault. Forget key stops further credential use without erasing captures. Chrome host permissions cover more than a URL's port; the vault client separately enforces the configured numeric loopback endpoint and port.
 
-The gaze lab starts its camera only from Start, uses packaged local models, and blocks external connections. Camera frames are never stored. Samples and calibration live only in the page's memory and are never persisted automatically. Stop, hiding/closing the lab or track termination releases resources and clears calibration. Human accuracy and gaze capture integration remain unverified.
+The gaze lab starts its camera only from Start, uses packaged local models, and blocks external connections. Camera frames are never stored. Samples and calibration live only in the page's memory and are never persisted automatically. Stop, hiding/closing the lab or track termination releases resources and clears calibration. One human session measured a median error of 96 px, gaze is not connected to capture, and the lab is shelved ([STATUS](STATUS.md#gaze-tuning)).
 
 After the five checks, **Download session diagnostics** saves one JSON file to your downloads for offline tuning. The file is created only when you click that button; nothing is written otherwise, and the download makes no network request. It contains:
 

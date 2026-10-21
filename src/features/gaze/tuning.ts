@@ -2,8 +2,8 @@
  * Every gaze-lab tuning constant lives here so a live session's exported diagnostics can name
  * the exact values it ran with, and the offline evaluator can sweep them.
  *
- * None of these values has been fitted to human data yet. They are conservative starting points;
- * see docs/STATUS.md for what the first live session should tell us.
+ * None of these values has been fitted to human data. They are conservative starting points,
+ * and on the one live session so far they were the best of every sweep; see docs/STATUS.md.
  */
 export const GAZE_TUNING = {
   collection: {

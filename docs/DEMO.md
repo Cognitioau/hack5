@@ -14,10 +14,10 @@ This is a recording script, not evidence that the live rehearsal has passed. Use
 | 61–70 s | Shake/spit back the latest capture, then show the archive | Retained file and recoverable lifecycle |
 | 70–75 s | Show a related-note ghost on an enabled page | A real retrieved note, not a scripted placeholder |
 
-Add the gaze lab only after human calibration succeeds. Label it a calibration experiment until gaze actually selects a page target and completes a real capture. Cut optional scenes to keep the recording honest and legible; never substitute an animation for a successful vault write.
+Gaze is not in the demo: one human session left a median check error of 96 px and a live dot that wandered ([STATUS](STATUS.md)). Cut optional scenes to keep the recording honest and legible; never substitute an animation for a successful vault write.
 
 ## Draft submission description
 
-Zombie Hand turns deliberate browsing gestures into Obsidian captures. Select text and click the hand, click it to keep the whole page, or hold Shift and circle a passage. It preserves text, image files or visible crops, and YouTube moments with available or imported timestamped captions. A bundled local model retrieves related thoughts without an AI API key. Saves are recoverable, conflicts stay visible, and optional media modules can be removed. Gaze calibration is experimental.
+Zombie Hand turns deliberate browsing gestures into Obsidian captures. Select text and click the hand, click it to keep the whole page, or hold Shift and circle a passage. It preserves text, image files or visible crops, and YouTube moments with available or imported timestamped captions. A bundled local model retrieves related thoughts without an AI API key. Saves are recoverable, conflicts stay visible, and optional media modules can be removed.
 
-This draft is under 500 characters. Recheck it against the final demonstrated behavior before submission. Do not claim gaze-driven capture or broad transcript coverage until the corresponding checks pass.
+This draft is under 500 characters. Recheck it against the final demonstrated behavior before submission. Do not mention gaze, and do not claim broad transcript coverage until its checks pass.
