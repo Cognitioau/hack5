@@ -1,5 +1,5 @@
 import { boundedMessage } from '../core/domain/security';
-import { publicCapture } from '../core/domain/retrieval';
+import { haunts, publicCapture } from '../core/domain/retrieval';
 import {
   contentMessageSchema,
   trustedMessageSchema,
@@ -418,15 +418,14 @@ async function contentRequest(
     }
     case 'SEARCH': {
       if (!(await readSettings()).features.haunting) return { ok: true, results: [] };
-      const results = await coordinator.search(message.query);
+      // A ghost is never the page itself, so notes grabbed here cannot fill the cut.
+      const results = await coordinator.search(
+        message.query,
+        (item) => item.capture.candidate.url !== context.pageUrl && haunts(item),
+      );
       await currentDocument(sender, context.pageUrl);
       if (!(await readSettings()).features.haunting) return { ok: true, results: [] };
-      return {
-        ok: true,
-        results: results
-          .filter((item) => item.capture.candidate.url !== context.pageUrl)
-          .slice(0, 3),
-      };
+      return { ok: true, results: results.slice(0, 3) };
     }
   }
 }
