@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://example.org/article"}
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   extractCandidate,
   extractPage,
   extractSelection,
+  pageByline,
+  passageLink,
   publicWebUrl,
+  publishedDate,
   readingStyle,
   sentenceAt,
 } from '../../src/adapters/browser/extraction';
@@ -432,8 +435,10 @@ describe('explicit selection and whole-page grabs', () => {
     const text = extractPage(document)?.candidate.text ?? '';
     expect(text.length).toBeLessThanOrEqual(4_000);
     expect(text.endsWith('…')).toBe(true);
+    expect(extractPage(document)?.candidate.truncated).toBe(true);
     fixture('<main><button>Only a control</button></main>', 'main');
     expect(extractPage(document)?.candidate.text).toBe('Synthetic public article');
+    expect(extractPage(document)?.candidate).not.toHaveProperty('truncated');
   });
 
   it('skips banner chrome only when the page has no article or main landmark', () => {
@@ -467,6 +472,181 @@ describe('explicit selection and whole-page grabs', () => {
       '#text',
     );
     expect(readingStyle(target, document)?.background).toBe('rgb(128, 128, 128)');
+  });
+});
+
+describe('a passage that stands on its own', () => {
+  afterEach(() => {
+    document.head.innerHTML = '';
+  });
+
+  function select(node: Node, from: number, to: number): void {
+    const range = document.createRange();
+    range.setStart(node, from);
+    range.setEnd(node, to);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+  }
+
+  it('links straight to the passage with a text fragment the page can match', () => {
+    expect(passageLink('https://example.org/a', 'Short passage, kept whole')).toBe(
+      'https://example.org/a#:~:text=Short%20passage%2C%20kept%20whole',
+    );
+    expect(
+      passageLink(
+        'https://example.org/a?x=1#part',
+        'one two three four five six seven eight nine-ten…',
+      ),
+    ).toBe(
+      'https://example.org/a?x=1#part:~:text=one%20two%20three%20four,six%20seven%20eight%20nine%2Dten',
+    );
+    // An existing directive is replaced, never stacked.
+    expect(passageLink('https://example.org/a#:~:text=old', 'new words')).toBe(
+      'https://example.org/a#:~:text=new%20words',
+    );
+    expect(passageLink('https://example.org/a', '  ')).toBeUndefined();
+  });
+
+  it('reads a heading broken across lines as words, without what it hides', () => {
+    fixture(
+      `<h1>The curious<br>field journal.<span hidden>Permalink</span></h1>
+       <p id="text">Some background first. I am relieved this changed completely. Then more.</p>`,
+      '#text',
+    );
+    select(target.firstChild as Node, 23, 60);
+    expect(extractSelection(document)?.candidate.context?.heading).toBe(
+      'The curious field journal.',
+    );
+  });
+
+  it('records the heading above a selection and the paragraph around it', () => {
+    fixture(
+      `<nav><h2>Site menu</h2></nav><h2>The barrier was broken <a href="#b">#</a></h2>
+       <p id="text">Some background first. I am relieved this changed completely. Then more.</p>`,
+      '#text',
+    );
+    const node = target.firstChild as Node;
+    select(node, 23, 60);
+    const passage = extractSelection(document)?.candidate;
+    expect(passage?.text).toBe('I am relieved this changed completely');
+    expect(passage?.context).toEqual({
+      heading: 'The barrier was broken',
+      paragraph: 'Some background first. I am relieved this changed completely. Then more.',
+    });
+    expect(passage?.passageUrl).toBe(
+      'https://example.org/article#:~:text=I%20am%20relieved%20this%20changed%20completely',
+    );
+  });
+
+  it('leaves out a paragraph that adds nothing, and the context of a page without headings', () => {
+    fixture('<p id="text">The whole paragraph is the passage.</p>', '#text');
+    select(target.firstChild as Node, 0, 35);
+    const passage = extractSelection(document)?.candidate;
+    expect(passage?.text).toBe('The whole paragraph is the passage.');
+    expect(passage).not.toHaveProperty('context');
+    expect(passage?.passageUrl).toContain(':~:text=');
+  });
+
+  it('keeps a window of a long paragraph centred on the passage', () => {
+    fixture(
+      `<p id="text">${'Before. '.repeat(300)}The pointed passage sits here.${' After.'.repeat(300)}</p>`,
+      '#text',
+    );
+    const node = target.firstChild as Node;
+    const start = (node.textContent ?? '').indexOf('The pointed');
+    select(node, start, start + 30);
+    const paragraph = extractSelection(document)?.candidate.context?.paragraph ?? '';
+    expect(paragraph.length).toBeLessThanOrEqual(1_500);
+    expect(paragraph.startsWith('…') && paragraph.endsWith('…')).toBe(true);
+    expect(paragraph).toContain('The pointed passage sits here.');
+  });
+
+  it('gives a pointed sentence the same context as a selection', () => {
+    fixture(
+      '<h3>Section</h3><p id="text">First sentence. The pointed sentence matters! Last.</p>',
+      '#text',
+    );
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: target.firstChild, offset: 20 }),
+    });
+    const passage = extractCandidate(document, { x: 80, y: 60 })?.candidate;
+    expect(passage?.text).toBe('The pointed sentence matters!');
+    expect(passage?.context?.heading).toBe('Section');
+    expect(passage?.context?.paragraph).toContain('First sentence.');
+  });
+
+  it('keeps a publication date as the page wrote it, in any time zone, and never guesses one', () => {
+    const zone = process.env.TZ;
+    try {
+      for (const tz of ['Australia/Sydney', 'America/Los_Angeles', 'UTC']) {
+        process.env.TZ = tz;
+        const dates = Object.fromEntries(
+          [
+            '2024-03-05',
+            '2024-03-05T22:00:00-08:00',
+            '2024-03-05T23:30:00+11:00',
+            'March 5, 2024',
+            'Tue Mar 05 2024',
+            '5 March 2024',
+            'Oct 2024',
+            '2024-03',
+            '2024-02-30',
+            'Posted on 12 May',
+            'Section 12',
+            'Season 3',
+            '1',
+            '',
+          ].map((value) => [value, publishedDate(value)]),
+        );
+        expect(dates, tz).toEqual({
+          '2024-03-05': '2024-03-05',
+          '2024-03-05T22:00:00-08:00': '2024-03-05',
+          '2024-03-05T23:30:00+11:00': '2024-03-05',
+          'March 5, 2024': '2024-03-05',
+          'Tue Mar 05 2024': '2024-03-05',
+          '5 March 2024': '2024-03-05',
+          'Oct 2024': '',
+          '2024-03': '',
+          '2024-02-30': '',
+          'Posted on 12 May': '',
+          'Section 12': '',
+          'Season 3': '',
+          '1': '',
+          '': '',
+        });
+      }
+    } finally {
+      process.env.TZ = zone;
+    }
+  });
+
+  it('finds the heading a passage sits under on a page with thousands of headings', () => {
+    fixture(
+      `${Array.from({ length: 2_400 }, (_, index) => `<h2>Section ${index + 1}</h2><p>Text ${index + 1}.</p>`).join('')}
+       <p id="text">Some background first. I am relieved this changed completely. Then more.</p>`,
+      '#text',
+    );
+    select(target.firstChild as Node, 23, 60);
+    expect(extractSelection(document)?.candidate.context?.heading).toBe('Section 2400');
+  });
+
+  it('reads who wrote the page from its metadata, never trusting a URL as a name', () => {
+    document.head.innerHTML = `<meta property="og:site_name" content="Example Weekly">
+      <meta property="article:author" content="https://example.org/people/ada">
+      <meta property="article:published_time" content="2024-12-31T09:30:00Z">
+      <script type="application/ld+json">{"@graph":[{"author":{"name":"Ada Lovelace"}}]}</script>
+      <script type="application/ld+json">{ not json</script>`;
+    expect(pageByline(document)).toEqual({
+      author: 'Ada Lovelace',
+      site: 'Example Weekly',
+      published: '2024-12-31',
+    });
+    document.head.innerHTML = '<meta name="date" content="not a date">';
+    expect(pageByline(document)).toBeUndefined();
+    fixture('<main><p>Body text that is long enough.</p></main>', 'main');
+    document.head.innerHTML = '<meta name="author" content="Grace Hopper">';
+    expect(extractPage(document)?.candidate.byline).toEqual({ author: 'Grace Hopper' });
   });
 });
 

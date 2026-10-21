@@ -177,6 +177,34 @@ function capture(overrides: Partial<CaptureRecord> = {}): CaptureRecord {
   };
 }
 
+const VERSION_1_NOTE = [
+  '---',
+  '"zombie_hand": "hack5:zombie-hand"',
+  '"schema_version": 1',
+  '"capture_id": "0b6f3c1e-5a2d-4c3e-9f1a-2b7d8e9c0a11"',
+  '"operation_id": "6a1d0f3e-2b4c-4d5e-8f9a-0b1c2d3e4f5a"',
+  '"captured_at": "2026-10-20T00:00:00.000Z"',
+  '"title": "Notes on *local-first* [software]"',
+  '"source": "https://example.com/essays/(local)?page=2"',
+  '"kind": "text"',
+  '"preservation": "text"',
+  '---',
+  '',
+  '# Notes on \\*local\\-first\\* \\[software\\]',
+  '',
+  '[Open source](<https://example.com/essays/(local)?page=2>)',
+  '',
+  'Preservation: text.',
+  '',
+  '## Captured evidence',
+  '',
+  '```text',
+  'A useful observation about local-first software.',
+  '```',
+  '',
+  '',
+].join('\n');
+
 function notePath(record: CaptureRecord): string {
   return `${folder}/captures/${record.id}.md`;
 }
@@ -301,6 +329,115 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     expect(note).toContain(`\n\`\`\`\`text\n${raw}\n\`\`\`\`\n`);
     expect(note).toContain('[Open source](<https://example.com/path?a=(b)>)');
     expect(note.split('\n---\n')[1]?.split('## Captured evidence')[0]).not.toContain('<img');
+  });
+
+  it('writes a note without the newer fields byte for byte as version 1 did', async () => {
+    const record = capture({
+      id: '0b6f3c1e-5a2d-4c3e-9f1a-2b7d8e9c0a11',
+      operationId: '6a1d0f3e-2b4c-4d5e-8f9a-0b1c2d3e4f5a',
+      candidate: {
+        kind: 'text',
+        title: 'Notes on *local-first* [software]',
+        url: 'https://example.com/essays/(local)?page=2',
+        text: 'A useful observation about local-first software.',
+      },
+    });
+    expect((await createVaultClient(vault.config()).ensureCapture(record)).status).toBe(
+      'saved-vault',
+    );
+    // Rendered by main at 78f5c0e, before the passage, credit and whole-page fields existed.
+    expect(decode(vault.files.get(notePath(record)) ?? new Uint8Array())).toBe(VERSION_1_NOTE);
+  });
+
+  it('gives a passage its heading, paragraph, deep link and credit, all escaped', async () => {
+    const record = capture({
+      candidate: {
+        kind: 'text',
+        title: 'How to Do Great Work',
+        url: 'https://example.com/essays/great-work',
+        text: 'Curiosity is the engine.',
+        passageUrl: 'https://example.com/essays/great-work#:~:text=Curiosity%20is%20the%20engine.',
+        context: {
+          heading: 'Why # it [[matters]]',
+          paragraph: 'Before it. Curiosity is the engine. ```\n<img src=x onerror=bad>',
+        },
+        byline: { author: '<img src=x> [[evil]]', site: 'Example Essays', published: '2023-07-01' },
+        wholePage: true,
+        truncated: true,
+      },
+    });
+    expect((await createVaultClient(vault.config()).ensureCapture(record)).status).toBe(
+      'saved-vault',
+    );
+    const note = decode(vault.files.get(notePath(record)) ?? new Uint8Array());
+    const [frontmatter = '', body = ''] = note.slice(4).split('\n---\n');
+    expect(parseYaml(frontmatter)).toMatchObject({
+      author: '<img src=x> [[evil]]',
+      site: 'Example Essays',
+      published: '2023-07-01',
+      whole_page: true,
+      truncated: true,
+    });
+    expect(body).toContain(
+      '[Open source](<https://example.com/essays/great-work>) · [Open passage](<https://example.com/essays/great-work#:~:text=Curiosity%20is%20the%20engine.>)',
+    );
+    expect(body).toContain(
+      'By &lt;img src=x&gt; \\[\\[evil\\]\\] · Example Essays · 2023\\-07\\-01',
+    );
+    expect(body).toContain('## Context\n\nUnder the heading “Why \\# it \\[\\[matters\\]\\]”.');
+    expect(body).toContain(
+      '\n````text\nBefore it. Curiosity is the engine. ```\n<img src=x onerror=bad>\n````\n',
+    );
+    expect(body).toContain('The evidence stops short of the source.');
+    // Outside the fences nothing the page wrote can become markup or a link.
+    const unfenced = body.replace(/\n````text\n[\s\S]*?\n````\n/gu, '\n');
+    expect(unfenced).not.toContain('<img');
+    expect(unfenced).not.toContain('[[');
+  });
+
+  it('writes no context section for an empty context', async () => {
+    const record = capture({
+      candidate: {
+        kind: 'text',
+        title: 'A passage',
+        url: 'https://example.com/a',
+        text: 'Words.',
+        context: {},
+      },
+    });
+    expect((await createVaultClient(vault.config()).ensureCapture(record)).status).toBe(
+      'saved-vault',
+    );
+    expect(decode(vault.files.get(notePath(record)) ?? new Uint8Array())).not.toContain(
+      '## Context',
+    );
+  });
+
+  it('imports a passage with its context, deep link and credit intact', async () => {
+    const record = capture({
+      candidate: {
+        kind: 'text',
+        title: 'How to Do Great Work',
+        url: 'https://example.com/essays/great-work',
+        text: 'Curiosity is the engine.',
+        passageUrl: 'https://example.com/essays/great-work#:~:text=Curiosity%20is%20the%20engine.',
+        context: {
+          heading: 'Choosing',
+          paragraph: 'Before it. Curiosity is the engine. After it.',
+        },
+        byline: { author: 'Paul Example', site: 'Example Essays', published: '2023-07-01' },
+        wholePage: true,
+        truncated: true,
+      },
+    });
+    expect((await createVaultClient(vault.config()).ensureCapture(record)).status).toBe(
+      'saved-vault',
+    );
+    const imported = await createVaultClient(vault.config()).importCaptures();
+    expect(imported.skipped).toBe(0);
+    expect(imported.records.find((entry) => entry.id === record.id)?.candidate).toEqual(
+      record.candidate,
+    );
   });
 
   it('preserves image bytes and uses a generated attachment path instead of a page title', async () => {

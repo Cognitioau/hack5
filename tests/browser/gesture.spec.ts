@@ -72,6 +72,9 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
       url: article.url(),
       title: 'The curious field journal',
       text: 'A young dog runs through the park chasing a bright tennis ball.',
+      // The passage fills its paragraph, so it carries no paragraph of context.
+      context: { heading: 'The curious field journal.' },
+      passageUrl: `${article.url()}#:~:text=A%20young%20dog%20runs,a%20bright%20tennis%20ball.`,
     });
     expect(await article.locator('#dog').textContent()).toBe(capture?.candidate.text);
     expect(vault.files.get(`Zombie Hand/captures/${capture?.id}.md`)?.toString()).toContain(

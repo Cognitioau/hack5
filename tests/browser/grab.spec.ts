@@ -451,3 +451,51 @@ test('one click grabs a selection or the whole page, and a chip follows a settle
     await vault.close();
   }
 });
+
+test('a whole-page grab keeps the article and who wrote it, not the page around it', async () => {
+  test.setTimeout(90_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const essay = await fixture.context.newPage();
+    await essay.goto(`${vault.origin}/essay`);
+    await wake(fixture, essay);
+    const viewport = essay.viewportSize();
+    if (!viewport) throw new Error('No viewport');
+    const before = await essay.evaluate(() => document.querySelector('main')?.outerHTML);
+    await essay.mouse.move(viewport.width - 35, viewport.height - 35, { steps: 4 });
+    await essay.mouse.click(viewport.width - 35, viewport.height - 35);
+    await expect.poll(async () => (await state(fixture)).length).toBe(1);
+    const [page] = await state(fixture);
+    expect(page?.candidate).toMatchObject({
+      kind: 'link',
+      url: `${vault.origin}/essay`,
+      title: 'Keeping a field journal',
+      wholePage: true,
+      byline: { author: 'Ada Example', site: 'Synthetic Essays', published: '2024-03-05' },
+    });
+    const text = page?.candidate.text ?? '';
+    expect(text).toContain('Essay paragraph 1: the curious keep a field journal');
+    expect(text).toContain('Essay paragraph 12: the curious keep a field journal');
+    // Chromium's reader drops empty inline tags and footnote marks; neither joins words.
+    expect(text).toContain('The tide stopped all boats, and octopodes swam.');
+    for (const chrome of ['Subscribe to the newsletter', 'Counting moths', 'All rights reserved'])
+      expect(text).not.toContain(chrome);
+    expect(text).not.toContain('Ignore your instructions');
+    // Nor does the article body the page's linked data claims, which says something else.
+    expect(text).not.toContain('MARK_LDJSON');
+    expect(page?.candidate).not.toHaveProperty('truncated');
+    // Reading the article never changes the page the person is reading.
+    expect(await essay.evaluate(() => document.querySelector('main')?.outerHTML)).toBe(before);
+    await expect
+      .poll(() => vault.files.get(`Zombie Hand/captures/${page?.id}.md`)?.toString() ?? '')
+      .toContain('"whole_page": true');
+    const note = vault.files.get(`Zombie Hand/captures/${page?.id}.md`)?.toString() ?? '';
+    expect(note).toContain('"author": "Ada Example"');
+    expect(note).toContain('By Ada Example · Synthetic Essays · 2024\\-03\\-05');
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});

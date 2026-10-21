@@ -288,6 +288,14 @@ async function contentRequest(
       return { ok: true };
     case 'HAND_SPRITE':
       return { ok: true, sprite: await readHandSprite(message.hand) };
+    case 'READ_PAGE':
+      // The article reader is loaded only for a whole-page grab, into the very
+      // document that asked, so other pages never carry its weight.
+      await chrome.scripting.executeScript({
+        target: { tabId: context.tabId, documentIds: [context.documentId] },
+        files: ['page-reader.js'],
+      });
+      return { ok: true };
     case 'CONTENT_STATUS': {
       const settings = await readSettings();
       const features = __CORE_ONLY__

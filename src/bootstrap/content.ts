@@ -6,6 +6,7 @@ import {
   type PublicCapture,
 } from '../core/contracts/index';
 import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core/domain/gestures';
+import type { Article } from '../adapters/browser/article';
 import {
   extractCandidate,
   extractPage,
@@ -470,13 +471,37 @@ function activate(): () => void {
     await arm(candidate, true);
   };
 
-  const grabPage = async (): Promise<void> => {
-    const page = extractPage(document);
-    if (!page) {
-      showError('This page cannot be grabbed. Only public http(s) pages are captured.');
-      return;
+  /** The page's readable article, from the reader the background loads on demand. */
+  const readArticle = async (): Promise<Article | null> => {
+    // Only what page-reader.js set: a page element with that id shows through
+    // the window's named properties, never as its own property.
+    const reader = (): ((page: Document) => Article | null) | undefined => {
+      const own = Object.getOwnPropertyDescriptor(globalThis, 'zombieHandReadArticle')?.value;
+      return typeof own === 'function' ? own : undefined;
+    };
+    try {
+      if (!reader() && !(await request({ v: 1, type: 'READ_PAGE' })).ok) return null;
+      return reader()?.(document) ?? null;
+    } catch {
+      // The reader improves a page grab but is never required: the excerpt still saves.
+      return null;
     }
-    await arm(page, true, 'page');
+  };
+
+  const grabPage = async (): Promise<void> => {
+    const refuse = (): void =>
+      showError('This page cannot be grabbed. Only public http(s) pages are captured.');
+    if (!extractPage(document)) return refuse();
+    const article = await readArticle();
+    // Taken after the wait, with the reader's read: a page that moved on
+    // meanwhile is the one both describe, and the one its link points to.
+    const page = extractPage(document);
+    if (!page) return refuse();
+    const { truncated: _excerptCut, ...excerpt } = page.candidate;
+    const candidate = article
+      ? { ...excerpt, ...article, wholePage: true as const }
+      : { ...page.candidate, wholePage: true as const };
+    await arm({ ...page, candidate }, true, 'page');
   };
 
   /** Alt+Shift+Z: the selection wherever the pointer is, else what the pointer is on. */

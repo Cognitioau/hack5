@@ -13,15 +13,18 @@ Zombie Hand project code is licensed GPL-3.0-only; see LICENSE. Preserve upstrea
 | all-MiniLM-L6-v2 ONNX model and tokenizer | Xenova/all-MiniLM-L6-v2 revision 751bff37182d3f1213fa05d7196b954e230abad9 | Apache-2.0 | https://huggingface.co/Xenova/all-MiniLM-L6-v2/tree/751bff37182d3f1213fa05d7196b954e230abad9 |
 | Zod | 4.6.7 | MIT | https://github.com/colinhacks/zod |
 | YAML | 2.9.1 | ISC | https://github.com/eemeli/yaml |
+| Defuddle | 0.19.5, its core bundle only, in page-reader.js | MIT | https://github.com/kepano/defuddle |
 | MediaPipe Tasks Vision | 1.1.1, full build's isolated gaze lab only | Apache-2.0 | https://github.com/google-ai-edge/mediapipe |
 | Face Landmarker model bundle (face detector, mesh V2, blendshapes V2) | float16 version 1, hash in scripts/gaze-model-assets.json | Apache-2.0 | https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker#models |
-| Grave hands and their heal (assets/grave-hand-0.bin to grave-hand-2.bin), matted from generated footage | Higgsfield: Nano Banana 2 plate and repaired wall, Seedance 2.5 takes and wall burst, ids in scripts/hand/takes.json | Generated output under Higgsfield's terms of service; redistribution in this GPL-3.0 extension not yet confirmed | https://higgsfield.ai |
+| Grave hands and their heal (assets/grave-hand-0.bin to grave-hand-2.bin), matted from generated footage | Higgsfield: Nano Banana 2 plate and repaired wall, Seedance 2.5 takes and wall burst, ids in scripts/hand/takes.json | Generated output under Higgsfield's terms of service; the project owner confirmed on 21 October 2026 that they may ship | https://higgsfield.ai |
 
 Model assets are unchanged upstream q8 weights/configuration/tokenizer files, bundled rather than fetched during browsing. scripts/model-assets.json records their exact sizes and SHA-256 digests. The model produces 384-dimensional text embeddings; it does not interpret image pixels or video frames.
 
 The build copies full license texts into licenses/ and preserves linked bundled-code legal notices. The ONNX Runtime notices in this source are retrieved from the exact upstream commit included in its dependency version. The embedding model independently declares Apache-2.0 in its model card; the packaged Apache-2.0 text covers those terms as well as Transformers.js. Additional bundled dependency notices retained by esbuild accompany the JavaScript output.
 
-Only matted frames of the hands and the heal ship. They were generated on the project owner's Higgsfield account; scripts/hand/README.md records the prompts, job ids and every processing step. Whether Higgsfield's terms permit shipping those frames inside a GPL-3.0 extension is an open decision for the project owner. The earlier MakeHuman-based render no longer ships.
+Only matted frames of the hands and the heal ship. They were generated on the project owner's Higgsfield account; scripts/hand/README.md records the prompts, job ids and every processing step. The project owner confirmed on 21 October 2026 that Higgsfield's terms had already been covered and the frames may ship inside this GPL-3.0 extension. The earlier MakeHuman-based render no longer ships.
+
+Defuddle, the reader in Obsidian's Web Clipper, reads the article on a whole-page grab. Only its core bundle (`defuddle/dist/index.js`) is bundled; its declared dependencies (`commander`, `mathml-to-latex`) are not reached by that bundle and do not ship. The build fails if any npm package in its output has no license text in `licenses/`.
 
 The face model bundle's three official model cards each state Apache License 2.0: [BlazeFace](https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20(Short%20Range).pdf), [Face Mesh V2](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf), [Blendshape V2](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Blendshape%20V2.pdf). The unchanged files are used only for local landmark detection in the gaze lab. The core build excludes this library, its runtime assets and its model.
 

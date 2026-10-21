@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "blockReadsOutsideWorkingDirectories": true,
+    "allow": ["Read(./**)", "Edit(./wiki/**)"],
+    "deny": [
+      "Edit(./captures/**)",
+      "Edit(./metadata/**)",
+      "Edit(./attachments/**)",
+      "Edit(./.claude/**)",
+      "Edit(./AGENTS.md)",
+      "Edit(./CLAUDE.md)",
+      "NotebookEdit",
+      "Bash",
+      "PowerShell",
+      "Monitor",
+      "WebFetch",
+      "WebSearch",
+      "mcp__*",
+      "ListMcpResourcesTool",
+      "ReadMcpResourceTool",
+      "Agent",
+      "Artifact",
+      "ArtifactComments",
+      "ArtifactData",
+      "PushNotification",
+      "RemoteTrigger",
+      "SendMessage",
+      "Workflow"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/wiki-only.mjs"],
+            "onFailure": "block",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
