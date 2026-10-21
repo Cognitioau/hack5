@@ -46,6 +46,21 @@ const MAX_PAGE_BLOCKS = 400;
 const MAX_TEXT = 12_000;
 const MAX_SOURCE_TEXT = 64_000;
 const MAX_SOURCE_NODES = 2_048;
+/**
+ * A paragraph read from a block too large to read whole reaches this far either
+ * side, in characters and in nodes; the nodes, with the elements holding the
+ * paragraph, stay within what collectText reads.
+ */
+const MAX_WINDOW_TEXT = 6_000;
+const MAX_WINDOW_SIDE_NODES = (MAX_SOURCE_NODES - 128) / 2;
+/** Transparent layers looked through to find an image under the pointer. */
+const MAX_OVERLAYS = 4;
+/**
+ * Elements that draw at the pointer whatever their style: media and frames.
+ * Fields are editable, SVG and MathML draw by their namespace, and an image
+ * ends the lookup.
+ */
+const PAINTING_TAGS = new Set(['audio', 'canvas', 'embed', 'iframe', 'object', 'video']);
 const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
 const PARAGRAPH_SELECTOR = 'p,li,blockquote,dd,td,pre,figcaption';
 const MAX_CONTEXT_PARAGRAPH = 1_500;
@@ -117,8 +132,16 @@ function hiddenByPage(element: Element, document: Document): boolean {
   return false;
 }
 
-/** A bounded, visible text map preserves offsets across inline formatting. */
-function collectText(document: Document, target: Element, within?: Range): TextMap | null {
+/**
+ * A bounded, visible text map preserves offsets across inline formatting.
+ * Only nodes in `within` (a selection) or in `only` (a paragraph window) are read.
+ */
+function collectText(
+  document: Document,
+  target: Element,
+  within?: Range,
+  only?: ReadonlySet<Node>,
+): TextMap | null {
   if (hiddenByPage(target, document)) return null;
   let text = '';
   const pieces: TextPiece[] = [];
@@ -129,17 +152,26 @@ function collectText(document: Document, target: Element, within?: Range): TextM
   };
   const visit = (node: Node): void => {
     if (invalid) return;
+    // Only what is collected counts, so a passage in a huge container still reads.
+    if (within && !within.intersectsNode(node)) return;
+    if (only && !only.has(node)) return;
     visited += 1;
     if (visited > MAX_SOURCE_NODES || text.length > MAX_SOURCE_TEXT) {
       invalid = true;
       return;
     }
-    if (within && !within.intersectsNode(node)) return;
     if (node.nodeType === 3) {
       const value = node as Text;
       const start = within?.startContainer === node ? within.startOffset : 0;
       const end = within?.endContainer === node ? within.endOffset : value.length;
-      const part = value.data.slice(start, end);
+      // A line break in the page's source shows as a space unless the text keeps
+      // its lines, so it ends no sentence. One character for one keeps offsets.
+      const lines = /^(?:pre|pre-wrap|pre-line|break-spaces)$/u.test(
+        (value.parentElement && document.defaultView?.getComputedStyle(value.parentElement))
+          ?.whiteSpace ?? '',
+      );
+      const raw = value.data.slice(start, end);
+      const part = lines ? raw : raw.replace(/[\n\r\f]/gu, ' ');
       if (text.length + part.length > MAX_SOURCE_TEXT) {
         invalid = true;
         return;
@@ -183,6 +215,123 @@ function collectText(document: Document, target: Element, within?: Range): TextM
   };
   visit(target);
   return invalid || !pieces.length ? null : { text, pieces };
+}
+
+/**
+ * The nodes of the paragraph around a text node in a block too large to read
+ * whole, such as an essay held in one table cell: the run of text between
+ * blank lines (two line breaks), a nested block or a control, at most a few
+ * thousand characters and a few hundred nodes either side, with the elements
+ * holding them. Walked outward from the node, so a huge block costs no more
+ * than its paragraph. Null when the node is not text inside the block.
+ */
+function paragraphWindow(block: Element, anchor: Node): Set<Node> | null {
+  if (anchor.nodeType !== 3 || !block.contains(anchor)) return null;
+  const view = block.ownerDocument.defaultView;
+  const known = new Map<Element, boolean>();
+  /** A nested block, control or field, or anything laid out as a block, such as one row of many `div`s. */
+  const stops = (element: Element): boolean => {
+    if (element === block) return false;
+    let stop = known.get(element);
+    if (stop === undefined) {
+      stop =
+        element.matches(BLOCK_SELECTOR) ||
+        isEditable(element) ||
+        element.matches(CONTROL_SELECTOR) ||
+        !/^(?:inline|contents|none|ruby)/u.test(
+          view?.getComputedStyle(element).display ?? 'inline',
+        );
+      known.set(element, stop);
+    }
+    return stop;
+  };
+  /** The nearest stop holding a node, else the block. */
+  const holder = (node: Node): Element => {
+    for (
+      let at = node === block ? null : node.parentElement;
+      at && at !== block;
+      at = at.parentElement
+    )
+      if (stops(at)) return at;
+    return block;
+  };
+  const home = holder(anchor);
+  /** The nodes walked from the anchor one way, out to the farthest text the paragraph takes. */
+  const side = (step: 1 | -1): Node[] => {
+    const walker = block.ownerDocument.createTreeWalker(
+      block,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    );
+    walker.currentNode = anchor;
+    const passed: Node[] = [];
+    const items: { kind: 'text' | 'line' | 'stop'; at: number; length: number; blank: boolean }[] =
+      [];
+    const item = (index: number) => {
+      while (items.length <= index && items.at(-1)?.kind !== 'stop') {
+        const node =
+          passed.length < MAX_WINDOW_SIDE_NODES
+            ? step === 1
+              ? walker.nextNode()
+              : walker.previousNode()
+            : null;
+        const at = passed.length;
+        if (!node) {
+          items.push({ kind: 'stop', at, length: 0, blank: false });
+          break;
+        }
+        passed.push(node);
+        if (node.nodeType === 3) {
+          const text = node as Text;
+          items.push(
+            holder(text) === home
+              ? { kind: 'text', at, length: text.length, blank: !text.data.trim() }
+              : { kind: 'stop', at, length: 0, blank: false },
+          );
+        } else if (node.nodeType === 1) {
+          const element = node as Element;
+          // Other elements end nothing themselves: text held outside `home` is a stop.
+          if (stops(element)) items.push({ kind: 'stop', at, length: 0, blank: false });
+          else if (element.tagName === 'BR')
+            items.push({ kind: 'line', at, length: 0, blank: false });
+        }
+      }
+      return (
+        items[Math.min(index, items.length - 1)] ?? { kind: 'stop', at: 0, length: 0, blank: false }
+      );
+    };
+    let size = 0;
+    let farthest = -1;
+    for (let index = 0; ; index++) {
+      const entry = item(index);
+      if (entry.kind === 'stop' || size > MAX_WINDOW_TEXT) break;
+      if (entry.kind === 'line') {
+        // A line break with nothing but spaces between it and the next one makes a blank line.
+        let ahead = index + 1;
+        while (item(ahead).kind === 'text' && item(ahead).blank) ahead += 1;
+        if (item(ahead).kind === 'line') break;
+        continue;
+      }
+      size += entry.length;
+      farthest = entry.at;
+    }
+    return passed.slice(0, farthest + 1);
+  };
+  const before = side(-1);
+  const after = side(1);
+  const nodes = new Set<Node>([anchor, ...before, ...after]);
+  // collectText reaches the paragraph through the elements holding its ends.
+  for (const end of [before.at(-1) ?? anchor, after.at(-1) ?? anchor])
+    for (let at: Node | null = end; at && at !== block; at = at.parentNode) nodes.add(at);
+  nodes.add(block);
+  return nodes;
+}
+
+/** The text of a block, or of the paragraph around a node when the block is too large. */
+function blockText(document: Document, block: Element, anchor: Node | null): TextMap | null {
+  const whole = collectText(document, block);
+  if (whole || !anchor || !block.contains(anchor)) return whole;
+  const window = paragraphWindow(block, anchor);
+  return window ? collectText(document, block, undefined, window) : null;
 }
 
 /** Normalize whitespace while retaining the exact DOM endpoints of the result. */
@@ -467,7 +616,11 @@ function paragraphAround(document: Document, range: Range, evidence: string): st
       : range.startContainer.parentElement;
   const block = start?.closest(PARAGRAPH_SELECTOR);
   if (!block?.contains(range.endContainer) || block.closest(PAGE_CHROME_SELECTOR)) return undefined;
-  const text = cleanText(collectText(document, block)?.text ?? '', MAX_SOURCE_TEXT);
+  const anchor =
+    range.startContainer.nodeType === 1
+      ? (range.startContainer.childNodes[range.startOffset] ?? range.startContainer)
+      : range.startContainer;
+  const text = cleanText(blockText(document, block, anchor)?.text ?? '', MAX_SOURCE_TEXT);
   if (text.length < evidence.length + 20 || evidence.length > MAX_CONTEXT_PARAGRAPH / 2)
     return undefined;
   if (text.length <= MAX_CONTEXT_PARAGRAPH) return text;
@@ -627,9 +780,10 @@ function textCandidate(
   const range = position ? null : extended.caretRangeFromPoint?.(point.x, point.y);
   const node = position?.offsetNode ?? range?.startContainer;
   const offset = position?.offset ?? range?.startOffset ?? 0;
-  const map = collectText(document, target);
+  const map = blockText(document, target, node ?? null);
   if (!map) return null;
   const piece = map.pieces.find((entry) => entry.node === node);
+  // A paragraph window starts and ends on whole nodes, so a piece is its whole node.
   if (node && (!piece || !Number.isInteger(offset) || offset < 0 || offset > piece.node.length))
     return null;
   const span = piece
@@ -650,6 +804,53 @@ function textCandidate(
   };
 }
 
+/** Whether an element draws anything of its own at the point: a fill, a shadow, a blur, text, media or a field. */
+function paints(element: Element, document: Document): boolean {
+  const window = document.defaultView;
+  const style = window?.getComputedStyle(element);
+  if (!style || isEditable(element) || PAINTING_TAGS.has(element.tagName.toLowerCase()))
+    return true;
+  if (element.namespaceURI !== 'http://www.w3.org/1999/xhtml') return true;
+  const fill = (value: string): boolean =>
+    value !== '' && value !== 'transparent' && rgba(value)?.[3] !== 0;
+  const drawn = (value: string | undefined): boolean => !!value && value !== 'none';
+  if (
+    fill(style.backgroundColor) ||
+    drawn(style.backgroundImage) ||
+    drawn(style.boxShadow) ||
+    drawn(style.backdropFilter)
+  )
+    return true;
+  for (const pseudo of ['::before', '::after']) {
+    const content = window?.getComputedStyle(element, pseudo).content ?? '';
+    if (content && content !== 'none' && content !== 'normal') return true;
+  }
+  return Array.from(element.childNodes).some(
+    (child) => child.nodeType === 3 && child.textContent?.trim(),
+  );
+}
+
+/**
+ * The image under layers the page hides from readers and lays over it, such
+ * as the transparent `aria-hidden` lightbox link news sites put across every
+ * photo, where the hidden layer alone would capture nothing. Only through
+ * layers that draw nothing, never through the hand's own, and never into an
+ * image the page hides. A link anyone can follow stays the link.
+ */
+function imageBeneath(document: Document, point: ViewportPoint): Element | null {
+  const stack = document.elementsFromPoint?.(point.x, point.y) ?? [];
+  for (const element of stack.slice(0, MAX_OVERLAYS + 1)) {
+    if (element.tagName === 'IMG') return hiddenByPage(element, document) ? null : element;
+    if (
+      !element.closest('[aria-hidden="true"]') ||
+      element.closest('[data-zombie-hand-ui]') ||
+      paints(element, document)
+    )
+      return null;
+  }
+  return null;
+}
+
 export function extractCandidate(
   document: Document,
   point: ViewportPoint,
@@ -662,14 +863,17 @@ export function extractCandidate(
     const selected = selectionCandidate(document, point, true, pageUrl);
     if (selected) return selected;
   }
-  const target = document.elementFromPoint(point.x, point.y);
-  if (
-    !target ||
-    isEditable(target) ||
-    target.closest(CONTROL_SELECTOR) ||
-    target.closest(OMITTED_SELECTOR)
-  )
-    return null;
+  const hit = document.elementFromPoint(point.x, point.y);
+  const target = (hit && !hit.closest('img') && imageBeneath(document, point)) || hit;
+  if (!target || isEditable(target) || target.closest(OMITTED_SELECTOR)) return null;
+  // A control's own text is never evidence, but a video's transcript cue is a
+  // control that seeks the video, and only a site's own reader may take it.
+  if (target.closest(CONTROL_SELECTOR)) {
+    const special = options.special?.(document, target);
+    return special
+      ? { candidate: special, rectangle: targetRectangle(target, document), target }
+      : null;
+  }
   const selected = options.preferSelection
     ? null
     : selectionCandidate(document, point, false, pageUrl);

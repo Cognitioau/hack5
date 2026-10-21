@@ -361,7 +361,7 @@ async function contentRequest(
       if (seconds !== undefined && arm.candidate.video) {
         arm.candidate.video.seconds = seconds;
         const url = new URL(arm.candidate.url);
-        url.searchParams.set('t', String(Math.floor(seconds)));
+        url.searchParams.set('t', `${Math.floor(seconds)}s`);
         arm.candidate.url = url.href;
         arm.candidate.text = arm.candidate.video.transcript.cues
           .filter((cue) => cue.start >= Math.max(0, seconds - 30) && cue.start <= seconds + 60)

@@ -244,6 +244,7 @@ test('full extension captures with trusted input, preserves crops and captions, 
       transcript: { status: 'partial', provenance: 'youtube-panel' },
     });
     expect(video.candidate.video?.transcript.cues).toHaveLength(3);
+    expect(video.candidate.url).toBe('https://www.youtube.com/watch?v=abcdefghijk&t=45s');
     const videoNote = vault.files.get(`Zombie Hand/captures/${video.id}.md`)?.toString() ?? '';
     expect(videoNote).toContain('camouflage');
     expect(videoNote).toContain('t=45s');
@@ -342,7 +343,7 @@ test('full extension captures with trusted input, preserves crops and captions, 
         'https://invalid.example',
     );
     expect(cueLink.searchParams.get('v')).toBe('lmnopqrstuv');
-    expect(cueLink.searchParams.get('t')).toBe('30');
+    expect(cueLink.searchParams.get('t')).toBe('30s');
     await graveyard.getByRole('button', { name: 'Refresh', exact: true }).click();
     const dogCard = graveyard.locator('.capture-card').filter({ hasText: 'young dog' });
     await dogCard.getByRole('button', { name: 'Spit back' }).click();

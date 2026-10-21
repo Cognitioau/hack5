@@ -33,6 +33,7 @@ beforeEach(() => {
     value: undefined,
   });
   Object.defineProperty(document, 'caretRangeFromPoint', { configurable: true, value: undefined });
+  Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: undefined });
   Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
     configurable: true,
     value: () => rectangle,
@@ -353,6 +354,236 @@ describe('bounded untrusted page extraction', () => {
     expect(capture?.candidate.image?.url).toBe('https://images.example.org/loaded.webp');
     expect(capture?.candidate.image?.rect).toMatchObject({ x: 30, y: 40, width: 200, height: 60 });
     expect(capture?.candidate.text).toBe('A fern — Forest floor');
+  });
+
+  it('finds an image under a transparent overlay laid over it, as a lightbox link is', () => {
+    fixture(
+      `<figure><div style="position:relative"><picture><img id="image" src="/globe.jpg" alt="Globe map"></picture>
+       <a id="overlay" href="#img-3" aria-hidden="true" tabindex="-1" style="position:absolute;top:0;width:100%;height:100%"><button type="button" style="opacity:0">View image in fullscreen</button></a>
+       </div><figcaption>Illustration: Example Graphics</figcaption></figure>`,
+      '#overlay',
+    );
+    const image = document.querySelector('#image') as HTMLImageElement;
+    Object.defineProperty(image, 'currentSrc', {
+      configurable: true,
+      value: 'https://images.example.org/globe.jpg',
+    });
+    const stack = (top: Element): Element[] => {
+      const below: Element[] = [];
+      for (let at: Element | null = image; at; at = at.parentElement) below.push(at);
+      return [top, ...below];
+    };
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => stack(target),
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 });
+    expect(capture?.candidate.kind).toBe('image');
+    expect(capture?.candidate.image?.url).toBe('https://images.example.org/globe.jpg');
+    expect(capture?.candidate.text).toBe('Globe map — Illustration: Example Graphics');
+    expect(capture?.target).toBe(image);
+
+    // Nothing is seen through a layer readers are not told to skip, the hand's
+    // own, one that draws over the image or is a field, more layers than a
+    // lightbox lays, nor into an image the page hides. Each layer here is
+    // hidden from readers, so only its own reason stops the lookup.
+    const cover = (setup: (element: HTMLElement) => void, tag = 'div'): Element => {
+      const element = document.createElement(tag);
+      element.setAttribute('aria-hidden', 'true');
+      setup(element);
+      document.body.append(element);
+      return element;
+    };
+    const parsed = (html: string): Element => {
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      const element = holder.firstElementChild as Element;
+      document.body.append(element);
+      return element;
+    };
+    for (const over of [
+      cover((element) => element.removeAttribute('aria-hidden')),
+      cover((element) => element.setAttribute('data-zombie-hand-ui', '')),
+      cover((element) => {
+        element.style.boxShadow = 'inset 0 0 0 999px rgba(0, 0, 0, 0.5)';
+      }),
+      cover((element) => {
+        element.style.setProperty('backdrop-filter', 'blur(8px)');
+      }),
+      ...['audio', 'canvas', 'embed', 'iframe', 'object', 'video'].map((tag) =>
+        cover(() => {}, tag),
+      ),
+      parsed('<svg aria-hidden="true" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>'),
+      // The shape of a play icon, the element Chromium finds at the pointer.
+      parsed('<svg aria-hidden="true" viewBox="0 0 1 1"><path d="M0 0L1 .5L0 1z"/></svg>')
+        .firstElementChild as Element,
+      parsed('<math aria-hidden="true"><mi>x</mi></math>'),
+      cover((element) => {
+        element.style.backgroundColor = 'rgb(255, 255, 255)';
+      }),
+      cover((element) => {
+        element.style.backgroundImage = 'url("https://example.org/pattern.png")';
+      }),
+      cover((element) => {
+        element.textContent = 'We use cookies.';
+      }),
+      cover((element) => {
+        element.setAttribute('contenteditable', 'true');
+      }),
+    ]) {
+      target = over;
+      expect(extractCandidate(document, { x: 80, y: 60 })?.target, over.outerHTML).not.toBe(image);
+    }
+    // A scrim drawn by ::after, as Chromium reports it; jsdom computes no pseudo-element styles.
+    const scrim = cover(() => {});
+    const computed = window.getComputedStyle.bind(window);
+    const pseudo = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockImplementation((element, part) =>
+        element === scrim && part === '::after'
+          ? ({ content: '""' } as CSSStyleDeclaration)
+          : computed(element, part),
+      );
+    target = scrim;
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).not.toBe(image);
+    pseudo.mockRestore();
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).toBe(image);
+    const layers = Array.from({ length: 5 }, () => cover(() => {}));
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [...layers, image],
+    });
+    target = layers[0] as Element;
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).not.toBe(image);
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [...layers.slice(1), image],
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).toBe(image);
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => stack(target),
+    });
+    target = document.querySelector('#overlay') as Element;
+    image.style.opacity = '0';
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+
+  it('keeps a link laid over a thumbnail as the link, as a card on a news front is', () => {
+    fixture(
+      '<div class="card" style="position:relative"><img id="thumb" src="/thumb.jpg" alt="Thumbnail"><h3>Story headline</h3><a id="stretched" href="/story" aria-label="Story headline" style="position:absolute;inset:0"></a></div>',
+      '#stretched',
+    );
+    const image = document.querySelector('#thumb') as Element;
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [target, image, image.parentElement, document.body, document.documentElement],
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate).toMatchObject({
+      kind: 'link',
+      url: 'https://example.org/story',
+    });
+  });
+
+  it('takes the sentence at the pointer from a block too large to read whole, such as an essay in one table cell', () => {
+    const filler = (label: string, count: number): string =>
+      Array.from(
+        { length: count },
+        (_, index) =>
+          `${label} paragraph ${index} goes on about work for a while, as essays do.<br><br>`,
+      ).join('');
+    fixture(
+      `<table><tr><td id="essay"><font>${filler('Early', 500)}<blockquote>A quoted aside.</blockquote><div>A line laid out as a block.</div>Develop a habit of working on your own <a href="/x">projects</a>. Don't let "work"\nmean something other people tell you to do. If you do manage it, it will be yours.<br><br>${filler('Late', 500)}</font></td></tr></table>`,
+      '#essay font',
+    );
+    expect(document.querySelector('#essay')?.textContent?.length).toBeGreaterThan(64_000);
+    const words = document.querySelector('#essay a')?.nextSibling as Text;
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: words, offset: 30 }),
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 });
+    // The line break in the page's source shows as a space, so it ends no sentence.
+    expect(capture?.candidate.text).toBe(
+      `Don't let "work" mean something other people tell you to do.`,
+    );
+    expect(capture?.candidate.context?.paragraph).toBe(
+      `Develop a habit of working on your own projects. Don't let "work" mean something other people tell you to do. If you do manage it, it will be yours.`,
+    );
+  });
+
+  it('reads a few thousand characters either side in a huge block with no blank lines', () => {
+    const run = (label: string): string =>
+      Array.from(
+        { length: 1_000 },
+        (_, index) => `<span>${label} sentence ${index} says a little more.</span> `,
+      ).join('');
+    fixture(
+      `<p id="wall">${run('Early')}<span id="here">The pointer rests on this sentence.</span> ${run('Late')}</p>`,
+      '#wall',
+    );
+    expect(target.textContent?.length).toBeGreaterThan(64_000);
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#here')?.firstChild, offset: 4 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'The pointer rests on this sentence.',
+    );
+  });
+
+  it('reads the row at the pointer in a cell of thousands of rows, without walking the whole cell', () => {
+    const rows = (from: number): string =>
+      Array.from(
+        { length: 3_000 },
+        (_, index) => `<div>Row ${from + index} holds its own words.</div>`,
+      ).join('');
+    fixture(
+      `<table><tr><td id="rows">${rows(0)}<div id="here">The pointer rests on this row. It ends.</div>${rows(3_000)}</td></tr></table>`,
+      '#here',
+    );
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#here')?.firstChild, offset: 4 }),
+    });
+    target = document.querySelector('#rows') as Element;
+    const matches = vi.spyOn(Element.prototype, 'matches');
+    try {
+      expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+        'The pointer rests on this row.',
+      );
+      // Reading the cell's first 2,048 nodes, then the row's paragraph: far fewer
+      // checks than walking all 6,000 rows would take.
+      expect(matches.mock.calls.length).toBeLessThan(9_000);
+    } finally {
+      matches.mockRestore();
+    }
+  });
+
+  it('reads the line at the pointer in a code block of thousands of short spans', () => {
+    const lines = Array.from(
+      { length: 1_500 },
+      () => `${Array.from({ length: 8 }, (_, word) => `<span>w${word}</span>`).join(' ')};\n`,
+    ).join('');
+    fixture(
+      `<pre id="code">${lines}<span id="here">pointed</span> <span>words</span>;\n${lines}</pre>`,
+      '#code',
+    );
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#here')?.firstChild, offset: 2 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe('pointed words;');
+  });
+
+  it('still ends a sentence at a line break the page shows, as preformatted text does', () => {
+    fixture('<pre id="code">first line without a stop\nsecond line here</pre>', '#code');
+    const words = target.firstChild as Text;
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: words, offset: 30 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe('second line here');
   });
 
   it('resolves safe links and refuses executable or credential-bearing destinations', () => {

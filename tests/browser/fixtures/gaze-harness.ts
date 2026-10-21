@@ -55,7 +55,9 @@ function gazePoint(time: number) {
   }
   if (desired.x !== aim.x || desired.y !== aim.y) {
     aim = desired;
-    aimSince = time;
+    // A frame's time is when the frame began, which on a busy machine is before the target
+    // was shown; the eyes react from when they first see it, on the lab's own clock.
+    aimSince = performance.now();
   }
   if (time - aimSince >= control.reactionMs) looking = aim;
   return looking;

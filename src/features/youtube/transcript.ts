@@ -3,9 +3,15 @@ import type { CaptureCandidate, TranscriptCue, TranscriptResult } from '../../co
 export { parseImportedTranscript } from './import';
 
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/u;
-const PANEL_SELECTOR =
-  'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]';
-const SEGMENT_SELECTOR = 'ytd-transcript-segment-renderer, ytd-transcript-segment-view-model';
+// The panel's target-id has changed (engagement-panel-searchable-transcript,
+// then PAmodern_transcript_view, sometimes none), so any open panel holding cues is read.
+const PANEL_SELECTOR = 'ytd-engagement-panel-section-list-renderer';
+// Segments as YouTube rendered them until October 2026, and as it renders them now.
+const SEGMENT_SELECTOR =
+  'ytd-transcript-segment-renderer, ytd-transcript-segment-view-model, transcript-segment-view-model';
+const TIME_SELECTOR =
+  '.segment-timestamp, .segment-start-offset, .ytwTranscriptSegmentViewModelTimestamp';
+const TEXT_SELECTOR = '.segment-text, .segment-text-container, [role="text"]';
 const MAX_TRANSCRIPT_CHARACTERS = 24_000;
 const trim = (text: string, maximum: number): string =>
   text.replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -65,8 +71,10 @@ export function readYouTubeTranscript(document: Document, expectedId: string): T
     provenance: 'youtube-panel',
   });
   if (youtubeVideoId(document.location.href) !== expectedId) return empty('failed');
-  const panel = document.querySelector(PANEL_SELECTOR);
-  if (!panel || !visible(panel, document)) return empty('unavailable');
+  const panel = Array.from(document.querySelectorAll(PANEL_SELECTOR)).find(
+    (candidate) => candidate.querySelector(SEGMENT_SELECTOR) && visible(candidate, document),
+  );
+  if (!panel) return empty('unavailable');
   const segments = Array.from(panel.querySelectorAll(SEGMENT_SELECTOR)).slice(0, 2_000);
   const cues: TranscriptCue[] = [];
   const duplicateKeys = new Set<string>();
@@ -76,9 +84,8 @@ export function readYouTubeTranscript(document: Document, expectedId: string): T
     // Off-scroll DOM segments in the open transcript are still actual native
     // text; a CSS-hidden track/renderer is not a viewer-visible source.
     if (segment.closest('[hidden],[aria-hidden="true"]')) continue;
-    const timeText =
-      segment.querySelector('.segment-timestamp, .segment-start-offset')?.textContent ?? '';
-    const body = segment.querySelector('.segment-text, .segment-text-container')?.textContent ?? '';
+    const timeText = segment.querySelector(TIME_SELECTOR)?.textContent ?? '';
+    const body = segment.querySelector(TEXT_SELECTOR)?.textContent ?? '';
     const start = parseCueTimestamp(timeText);
     const text = trim(body, 2_000);
     if (start === null || text.length === 0) {
@@ -135,7 +142,7 @@ export function extractYouTubeCandidate(
   if (
     !id ||
     !target.closest(
-      '#movie_player, ytd-player, #player, ytd-watch-metadata h1, #title h1, ytd-transcript-segment-renderer, ytd-transcript-segment-view-model',
+      `#movie_player, ytd-player, #player, ytd-watch-metadata h1, #title h1, ${SEGMENT_SELECTOR}`,
     )
   )
     return null;

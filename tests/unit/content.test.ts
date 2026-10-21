@@ -839,6 +839,154 @@ describe('one-click grabs (mocked browser boundary)', () => {
     return respond.mock.calls[0]?.[0];
   }
 
+  /** Clicks the hand with nothing selected; the page grab waits on the reader until resolved. */
+  async function startSlowPageGrab(
+    start = () => control('.grab').click(),
+  ): Promise<(reply: AppResponse) => void> {
+    const before = messages('READ_PAGE').length;
+    let finishRead: ((reply: AppResponse) => void) | undefined;
+    send.mockImplementation(async (message: ContentMessage) =>
+      message.type === 'READ_PAGE'
+        ? new Promise<AppResponse>((resolve) => {
+            finishRead = resolve;
+          })
+        : handleMessage(message),
+    );
+    start();
+    await flush();
+    expect(messages('READ_PAGE')).toHaveLength(before + 1);
+    return (reply) => finishRead?.(reply);
+  }
+
+  it.each([
+    ['the keyboard', () => accessibleCapture()],
+    [
+      'the hand',
+      async () => {
+        control('.grab').click();
+        await flush();
+      },
+    ],
+    [
+      'the toolbar',
+      async () =>
+        expect(await toolbarGrab('selection')).toEqual({
+          ok: false,
+          error: 'The hand is still holding the last grab.',
+        }),
+    ],
+    [
+      'a lasso',
+      async () => {
+        beginCircle();
+        await traceCircle();
+        dispatch('keyup', { key: 'Shift' });
+      },
+    ],
+  ] as const)(
+    'a grab from %s waits for a whole-page grab still reading the page',
+    async (_, grabAgain) => {
+      const finishRead = await startSlowPageGrab();
+      selectPassage();
+      await grabAgain();
+      expect(messages('ARM')).toHaveLength(0);
+      finishRead({ ok: false, error: 'Not loaded' });
+      await flush();
+      expect(messages('ARM')).toEqual([
+        expect.objectContaining({ candidate: expect.objectContaining({ wholePage: true }) }),
+      ]);
+      expect(messages('CAPTURE')).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['Escape', () => dispatch('keydown', { key: 'Escape' }), 'Let go. Nothing new was captured.'],
+    [
+      'a settings change',
+      () => fromBackground({ v: 1, type: 'SETTINGS_CHANGED' }),
+      'Settings changed. Hold Shift or Ctrl and circle a new target; pending captures remain in the graveyard.',
+    ],
+  ] as const)(
+    '%s while the page is read drops that grab, and the hand grabs again at once',
+    async (_, interrupt, detail) => {
+      const finishRead = await startSlowPageGrab();
+      interrupt();
+      await flush();
+      expect(control('.detail').textContent).toBe(detail);
+      selectPassage();
+      control('.grab').click();
+      await flush();
+      expect(messages('ARM')).toEqual([
+        expect.objectContaining({ candidate: expect.objectContaining({ text: passage }) }),
+      ]);
+      // The dropped read comes back late and is dropped.
+      finishRead({ ok: false, error: 'Not loaded' });
+      await flush();
+      expect(messages('ARM')).toHaveLength(1);
+    },
+  );
+
+  it('a page read let go and outlived by a new one leaves the new one holding', async () => {
+    const finishFirst = await startSlowPageGrab();
+    dispatch('keydown', { key: 'Escape' });
+    await flush();
+    const finishSecond = await startSlowPageGrab();
+    finishFirst({ ok: false, error: 'Not loaded' });
+    await flush();
+    selectPassage();
+    control('.grab').click();
+    await flush();
+    expect(messages('ARM')).toHaveLength(0);
+    finishSecond({ ok: false, error: 'Not loaded' });
+    await flush();
+    expect(messages('ARM')).toEqual([
+      expect.objectContaining({ candidate: expect.objectContaining({ wholePage: true }) }),
+    ]);
+  });
+
+  it('never reads a page whose grab was let go while the reader loaded', async () => {
+    const global = globalThis as { zombieHandReadArticle?: unknown };
+    const reader = vi.fn(() => ({ title: 'The article', text: 'The article text.' }));
+    const finishRead = await startSlowPageGrab();
+    dispatch('keydown', { key: 'Escape' });
+    await flush();
+    global.zombieHandReadArticle = reader;
+    try {
+      finishRead({ ok: true });
+      await flush();
+      expect(reader).not.toHaveBeenCalled();
+      expect(messages('ARM')).toHaveLength(0);
+    } finally {
+      delete global.zombieHandReadArticle;
+    }
+  });
+
+  it('tells the toolbar when its page grab was let go while the page was read', async () => {
+    const respond = vi.fn();
+    const finishRead = await startSlowPageGrab(() =>
+      runtimeListener?.({ v: 1, type: 'GRAB', kind: 'page' }, { id: 'test-extension' }, respond),
+    );
+    dispatch('keydown', { key: 'Escape' });
+    await flush();
+    finishRead({ ok: false, error: 'Not loaded' });
+    await flush();
+    expect(respond).toHaveBeenCalledWith({ ok: false, error: 'Let go. Nothing new was captured.' });
+    expect(messages('ARM')).toHaveLength(0);
+  });
+
+  it('keeps the last capture when Spit back is pressed while the page is read', async () => {
+    await accessibleCapture();
+    expect(control('.archive').hidden).toBe(false);
+    const finishRead = await startSlowPageGrab();
+    control('.archive').click();
+    await flush();
+    expect(messages('ARCHIVE')).toHaveLength(0);
+    finishRead({ ok: false, error: 'Not loaded' });
+    await flush();
+    expect(messages('ARM')).toHaveLength(2);
+    expect(messages('CAPTURE')).toHaveLength(2);
+  });
+
   it('tells the toolbar why nothing was taken, and takes the selection when there is one', async () => {
     expect(await toolbarGrab('selection')).toEqual({
       ok: false,

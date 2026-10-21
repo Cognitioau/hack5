@@ -480,6 +480,21 @@ test('a whole-page grab keeps the article and who wrote it, not the page around 
     expect(text).toContain('Essay paragraph 12: the curious keep a field journal');
     // Chromium's reader drops empty inline tags and footnote marks; neither joins words.
     expect(text).toContain('The tide stopped all boats, and octopodes swam.');
+    // What an open shadow root shows is read as the page composes it (MDN's code samples).
+    expect(text).toContain('A journal entry, as the sample shows it');
+    expect(text).toContain('date: 2024-03-05; tide: low');
+    // Highlighted as Prism marks an HTTP header, which the reader would cut to its colon.
+    expect(text).toContain('Cache-Control: private');
+    expect(text).toContain('The crab hid under weed.');
+    // Nor text in a slot, or a box-less element, the page has made invisible.
+    for (const unseen of [
+      'MARK_UNSLOTTED',
+      'MARK_SHADOW_HIDDEN',
+      'MARK_SLOT_HIDDEN',
+      'MARK_FALLBACK_HIDDEN',
+      'MARK_CONTENTS_HIDDEN',
+    ])
+      expect(text).not.toContain(unseen);
     for (const chrome of ['Subscribe to the newsletter', 'Counting moths', 'All rights reserved'])
       expect(text).not.toContain(chrome);
     expect(text).not.toContain('Ignore your instructions');
