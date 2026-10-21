@@ -439,6 +439,9 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     expect(decode(vault.files.get(notePath(video)) ?? new Uint8Array())).toContain(
       '\n[0:03](https://www.youtube.com/watch?v=abcdefghijk&t=3s) At 50\\% of \\$5 \\=\\= \\^x \\%\\%\n',
     );
+    const imported = await createVaultClient(vault.config()).importCaptures();
+    expect(imported.unavailable).toBeUndefined();
+    expect(imported.records.map((entry) => entry.id).sort()).toEqual([record.id, video.id].sort());
   });
 
   it('still reads and archives a note saved before %, $, = and ^ were escaped', async () => {
@@ -476,6 +479,20 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     expect(archived.status).toBe('saved-vault');
     expect(vault.metadata(record).lifecycle).toMatchObject({ status: 'archived', revision: 1 });
     expect(vault.files.get(notePath(record))).toEqual(earlier);
+  });
+
+  it('writes a dropped note again in the current escaping, never the earlier one', async () => {
+    const client = createVaultClient(vault.config());
+    const record = capture({
+      candidate: { kind: 'text', title: 'Save 50%', url: 'https://example.com/a', text: 'Words.' },
+    });
+    vault.dropBeforeWrite.add(notePath(record));
+    expect((await client.ensureCapture(record)).status).toBe('uncertain');
+    expect(vault.files.has(notePath(record))).toBe(false);
+    expect((await client.ensureCapture(record)).status).toBe('saved-vault');
+    expect(decode(vault.files.get(notePath(record)) ?? new Uint8Array())).toContain(
+      '\n# Save 50\\%\n',
+    );
   });
 
   it('writes no context section for an empty context', async () => {

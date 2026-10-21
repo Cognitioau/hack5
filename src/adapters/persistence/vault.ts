@@ -196,8 +196,8 @@ function sourceLink(url: string, label = 'Open source'): string {
 function renderNote(
   config: NormalizedConfig,
   record: CaptureRecord,
-  asset?: AssetDescriptor,
-  punctuation: Punctuation = PUNCTUATION[0],
+  asset: AssetDescriptor | undefined,
+  punctuation: Punctuation,
 ): Uint8Array {
   const escaped = (value: string) => escapeMarkdown(value, punctuation);
   const { byline, context, passageUrl } = record.candidate;
