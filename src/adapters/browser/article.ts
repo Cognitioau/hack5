@@ -95,9 +95,69 @@ function withoutArticleText(json: string): string | null {
 }
 
 /**
+ * Each light child of a shadow host, and the copies standing for it: one copy,
+ * or for a slot handed on to a nested host, the copies of what it shows.
+ */
+type Twins = Map<Node, Node[]>;
+
+/**
+ * An open shadow root's tree as the page shows it, copied into `copy`: a slot
+ * shows the light children assigned to it, else its own fallback, and what the
+ * page hides is left out. A closed root cannot be read and shows nothing here.
+ * Null once more elements than `budget.left` would be copied.
+ */
+function shadowCopy(
+  root: ShadowRoot,
+  twins: Twins,
+  copy: Document,
+  budget: { left: number },
+): Node[] | null {
+  const children = (parent: Node, around: Twins): Node[] | null => {
+    const nodes: Node[] = [];
+    for (const child of parent.childNodes) {
+      const copies = render(child, around);
+      if (!copies) return null;
+      nodes.push(...copies);
+    }
+    return nodes;
+  };
+  const render = (node: Node, around: Twins): Node[] | null => {
+    if (node.nodeType === 3) return [copy.importNode(node, false)];
+    if (node.nodeType !== 1) return [];
+    const element = node as Element;
+    if (unseen(element)) return [];
+    if (--budget.left < 0) return null;
+    if (element.tagName === 'SLOT') {
+      const assigned = (element as HTMLSlotElement).assignedNodes();
+      return assigned.length
+        ? assigned.flatMap((item) => around.get(item) ?? [])
+        : children(element, around);
+    }
+    const shell = copy.importNode(element, false);
+    const own: Twins = new Map();
+    for (const child of element.childNodes) {
+      const copies = render(child, around);
+      if (!copies) return null;
+      own.set(child, copies);
+      shell.append(...copies);
+    }
+    // A host inside a shadow tree shows its own shadow tree, its children slotted in.
+    if (element.shadowRoot) {
+      const shown = shadowCopy(element.shadowRoot, own, copy, budget);
+      if (!shown) return null;
+      shell.replaceChildren(...shown);
+    }
+    return [shell];
+  };
+  return children(root, twins);
+}
+
+/**
  * A copy of the page without what its reader cannot see, so hidden text never
- * becomes evidence. The live page is never changed. Null when the copy cannot
- * be matched to the page element for element, as nothing could then be left out.
+ * becomes evidence, and with what open shadow roots show, such as MDN's code
+ * samples. The live page is never changed. Null when the copy cannot be matched
+ * to the page element for element, as nothing could then be left out, or when
+ * shadow roots would take the reader past its element limit.
  */
 function visibleCopy(document: Document): Document | null {
   const copy = document.cloneNode(true) as Document;
@@ -105,14 +165,33 @@ function visibleCopy(document: Document): Document | null {
   const copied = copy.body ? Array.from(copy.body.getElementsByTagName('*')) : [];
   if (live.length !== copied.length) return null;
   const removed: Element[] = [];
+  const hosts: number[] = [];
   let hiddenRoot: Element | null = null;
   for (const [index, element] of live.entries()) {
     if (hiddenRoot?.contains(element)) continue;
     hiddenRoot = null;
-    if (!unseen(element)) continue;
+    if (!unseen(element)) {
+      if (element.shadowRoot) hosts.push(index);
+      continue;
+    }
     hiddenRoot = element;
     const twin = copied[index];
     if (twin) removed.push(twin);
+  }
+  // Before anything is removed, while each host's twin still has a copy of
+  // every child. In page order, so a host slotted into another is moved whole.
+  const budget = { left: MAX_READ_ELEMENTS - document.getElementsByTagName('*').length };
+  for (const index of hosts) {
+    const host = live[index];
+    const twin = copied[index];
+    if (!host?.shadowRoot || !twin?.isConnected) continue;
+    const childCopies = Array.from(twin.childNodes);
+    const twins: Twins = new Map(
+      Array.from(host.childNodes, (child, at) => [child, childCopies.slice(at, at + 1)]),
+    );
+    const shown = shadowCopy(host.shadowRoot, twins, copy, budget);
+    if (!shown) return null;
+    twin.replaceChildren(...shown);
   }
   for (const element of removed) element.remove();
   // Scripts never show, yet the reader would take an article body from the
@@ -127,8 +206,8 @@ function visibleCopy(document: Document): Document | null {
     else script.textContent = linked;
   }
   // The reader drops empty inline elements, and with them the only space
-  // between two words, as in `stopped<strong> </strong>all`.
-  for (const element of copied)
+  // between two words, as in `stopped<strong> </strong>all`, here or in a shadow tree.
+  for (const element of Array.from(copy.body?.getElementsByTagName('*') ?? []))
     if (
       element.isConnected &&
       INLINE_TAGS.has(element.tagName.toLowerCase()) &&
@@ -179,9 +258,15 @@ export function articleText(html: string, maximum: number): { text: string; trun
     if (block) {
       flush();
       const heading = /^h([1-6])$/u.exec(tag)?.[1];
-      // A paragraph inside a list item keeps the item's dash.
-      if (!marker || heading)
-        marker = `${quote}${heading ? `${'#'.repeat(Number(heading))} ` : tag === 'li' ? '- ' : ''}`;
+      // A paragraph inside a list item keeps the item's dash, and one in a quotation its mark.
+      const mark = heading
+        ? `${'#'.repeat(Number(heading))} `
+        : tag === 'li'
+          ? '- '
+          : tag === 'blockquote'
+            ? '> '
+            : '';
+      if (!marker || heading) marker = `${quote}${mark}`;
     }
     const inner = tag === 'blockquote' ? `${quote}> ` : quote;
     for (const child of element.childNodes) visit(child, inner);

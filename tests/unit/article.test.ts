@@ -30,6 +30,12 @@ describe('the article as text', () => {
     expect(truncated).toBe(false);
   });
 
+  it('marks a quotation that holds its words directly, as one holding paragraphs', () => {
+    expect(articleText('<blockquote>Direct <em>quoted</em> words.</blockquote>', 10_000).text).toBe(
+      '> Direct quoted words.',
+    );
+  });
+
   it('stops at the limit on a word boundary and says so', () => {
     const { text, truncated } = articleText(essay(40), 500);
     expect(text.length).toBeLessThanOrEqual(500);
@@ -140,6 +146,61 @@ describe('reading a whole page', () => {
     expect(JSON.parse(scripts[0]?.textContent ?? '')).toEqual({
       '@graph': [{ headline: 'H', author: { name: 'Ada' } }],
     });
+  });
+
+  it('reads what open shadow roots show, as the page composes them, and leaves the page as it was', () => {
+    document.body.innerHTML = `<article><h1>How to Do Great Work</h1>${essay(6)}
+      <code-example id="code"></code-example>
+      <note-box id="note"><b hidden slot="title">Hidden slotted text.</b><span slot="title">A slotted title</span><em>Slotted body text.</em><b slot="nowhere">Unassigned text.</b><i slot="quote">A re-projected quotation.</i></note-box>
+      <empty-slot id="fallback"></empty-slot>
+      <closed-box id="closed"></closed-box></article>`;
+    const root = (id: string, html: string, mode: ShadowRootMode = 'open'): ShadowRoot => {
+      const shadow = (document.getElementById(id) as Element).attachShadow({ mode });
+      shadow.innerHTML = html;
+      return shadow;
+    };
+    // As MDN serves a code sample: all of it inside the shadow root, nothing slotted.
+    const code = root(
+      'code',
+      '<style>pre{color:red}</style><div><span>http</span><button>Copy</button></div><pre><code>Cache-Control: private</code></pre><p>It stopped<strong> </strong>all boats.</p><p hidden>Hidden shadow note for an AI.</p>',
+    );
+    const note = root(
+      'note',
+      '<h2><slot name="title"></slot></h2><p>Before the body. <slot></slot> After the body.</p><inner-quote><slot name="quote">Fallback never shown.</slot></inner-quote>',
+    );
+    (note.querySelector('inner-quote') as Element).attachShadow({ mode: 'open' }).innerHTML =
+      '<blockquote><slot></slot></blockquote>';
+    root('fallback', '<p><slot>Fallback text the page shows.</slot></p>');
+    root('closed', '<p>Closed root text.</p>', 'closed');
+    const before = document.documentElement.outerHTML;
+    const shadowBefore = [code.innerHTML, note.innerHTML];
+
+    const text = readArticle(document)?.text ?? '';
+    expect(text).toContain('Cache-Control: private');
+    expect(text).toContain('Before the body. Slotted body text. After the body.');
+    expect(text.split('A slotted title')).toHaveLength(2);
+    expect(text).toContain('> A re-projected quotation.');
+    expect(text).toContain('Fallback text the page shows.');
+    expect(text).toContain('It stopped all boats.');
+    for (const unseen of [
+      'Hidden slotted text.',
+      'Hidden shadow note',
+      'pre{color',
+      'Unassigned text.',
+      'Fallback never shown.',
+      'Closed root text.',
+    ])
+      expect(text).not.toContain(unseen);
+    expect(document.documentElement.outerHTML).toBe(before);
+    expect([code.innerHTML, note.innerHTML]).toEqual(shadowBefore);
+  });
+
+  it('keeps the page excerpt when its shadow roots hold more than the reader may read', () => {
+    // 25,250 elements in all, across many widgets: jsdom slots one large root slowly.
+    document.body.innerHTML = `<article>${essay(40)}${'<big-widget></big-widget>'.repeat(250)}</article>`;
+    for (const widget of document.querySelectorAll('big-widget'))
+      widget.attachShadow({ mode: 'open' }).innerHTML = '<span></span>'.repeat(101);
+    expect(readArticle(document)).toBeNull();
   });
 
   it('keeps the page excerpt when its copy cannot be matched to the page', () => {
