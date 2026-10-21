@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://www.youtube.com/watch?v=abcdefghijk"}
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { extractCandidate } from '../../src/adapters/browser/extraction';
 import type { CaptureRecord } from '../../src/core/contracts/index';
 import { searchableChunks } from '../../src/core/domain/retrieval';
 import {
@@ -123,6 +124,16 @@ describe('native YouTube transcript evidence', () => {
       video.currentTime = 20;
       const pointed = document.querySelector('transcript-segment-view-model') as Element;
       expect(extractYouTubeCandidate(document, pointed)?.text).toBe('We are no strangers to love.');
+      // Each cue sits in a role="button" that seeks the video; pointing at one still takes the moment.
+      Object.defineProperty(document, 'elementFromPoint', {
+        configurable: true,
+        value: () => pointed.querySelector('[role="text"]'),
+      });
+      expect(
+        extractCandidate(document, { x: 10, y: 10 }, { special: extractYouTubeCandidate })
+          ?.candidate,
+      ).toMatchObject({ kind: 'youtube', text: 'We are no strangers to love.' });
+      expect(extractCandidate(document, { x: 10, y: 10 })).toBeNull();
     }
   });
 

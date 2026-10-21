@@ -383,15 +383,37 @@ describe('bounded untrusted page extraction', () => {
     expect(capture?.candidate.text).toBe('Globe map — Illustration: Example Graphics');
     expect(capture?.target).toBe(image);
 
-    // Nothing is seen through what paints over the image, a field, or more layers
-    // than a lightbox lays, nor into an image the page hides.
+    // Nothing is seen through a layer readers are not told to skip, the hand's
+    // own, one that draws over the image or is a field, more layers than a
+    // lightbox lays, nor into an image the page hides. Each layer here is
+    // hidden from readers, so only its own reason stops the lookup.
     const cover = (setup: (element: HTMLElement) => void, tag = 'div'): Element => {
       const element = document.createElement(tag);
+      element.setAttribute('aria-hidden', 'true');
       setup(element);
       document.body.append(element);
       return element;
     };
+    const parsed = (html: string): Element => {
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      const element = holder.firstElementChild as Element;
+      document.body.append(element);
+      return element;
+    };
     for (const over of [
+      cover((element) => element.removeAttribute('aria-hidden')),
+      cover((element) => element.setAttribute('data-zombie-hand-ui', '')),
+      cover((element) => {
+        element.style.boxShadow = 'inset 0 0 0 999px rgba(0, 0, 0, 0.5)';
+      }),
+      cover((element) => {
+        element.style.setProperty('backdrop-filter', 'blur(8px)');
+      }),
+      cover(() => {}, 'video'),
+      cover(() => {}, 'canvas'),
+      cover(() => {}, 'iframe'),
+      parsed('<svg aria-hidden="true" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>'),
       cover((element) => {
         element.style.backgroundColor = 'rgb(255, 255, 255)';
       }),
@@ -408,6 +430,20 @@ describe('bounded untrusted page extraction', () => {
       target = over;
       expect(extractCandidate(document, { x: 80, y: 60 })?.target, over.outerHTML).not.toBe(image);
     }
+    // A scrim drawn by ::after, as Chromium reports it; jsdom computes no pseudo-element styles.
+    const scrim = cover(() => {});
+    const computed = window.getComputedStyle.bind(window);
+    const pseudo = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockImplementation((element, part) =>
+        element === scrim && part === '::after'
+          ? ({ content: '""' } as CSSStyleDeclaration)
+          : computed(element, part),
+      );
+    target = scrim;
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).not.toBe(image);
+    pseudo.mockRestore();
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).toBe(image);
     const layers = Array.from({ length: 5 }, () => cover(() => {}));
     Object.defineProperty(document, 'elementsFromPoint', {
       configurable: true,
@@ -427,6 +463,22 @@ describe('bounded untrusted page extraction', () => {
     target = document.querySelector('#overlay') as Element;
     image.style.opacity = '0';
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+
+  it('keeps a link laid over a thumbnail as the link, as a card on a news front is', () => {
+    fixture(
+      '<div class="card" style="position:relative"><img id="thumb" src="/thumb.jpg" alt="Thumbnail"><h3>Story headline</h3><a id="stretched" href="/story" aria-label="Story headline" style="position:absolute;inset:0"></a></div>',
+      '#stretched',
+    );
+    const image = document.querySelector('#thumb') as Element;
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [target, image, image.parentElement, document.body, document.documentElement],
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate).toMatchObject({
+      kind: 'link',
+      url: 'https://example.org/story',
+    });
   });
 
   it('takes the sentence at the pointer from a block too large to read whole, such as an essay in one table cell', () => {
@@ -474,6 +526,50 @@ describe('bounded untrusted page extraction', () => {
     expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
       'The pointer rests on this sentence.',
     );
+  });
+
+  it('reads the row at the pointer in a cell of thousands of rows, without walking the whole cell', () => {
+    const rows = (from: number): string =>
+      Array.from(
+        { length: 3_000 },
+        (_, index) => `<div>Row ${from + index} holds its own words.</div>`,
+      ).join('');
+    fixture(
+      `<table><tr><td id="rows">${rows(0)}<div id="here">The pointer rests on this row. It ends.</div>${rows(3_000)}</td></tr></table>`,
+      '#here',
+    );
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#here')?.firstChild, offset: 4 }),
+    });
+    target = document.querySelector('#rows') as Element;
+    const matches = vi.spyOn(Element.prototype, 'matches');
+    try {
+      expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+        'The pointer rests on this row.',
+      );
+      // Reading the cell's first 2,048 nodes, then the row's paragraph: far fewer
+      // checks than walking all 6,000 rows would take.
+      expect(matches.mock.calls.length).toBeLessThan(9_000);
+    } finally {
+      matches.mockRestore();
+    }
+  });
+
+  it('reads the line at the pointer in a code block of thousands of short spans', () => {
+    const lines = Array.from(
+      { length: 1_500 },
+      () => `${Array.from({ length: 8 }, (_, word) => `<span>w${word}</span>`).join(' ')};\n`,
+    ).join('');
+    fixture(
+      `<pre id="code">${lines}<span id="here">pointed</span> <span>words</span>;\n${lines}</pre>`,
+      '#code',
+    );
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#here')?.firstChild, offset: 2 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe('pointed words;');
   });
 
   it('still ends a sentence at a line break the page shows, as preformatted text does', () => {
