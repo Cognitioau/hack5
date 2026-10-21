@@ -744,7 +744,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     }
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.status === 'complete')
+  // Wake as soon as a navigation commits: the injection waits for the page's DOM
+  // (document_idle), where `complete` would also wait for every image and ad.
+  if (change.status === 'complete' || (change.status === 'loading' && change.url))
     void ready.then(() => handActivation.wake(tabId)).catch(() => undefined);
   if (change.url || change.status === 'loading')
     for (const [token, arm] of arms)
