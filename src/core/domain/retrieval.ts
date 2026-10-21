@@ -41,7 +41,7 @@ export function searchableChunks(record: CaptureRecord): { text: string; sourceU
       next++;
     }
     const url = new URL(candidate.url);
-    url.searchParams.set('t', String(Math.floor(first.start)));
+    url.searchParams.set('t', `${Math.floor(first.start)}s`);
     chunks.push({ text: text.slice(0, 1600), sourceUrl: url.href });
     start = next;
   }

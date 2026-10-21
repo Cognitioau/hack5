@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"https://www.youtube.com/watch?v=abcdefghijk"}
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CaptureRecord } from '../../src/core/contracts/index';
+import { searchableChunks } from '../../src/core/domain/retrieval';
 import {
   currentVideoSeconds,
   extractYouTubeCandidate,
@@ -96,6 +98,56 @@ describe('native YouTube transcript evidence', () => {
     expect(transcript.cues.reduce((sum, cue) => sum + cue.text.length, 0)).toBeLessThanOrEqual(
       24_000,
     );
+  });
+
+  it('reads the transcript panel YouTube shows today, with or without a panel id', () => {
+    // As served on 21 October 2026: each cue a transcript-segment-view-model whose
+    // printed time is hidden from screen readers in favour of a spoken label.
+    const modern = (time: string, spoken: string, text: string): string =>
+      `<macro-markers-panel-item-view-model role="button"><timeline-item-view-model><div class="ytwTimelineItemViewModelContentItems"><transcript-segment-view-model class="ytwTranscriptSegmentViewModelHost"><div aria-hidden="true" class="ytwTranscriptSegmentViewModelTimestamp">${time}</div><div class="ytwTranscriptSegmentViewModelTimestampA11yLabel">${spoken}</div><span class="ytAttributedStringHost ytAttributedStringLinkInheritColor" role="text">${text}</span></transcript-segment-view-model></div></timeline-item-view-model></macro-markers-panel-item-view-model>`;
+    const cues =
+      '<timeline-chapter-view-model><h3 class="ytwTimelineChapterViewModelTitle">Chapter 1: Intro</h3></timeline-chapter-view-model>' +
+      modern('0:18', '18 seconds', 'We are no strangers to love.') +
+      modern('1:02:03', '1 hour, 2 minutes, 3 seconds', 'You know the rules.');
+    const stale = segment('0:05', 'A closed panel from earlier.');
+    for (const id of ['target-id="PAmodern_transcript_view"', '']) {
+      document.body.innerHTML = `<div id="movie_player"><video class="html5-main-video"></video></div><ytd-engagement-panel-section-list-renderer target-id="engagement-panel-searchable-transcript" visibility="ENGAGEMENT_PANEL_VISIBILITY_HIDDEN">${stale}</ytd-engagement-panel-section-list-renderer><ytd-engagement-panel-section-list-renderer ${id} visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED">${cues}</ytd-engagement-panel-section-list-renderer>`;
+      expect(readYouTubeTranscript(document, 'abcdefghijk'), id).toMatchObject({
+        status: 'partial',
+        cues: [
+          { start: 18, text: 'We are no strangers to love.' },
+          { start: 3723, text: 'You know the rules.' },
+        ],
+      });
+      const video = document.querySelector('video') as HTMLVideoElement;
+      video.currentTime = 20;
+      const pointed = document.querySelector('transcript-segment-view-model') as Element;
+      expect(extractYouTubeCandidate(document, pointed)?.text).toBe('We are no strangers to love.');
+    }
+  });
+
+  it('links a found cue as t=<seconds>s, as the note links its moment and cues', () => {
+    const record = {
+      candidate: {
+        kind: 'youtube',
+        title: 'A synthetic public lesson',
+        url: 'https://www.youtube.com/watch?v=abcdefghijk&t=45s',
+        text: '',
+        video: {
+          id: 'abcdefghijk',
+          seconds: 45,
+          transcript: {
+            status: 'partial',
+            provenance: 'youtube-panel',
+            cues: [{ start: 30.4, text: 'The octopus changes colour.' }],
+          },
+        },
+      },
+    } as CaptureRecord;
+    expect(searchableChunks(record).map((chunk) => chunk.sourceUrl)).toEqual([
+      'https://www.youtube.com/watch?v=abcdefghijk&t=45s',
+      'https://www.youtube.com/watch?v=abcdefghijk&t=30s',
+    ]);
   });
 
   it('retains source timestamps when choosing cues near a moment', () => {
