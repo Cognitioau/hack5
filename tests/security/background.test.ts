@@ -1227,10 +1227,14 @@ describe('background settings and asynchronous revocation', () => {
     settings.features.semantic = true;
     settings.features.haunting = true;
     // The query embeds to [1, 0], so each note's score is the first part of its vector.
-    const note = (name: string, score: number | null): CaptureRecord => {
+    const note = (
+      name: string,
+      score: number | null,
+      url = `https://notes.example/${name}`,
+    ): CaptureRecord => {
       const saved = record({
         indexState: score === null ? 'disabled' : 'ready',
-        candidate: { ...candidate(), url: `https://notes.example/${name}` },
+        candidate: { ...candidate(), url },
       });
       if (score !== null)
         saved.vectors = searchableChunks(saved).map((chunk) => ({
@@ -1248,6 +1252,8 @@ describe('background settings and asynchronous revocation', () => {
       note('unrelated', 0.29),
       // Notes not yet indexed match every word, and outnumber the 20 a search returns.
       ...Array.from({ length: 20 }, (_, index) => note(`keyword-${index}`, null)),
+      // So do closer notes grabbed from the page being read, which never haunt it.
+      ...Array.from({ length: 20 }, (_, index) => note(`self-${index}`, 0.6, pageUrl)),
     ])
       await seed(saved);
     const query = { v: 1, type: 'SEARCH', query: 'Orchids need controlled light and water.' };
@@ -1262,6 +1268,30 @@ describe('background settings and asynchronous revocation', () => {
     const listed = urls(await context.sendTrusted(query));
     expect(listed).toHaveLength(20);
     expect(listed?.every((url) => url?.startsWith('https://notes.example/keyword-'))).toBe(true);
+    // A note is judged by each of its passages: one indexed passage close in meaning
+    // haunts, though another passage, not yet indexed, matches every keyword.
+    const mixed = record({
+      indexState: 'ready',
+      candidate: {
+        ...candidate(),
+        url: 'https://notes.example/mixed',
+        text: `${candidate().text} ${'Ferns grow in shade. '.repeat(100)}`,
+      },
+    });
+    const passages = searchableChunks(mixed);
+    expect(passages).toHaveLength(2);
+    mixed.vectors = passages.slice(1).map((chunk) => ({
+      ...chunk,
+      hash: 'synthetic-hash',
+      model: 'fixture-model',
+      vector: [0.45, Math.sqrt(1 - 0.45 * 0.45)],
+    }));
+    await seed(mixed);
+    expect(urls(await context.send(query))).toEqual([
+      'https://notes.example/related',
+      'https://notes.example/mixed',
+      'https://notes.example/near',
+    ]);
   });
 
   it('discards a semantic query result revoked while capture records are loading', async () => {
