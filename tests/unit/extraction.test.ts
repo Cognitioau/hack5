@@ -33,6 +33,7 @@ beforeEach(() => {
     value: undefined,
   });
   Object.defineProperty(document, 'caretRangeFromPoint', { configurable: true, value: undefined });
+  Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: undefined });
   Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
     configurable: true,
     value: () => rectangle,
