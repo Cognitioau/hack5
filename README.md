@@ -2,7 +2,7 @@
 
 A Chrome extension for Hackyard Yard 5. Hold Shift or Ctrl and circle a passage to capture it into Obsidian with its page title and source link. Search saved evidence locally and let related thoughts return as ghosts.
 
-**Status: working development build, with automated browser tests and a separate live Obsidian integration check.** See [current evidence](docs/STATUS.md). Broad website coverage, human gaze accuracy, and an installed Chrome-to-Obsidian rehearsal are still unverified.
+**Status: working development build, with automated browser tests and a separate live Obsidian integration check.** See [current evidence](docs/STATUS.md). Broad website coverage and an installed Chrome-to-Obsidian rehearsal are still unverified. Gaze, measured once on a person, is shelved.
 
 ## Run it
 

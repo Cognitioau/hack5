@@ -43,7 +43,7 @@ The upstream Tasks runtime attempted a Google telemetry POST in the first probe.
 
 The lab requests camera access only after Start, extracts normalized eye/face geometry, fits a regularized local regression to nine targets, and measures five separate holdout deviations in pixels. Calibration and training features stay in memory. Stop, externally ended camera access, page hiding and page closure stop owned tracks and clear the session; window movement, resizing or device-scale changes invalidate calibration. The core build omits the entire lab, runtime and face model.
 
-Human calibration quality and transfer into another page's viewport remain unverified. The lab therefore displays a local gaze estimate and explicitly does **not** arm or capture elsewhere. There is no background gaze-forwarding message or automatic camera enablement. Connecting gaze requires a tested coordinate/geometry contract and human demonstration evidence; the mouse build remains independent.
+One human session measured a median calibration error of 96 px and the lab is shelved ([STATUS](STATUS.md#gaze-tuning)); transfer into another page's viewport remains unverified. The lab therefore displays a local gaze estimate and explicitly does **not** arm or capture elsewhere. There is no background gaze-forwarding message or automatic camera enablement. Connecting gaze requires a tested coordinate/geometry contract and human demonstration evidence; the mouse build remains independent.
 
 ## Reproduce
 
