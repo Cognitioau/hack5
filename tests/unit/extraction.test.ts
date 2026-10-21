@@ -382,13 +382,47 @@ describe('bounded untrusted page extraction', () => {
     expect(capture?.candidate.text).toBe('Globe map — Illustration: Example Graphics');
     expect(capture?.target).toBe(image);
 
-    // Nothing is seen through what paints over the image, or into an image the page hides.
-    const banner = document.createElement('div');
-    banner.style.backgroundColor = 'rgb(255, 255, 255)';
-    banner.textContent = 'We use cookies.';
-    document.body.append(banner);
-    target = banner;
-    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.kind).not.toBe('image');
+    // Nothing is seen through what paints over the image, a field, or more layers
+    // than a lightbox lays, nor into an image the page hides.
+    const cover = (setup: (element: HTMLElement) => void, tag = 'div'): Element => {
+      const element = document.createElement(tag);
+      setup(element);
+      document.body.append(element);
+      return element;
+    };
+    for (const over of [
+      cover((element) => {
+        element.style.backgroundColor = 'rgb(255, 255, 255)';
+      }),
+      cover((element) => {
+        element.style.backgroundImage = 'url("https://example.org/pattern.png")';
+      }),
+      cover((element) => {
+        element.textContent = 'We use cookies.';
+      }),
+      cover((element) => {
+        element.setAttribute('contenteditable', 'true');
+      }),
+    ]) {
+      target = over;
+      expect(extractCandidate(document, { x: 80, y: 60 })?.target, over.outerHTML).not.toBe(image);
+    }
+    const layers = Array.from({ length: 5 }, () => cover(() => {}));
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [...layers, image],
+    });
+    target = layers[0] as Element;
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).not.toBe(image);
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [...layers.slice(1), image],
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.target).toBe(image);
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => stack(target),
+    });
     target = document.querySelector('#overlay') as Element;
     image.style.opacity = '0';
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
@@ -402,7 +436,7 @@ describe('bounded untrusted page extraction', () => {
           `${label} paragraph ${index} goes on about work for a while, as essays do.<br><br>`,
       ).join('');
     fixture(
-      `<table><tr><td id="essay"><font>${filler('Early', 500)}Develop a habit of working on your own <a href="/x">projects</a>. Don't let "work"\nmean something other people tell you to do. If you do manage it, it will be yours.<br><br>${filler('Late', 500)}</font></td></tr></table>`,
+      `<table><tr><td id="essay"><font>${filler('Early', 500)}<blockquote>A quoted aside.</blockquote>Develop a habit of working on your own <a href="/x">projects</a>. Don't let "work"\nmean something other people tell you to do. If you do manage it, it will be yours.<br><br>${filler('Late', 500)}</font></td></tr></table>`,
       '#essay font',
     );
     expect(document.querySelector('#essay')?.textContent?.length).toBeGreaterThan(64_000);
@@ -418,6 +452,26 @@ describe('bounded untrusted page extraction', () => {
     );
     expect(capture?.candidate.context?.paragraph).toBe(
       `Develop a habit of working on your own projects. Don't let "work" mean something other people tell you to do. If you do manage it, it will be yours.`,
+    );
+  });
+
+  it('reads a few thousand characters either side in a huge block with no blank lines', () => {
+    const run = (label: string): string =>
+      Array.from(
+        { length: 1_000 },
+        (_, index) => `<span>${label} sentence ${index} says a little more.</span> `,
+      ).join('');
+    fixture(
+      `<p id="wall">${run('Early')}<span id="here">The pointer rests on this sentence.</span> ${run('Late')}</p>`,
+      '#wall',
+    );
+    expect(target.textContent?.length).toBeGreaterThan(64_000);
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#here')?.firstChild, offset: 4 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'The pointer rests on this sentence.',
     );
   });
 

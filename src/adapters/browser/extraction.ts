@@ -719,16 +719,11 @@ function textCandidate(
   const map = blockText(document, target, node ?? null);
   if (!map) return null;
   const piece = map.pieces.find((entry) => entry.node === node);
-  if (
-    node &&
-    (!piece ||
-      !Number.isInteger(offset) ||
-      offset < piece.nodeOffset ||
-      offset > piece.nodeOffset + piece.end - piece.start)
-  )
+  // A paragraph window starts and ends on whole nodes, so a piece is its whole node.
+  if (node && (!piece || !Number.isInteger(offset) || offset < 0 || offset > piece.node.length))
     return null;
   const span = piece
-    ? sentenceSpan(map.text, piece.start + offset - piece.nodeOffset)
+    ? sentenceSpan(map.text, piece.start + offset)
     : boundedSpan(map.text, 0, map.text.length, 1_600);
   const evidence = mappedRange(document, map, span);
   if (!evidence || span.text.length < 3) return null;
