@@ -382,7 +382,7 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
       '[Open source](<https://example.com/essays/great-work>) · [Open passage](<https://example.com/essays/great-work#:~:text=Curiosity%20is%20the%20engine.>)',
     );
     expect(body).toContain(
-      'By &lt;img src=x&gt; \\[\\[evil\\]\\] · Example Essays · 2023\\-07\\-01',
+      'By &lt;img src\\=x&gt; \\[\\[evil\\]\\] · Example Essays · 2023\\-07\\-01',
     );
     expect(body).toContain('## Context\n\nUnder the heading “Why \\# it \\[\\[matters\\]\\]”.');
     expect(body).toContain(
@@ -393,6 +393,106 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     const unfenced = body.replace(/\n````text\n[\s\S]*?\n````\n/gu, '\n');
     expect(unfenced).not.toContain('<img');
     expect(unfenced).not.toContain('[[');
+  });
+
+  it('escapes the comment, maths, highlight and block marks Obsidian reads outside the fences', async () => {
+    const record = capture({
+      candidate: {
+        kind: 'text',
+        title: 'Notes %% hidden from view %% at 50% for $5 == ^cite',
+        url: 'https://example.com/a',
+        text: 'Words.',
+        context: { heading: 'Cost $$x$$ and %%' },
+        byline: { author: 'A ==highlight==', site: 'Site ^block' },
+      },
+    });
+    expect((await createVaultClient(vault.config()).ensureCapture(record)).status).toBe(
+      'saved-vault',
+    );
+    const body = decode(vault.files.get(notePath(record)) ?? new Uint8Array()).split('\n---\n')[1];
+    expect(body).toContain(
+      '# Notes \\%\\% hidden from view \\%\\% at 50\\% for \\$5 \\=\\= \\^cite\n',
+    );
+    expect(body).toContain('Under the heading “Cost \\$\\$x\\$\\$ and \\%\\%”.');
+    expect(body).toContain('By A \\=\\=highlight\\=\\= · Site \\^block\n');
+    expect(body?.replace(/\n```text\n[\s\S]*?\n```\n/gu, '\n')).not.toMatch(/(?<!\\)[%$=^]/u);
+    const video = capture({
+      candidate: {
+        kind: 'youtube',
+        title: 'A synthetic lesson',
+        url: 'https://www.youtube.com/watch?v=abcdefghijk',
+        text: '',
+        video: {
+          id: 'abcdefghijk',
+          seconds: 3,
+          transcript: {
+            status: 'partial',
+            cues: [{ start: 3, text: 'At 50% of $5 == ^x %%' }],
+            provenance: 'youtube-panel',
+          },
+        },
+      },
+    });
+    expect((await createVaultClient(vault.config()).ensureCapture(video)).status).toBe(
+      'saved-vault',
+    );
+    expect(decode(vault.files.get(notePath(video)) ?? new Uint8Array())).toContain(
+      '\n[0:03](https://www.youtube.com/watch?v=abcdefghijk&t=3s) At 50\\% of \\$5 \\=\\= \\^x \\%\\%\n',
+    );
+    const imported = await createVaultClient(vault.config()).importCaptures();
+    expect(imported.unavailable).toBeUndefined();
+    expect(imported.records.map((entry) => entry.id).sort()).toEqual([record.id, video.id].sort());
+  });
+
+  it('still reads and archives a note saved before %, $, = and ^ were escaped', async () => {
+    const client = createVaultClient(vault.config());
+    const record = capture({
+      candidate: {
+        kind: 'text',
+        title: 'Save 50% = $5 ^now',
+        url: 'https://example.com/a',
+        text: 'Words.',
+      },
+    });
+    expect((await client.ensureCapture(record)).status).toBe('saved-vault');
+    // The note and its recorded hash as main at 672ff6b wrote them.
+    const current = decode(vault.files.get(notePath(record)) ?? new Uint8Array());
+    const earlier = text.encode(
+      current.replace('\n# Save 50\\% \\= \\$5 \\^now\n', '\n# Save 50% = $5 ^now\n'),
+    );
+    expect(decode(earlier)).not.toBe(current);
+    vault.files.set(notePath(record), earlier);
+    vault.editMetadata(record, (data) => {
+      (data.evidence as { noteSha256: string }).noteSha256 = createHash('sha256')
+        .update(earlier)
+        .digest('hex');
+    });
+    const imported = await createVaultClient(vault.config()).importCaptures();
+    expect(imported.unavailable).toBeUndefined();
+    expect(imported.records.map((entry) => entry.id)).toEqual([record.id]);
+    const archived = await client.syncLifecycle({
+      ...record,
+      lifecycle: 'archived',
+      lifecycleRevision: 1,
+      updatedAt: '2026-10-20T00:01:00.000Z',
+    });
+    expect(archived.status).toBe('saved-vault');
+    expect(vault.metadata(record).lifecycle).toMatchObject({ status: 'archived', revision: 1 });
+    expect(vault.files.get(notePath(record))).toEqual(earlier);
+  });
+
+  it('writes a dropped note again in the current escaping, never the earlier one', async () => {
+    const client = createVaultClient(vault.config());
+    const record = capture({
+      candidate: { kind: 'text', title: 'Save 50%', url: 'https://example.com/a', text: 'Words.' },
+    });
+    vault.dropBeforeWrite.add(notePath(record));
+    expect((await client.ensureCapture(record)).status).toBe('uncertain');
+    expect(vault.files.has(notePath(record))).toBe(false);
+    expect((await client.ensureCapture(record)).status).toBe('saved-vault');
+    expect(decode(vault.files.get(notePath(record)) ?? new Uint8Array())).toContain(
+      '\n# Save 50\\%\n',
+    );
   });
 
   it('writes no context section for an empty context', async () => {

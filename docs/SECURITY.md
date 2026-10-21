@@ -50,7 +50,7 @@ Use HTTPS for the local plugin with a trusted certificate. HTTP is an explicit l
 - Probe conditional-write support on synthetic files in a dedicated test vault before enabling the normal writer. Do not silently use an older unconditional-write path. [Plugin write preconditions](https://github.com/coddingtonbear/obsidian-local-rest-api#conditional-writes)
 - Distinguish locally queued, remote uncertain, remotely acknowledged and conflicted writes. Reconcile timeouts by reading the intended record; never blindly overwrite.
 - Spit-back archives and retains content. It has no vault DELETE operation. Shared transcript/attachment data is not removed when one moment is archived.
-- Serialize YAML through a library and render captured text as safely escaped content. Page text must not introduce extra frontmatter fields, executable HTML, remote image embeds or application commands.
+- Serialize YAML through a library and render captured text as safely escaped content. Page text must not introduce extra frontmatter fields, executable HTML, remote image embeds or application commands. Outside the fences, Obsidian's `%%` comments (which hide what follows), `$` maths, `==` highlights and `^` block references are escaped as well. In a wiki page an agent writes from captures, the kit's hook refuses any change that would leave the page holding HTML, a `%%` comment, a Markdown image or an embed of a web address, a Templater `<%` command, a Dataview inline query or a code fence named other than a common language; it checks those patterns, not every way Obsidian or a plugin might read a page.
 
 ## Rendering and downloaded media
 
