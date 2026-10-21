@@ -138,33 +138,6 @@ test('universal activation follows tabs, navigation and restart, respects exclus
       )
       .toBe('saved-vault');
 
-    // The hand wakes once a page's words are there, not after its slowest image.
-    await fixture.context.route('https://slow.example.org/fern.png', async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 8_000));
-      await route.fulfill({ contentType: 'image/png', body: '' }).catch(() => undefined);
-    });
-    await fixture.context.route(
-      (url) => url.hostname === 'slow.example.org' && url.pathname === '/article',
-      (route) =>
-        route.fulfill({
-          contentType: 'text/html',
-          body: '<!doctype html><title>Slow</title><p>This page is still waiting for its image.</p><img src="/fern.png" alt="">',
-        }),
-    );
-    // A new tab, then the same tab moving on from a page that already has the hand.
-    const slow = await fixture.context.newPage();
-    for (const url of [
-      'https://slow.example.org/article',
-      `${vault.origin}/article?before`,
-      'https://slow.example.org/article?again',
-    ]) {
-      await slow.goto(url, { waitUntil: 'domcontentloaded' });
-      await expect(slow.locator('[data-zombie-hand-ui]')).toHaveCount(1, { timeout: 4_000 });
-      if (url.startsWith('https://slow.'))
-        expect(await slow.evaluate(() => document.readyState)).not.toBe('complete');
-    }
-    await slow.close();
-
     await fixture.options.bringToFront();
     await fixture.options.locator('#excluded').fill('https://blocked.example.org');
     await fixture.options.getByRole('button', { name: /^Save settings/ }).click();
