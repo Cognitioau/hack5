@@ -355,6 +355,82 @@ describe('bounded untrusted page extraction', () => {
     expect(capture?.candidate.text).toBe('A fern — Forest floor');
   });
 
+  it('finds an image under a transparent overlay laid over it, as a lightbox link is', () => {
+    fixture(
+      `<figure><div style="position:relative"><picture><img id="image" src="/globe.jpg" alt="Globe map"></picture>
+       <a id="overlay" href="#img-3" aria-hidden="true" tabindex="-1" style="position:absolute;top:0;width:100%;height:100%"><button type="button" style="opacity:0">View image in fullscreen</button></a>
+       </div><figcaption>Illustration: Example Graphics</figcaption></figure>`,
+      '#overlay',
+    );
+    const image = document.querySelector('#image') as HTMLImageElement;
+    Object.defineProperty(image, 'currentSrc', {
+      configurable: true,
+      value: 'https://images.example.org/globe.jpg',
+    });
+    const stack = (top: Element): Element[] => {
+      const below: Element[] = [];
+      for (let at: Element | null = image; at; at = at.parentElement) below.push(at);
+      return [top, ...below];
+    };
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => stack(target),
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 });
+    expect(capture?.candidate.kind).toBe('image');
+    expect(capture?.candidate.image?.url).toBe('https://images.example.org/globe.jpg');
+    expect(capture?.candidate.text).toBe('Globe map — Illustration: Example Graphics');
+    expect(capture?.target).toBe(image);
+
+    // Nothing is seen through what paints over the image, or into an image the page hides.
+    const banner = document.createElement('div');
+    banner.style.backgroundColor = 'rgb(255, 255, 255)';
+    banner.textContent = 'We use cookies.';
+    document.body.append(banner);
+    target = banner;
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.kind).not.toBe('image');
+    target = document.querySelector('#overlay') as Element;
+    image.style.opacity = '0';
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+
+  it('takes the sentence at the pointer from a block too large to read whole, such as an essay in one table cell', () => {
+    const filler = (label: string, count: number): string =>
+      Array.from(
+        { length: count },
+        (_, index) =>
+          `${label} paragraph ${index} goes on about work for a while, as essays do.<br><br>`,
+      ).join('');
+    fixture(
+      `<table><tr><td id="essay"><font>${filler('Early', 500)}Develop a habit of working on your own <a href="/x">projects</a>. Don't let "work"\nmean something other people tell you to do. If you do manage it, it will be yours.<br><br>${filler('Late', 500)}</font></td></tr></table>`,
+      '#essay font',
+    );
+    expect(document.querySelector('#essay')?.textContent?.length).toBeGreaterThan(64_000);
+    const words = document.querySelector('#essay a')?.nextSibling as Text;
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: words, offset: 30 }),
+    });
+    const capture = extractCandidate(document, { x: 80, y: 60 });
+    // The line break in the page's source shows as a space, so it ends no sentence.
+    expect(capture?.candidate.text).toBe(
+      `Don't let "work" mean something other people tell you to do.`,
+    );
+    expect(capture?.candidate.context?.paragraph).toBe(
+      `Develop a habit of working on your own projects. Don't let "work" mean something other people tell you to do. If you do manage it, it will be yours.`,
+    );
+  });
+
+  it('still ends a sentence at a line break the page shows, as preformatted text does', () => {
+    fixture('<pre id="code">first line without a stop\nsecond line here</pre>', '#code');
+    const words = target.firstChild as Text;
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: words, offset: 30 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe('second line here');
+  });
+
   it('resolves safe links and refuses executable or credential-bearing destinations', () => {
     fixture('<a id="link" href="/paper.pdf">A paper</a>', '#link');
     expect(extractCandidate(document, { x: 80, y: 60 })?.candidate).toMatchObject({
