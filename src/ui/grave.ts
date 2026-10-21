@@ -15,7 +15,8 @@
  * one into the next, so the hand moves on every refresh rather than in the
  * footage's own steps. Each frame carries the hand and the wall apart,
  * and the wall is tinted to the page's own colour under the hand, so a dark
- * page gets dark plaster rather than a pale glow. The cracks, the torn hole,
+ * page gets dark plaster rather than a pale glow, lifted just enough that the
+ * torn rim still shows around the black hole. The cracks, the torn hole,
  * the debris and dust of the break-in and the paper copy are drawn here around
  * it; the copy bends and balls up as a mesh of facets (./paper).
  */
@@ -319,7 +320,7 @@ export function graveLayout(scene: GraveScene, index = 0): GraveLayout {
     patches,
     sheet: { x: 0, y: 0, width, height },
     paper: rgb,
-    dark: (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 < 0.4,
+    dark: luminance(rgb) < DARK_PAGE,
     cracks,
     crackBox,
     unit,
@@ -480,6 +481,50 @@ function parseColor(value: string | undefined): [number, number, number] | null 
 type Rgb = readonly [number, number, number];
 type Decode = (frame: Blob) => Promise<ImageBitmap>;
 
+/** Relative luminance below which a page counts as dark. */
+const DARK_PAGE = 0.4;
+/**
+ * How far the torn rim is lifted toward white on the darkest page. Multiplied by a
+ * near-black page's own colour, the footage's grey rim comes out as dark as the hole,
+ * a flat black blot; lifted, it stays a little lighter than the page around the hole.
+ */
+const DARK_RIM_LIFT = 0.4;
+
+const luminance = ([red, green, blue]: Rgb): number =>
+  (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+
+/**
+ * How far each pixel of a hand's wall, decoded at `width` by `height`, is lifted toward
+ * white on this page, row by row. In all three takes the torn rim's grey plaster lies
+ * between 0.9 and 2.2 hole radii from the hole's centre, so the lift covers that ring
+ * and fades out into the black core and into the wall beyond, whose dust keeps the
+ * page's colour; it also fades out where pages stop counting as dark. A light page
+ * gets none (null).
+ */
+export function rimLift(
+  paper: Rgb,
+  hand: GraveHand,
+  width: number,
+  height: number,
+): Float32Array | null {
+  const amount = DARK_RIM_LIFT * clamp(1 - luminance(paper) / DARK_PAGE, 0, 1);
+  if (amount <= 0) return null;
+  const scale = width / hand.size.width;
+  const { x, y, radius } = hand.hole;
+  const lift = new Float32Array(width * height);
+  for (let row = 0; row < height; row++)
+    for (let column = 0; column < width; column++) {
+      const distance = Math.hypot((column + 0.5) / scale - x, (row + 0.5) / scale - y) / radius;
+      lift[row * width + column] =
+        amount * progress(distance, 0.8, 1) * (1 - progress(distance, 1.6, 2.2));
+    }
+  return lift;
+}
+
+/** A wall channel filmed against white, on a page channel (0 to 1) lifted toward white by `lift`. */
+export const tintChannel = (value: number, page: number, lift: number): number =>
+  value * (page + (1 - page) * lift);
+
 /** A wall colour, filmed against white, as it shows on this page: multiplied by the page's colour. */
 function onPaper(layout: GraveLayout, red: number, green: number, blue: number): string {
   return [red, green, blue]
@@ -582,6 +627,13 @@ export class GraveEffect {
   private readonly footage = new Map<number, Footage>();
   /** Where a packed frame's hand is laid over its tinted wall; reused for every frame. */
   private layers: OffscreenCanvas | null = null;
+  /** The current grab's rim lift at the size its frames decode to (see rimLift). */
+  private lift: {
+    layout: GraveLayout;
+    width: number;
+    height: number;
+    value: Float32Array | null;
+  } | null = null;
   /** The paper copy cut into facets, once it first bends, and the flat sheet's size. */
   private facets: HTMLDivElement[] = [];
   private sheet = { width: 0, height: 0 };
@@ -703,6 +755,7 @@ export class GraveEffect {
     this.stop();
     this.releaseFrames();
     this.layout = null;
+    this.lift = null;
     this.state = null;
     this.painted = null;
     this.held = false;
@@ -737,11 +790,26 @@ export class GraveEffect {
     if (this.layout) this.footage.get(this.layout.index)?.release();
   }
 
+  /** The current grab's rim lift, worked out once per grab and frame size. */
+  private rimLift(width: number, height: number): Float32Array | null {
+    const layout = this.layout;
+    if (!layout) return null;
+    if (this.lift?.layout !== layout || this.lift.width !== width || this.lift.height !== height)
+      this.lift = {
+        layout,
+        width,
+        height,
+        value: rimLift(layout.paper, layout.hand, width, height),
+      };
+    return this.lift.value;
+  }
+
   /**
    * One frame to draw from a packed one: its hand (the left half) over its wall
    * (the right half), the wall multiplied by the page's colour. Over white that
-   * is the footage itself; over a dark page the plaster, rim and shadow are the
-   * page's own dark, while the hand keeps its colour.
+   * is the footage itself; over a dark page the plaster and shadow are the page's
+   * own dark, the torn rim lifted just enough to show (see rimLift), while the hand
+   * keeps its colour.
    */
   private layered(both: ImageBitmap): ImageBitmap {
     try {
@@ -755,14 +823,18 @@ export class GraveEffect {
       if (!context) throw new Error('No 2D context');
       context.clearRect(0, 0, width, height);
       context.drawImage(both, width, 0, width, height, 0, 0, width, height);
-      const [red, green, blue] = (this.layout?.paper ?? [255, 255, 255]).map((c) => c / 255);
+      const [red = 1, green = 1, blue = 1] = (this.layout?.paper ?? [255, 255, 255]).map(
+        (c) => c / 255,
+      );
       if (red !== 1 || green !== 1 || blue !== 1) {
+        const lift = this.rimLift(width, height);
         const wall = context.getImageData(0, 0, width, height);
         const { data } = wall;
         for (let at = 0; at < data.length; at += 4) {
-          data[at] = (data[at] ?? 0) * (red ?? 1);
-          data[at + 1] = (data[at + 1] ?? 0) * (green ?? 1);
-          data[at + 2] = (data[at + 2] ?? 0) * (blue ?? 1);
+          const k = lift?.[at / 4] ?? 0;
+          data[at] = tintChannel(data[at] ?? 0, red, k);
+          data[at + 1] = tintChannel(data[at + 1] ?? 0, green, k);
+          data[at + 2] = tintChannel(data[at + 2] ?? 0, blue, k);
         }
         context.putImageData(wall, 0, 0);
       }
