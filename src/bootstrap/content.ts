@@ -38,6 +38,8 @@ function activate(): () => void {
   let generation = 0;
   let pageUrl = location.href;
   let phase: Phase = 'idle';
+  /** A whole-page grab waiting on the reader: in flight, though nothing is armed yet. */
+  let reading = false;
   let features: Features = {
     images: false,
     youtube: false,
@@ -283,7 +285,8 @@ function activate(): () => void {
   };
 
   const archive = async (): Promise<void> => {
-    if (!lastUndo || disposed || ['aiming', 'arming', 'armed', 'saving'].includes(phase)) return;
+    if (!lastUndo || disposed || reading || ['aiming', 'arming', 'armed', 'saving'].includes(phase))
+      return;
     const captureId = lastUndo.captureId;
     const epoch = ++generation;
     cancellationRequested.add(captureId);
@@ -457,7 +460,7 @@ function activate(): () => void {
       await confirm();
       return false;
     }
-    if (phase === 'saving' || phase === 'arming') return false;
+    if (reading || phase === 'saving' || phase === 'arming') return false;
     clearArmTimers();
     circle = null;
     trail = [];
@@ -492,7 +495,16 @@ function activate(): () => void {
     const refuse = (): void =>
       showError('This page cannot be grabbed. Only public http(s) pages are captured.');
     if (!extractPage(document)) return refuse();
-    const article = await readArticle();
+    // Escape, a settings change or the hand going away while the reader loads drops this grab.
+    const epoch = generation;
+    reading = true;
+    let article: Article | null;
+    try {
+      article = await readArticle();
+    } finally {
+      reading = false;
+    }
+    if (disposed || epoch !== generation) return;
     // Taken after the wait, with the reader's read: a page that moved on
     // meanwhile is the one both describe, and the one its link points to.
     const page = extractPage(document);
@@ -541,7 +553,7 @@ function activate(): () => void {
     const selected = whole ? null : extractSelection(document);
     if (!whole && !selected)
       return { ok: false, error: 'Select some text on the page first, or grab the whole page.' };
-    if (phase === 'saving' || phase === 'arming')
+    if (reading || phase === 'saving' || phase === 'arming')
       return { ok: false, error: 'The hand is still holding the last grab.' };
     failure = null;
     // An armed lasso target is taken as it stands.
@@ -630,7 +642,7 @@ function activate(): () => void {
 
   const beginCircle = (): void => {
     if (phase === 'arming' || phase === 'armed') return;
-    consumedHold = phase === 'saving';
+    consumedHold = reading || phase === 'saving';
     tracker = new GestureTracker(point);
     if (consumedHold) return;
     circle = new CircleGestureTracker();
@@ -944,7 +956,10 @@ function activate(): () => void {
         return;
       }
       if (!event.isTrusted || (view.contains(event) && event.key !== 'Escape')) return;
-      if (event.key === 'Escape' && ['aiming', 'arming', 'armed', 'saving'].includes(phase)) {
+      if (
+        event.key === 'Escape' &&
+        (reading || ['aiming', 'arming', 'armed', 'saving'].includes(phase))
+      ) {
         event.preventDefault();
         void release();
         return;
