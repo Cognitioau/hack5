@@ -1110,17 +1110,17 @@ export function wordsToTake(total: number, precise: boolean): number {
 
 /**
  * Whether a loop holds the start of a line, given its first word: across the
- * line's middle the loop reaches back into that word, or two lines' height
- * into a short one, as an oval cutting a column's corners still does.
+ * word's top, middle and bottom the loop reaches back into it, or two lines'
+ * height into a short one, as an oval cutting a column's corners still does
+ * and one whose tip only crosses the line does not.
  */
 export function holdsLineStart(outline: readonly ViewportPoint[], first: WordBox): boolean {
   const height = first.bottom - first.top;
-  const row = outlineRow(outline, first.top + height / 2);
-  return (
-    row !== null &&
-    row[0] <= first.left + Math.max(first.right - first.left, height * 2) &&
-    row[1] >= first.left
-  );
+  const reach = first.left + Math.max(first.right - first.left, height * 2);
+  return [first.top, first.top + height / 2, first.bottom].every((y) => {
+    const row = outlineRow(outline, y);
+    return row !== null && row[0] <= reach && row[1] >= first.left;
+  });
 }
 
 /**
@@ -1237,8 +1237,10 @@ function* insidePoints(
  * For a sentence, a word is held only clear of the rim by half its height, so
  * a rim passing over a line takes none of that line. A loop only a few lines
  * of a block's text tall is drawn round a sentence: beyond the one at its
- * centre it takes only sentences it holds whole, as a small circle's rim
- * crosses the lines above and below its sentence.
+ * centre it takes only sentences it holds whole, and a block whole by its
+ * lines' starts only when it encloses most of its words, as a small circle's
+ * rim crosses the lines, and the starts of short blocks, above and below its
+ * sentence, while a loop round a short list holds most of each item.
  */
 function lassoPassages(
   document: Document,
@@ -1304,6 +1306,9 @@ function lassoPassages(
     let line: DOMRect | null = null;
     /** Whether the loop holds the start of the line being read, and the sentences on such lines. */
     let lineHeld = false;
+    /** For a loop drawn round a sentence, how many of the block's words it encloses, of how many. */
+    let enclosed = 0;
+    let seenWords = 0;
     const lined = new Set<number>();
     /** Whether the loop is drawn round a sentence of this block's text, judged by its first word. */
     let precise: boolean | null = null;
@@ -1340,6 +1345,10 @@ function lassoPassages(
         line = bounds;
         if (lineHeld) lined.add(index);
         precise ??= tall < LASSO_SENTENCE_LINES * bounds.height;
+        if (precise) {
+          seenWords += 1;
+          if (reaches && holdsWord(outline, bounds, true)) enclosed += 1;
+        }
         if (taken.has(index) || !reaches || !holdsWord(outline, bounds, precise)) continue;
         const count = (held[index] ?? 0) + 1;
         held[index] = count;
@@ -1347,7 +1356,8 @@ function lassoPassages(
         if (count >= wordsToTake(total, precise)) taken.add(index);
       }
     }
-    const starts = item && lines > 0 && heldStarts === lines;
+    const starts =
+      item && lines > 0 && heldStarts === lines && (!precise || enclosed * 2 > seenWords);
     // Read line by line, only a sentence on a line whose start the loop holds
     // is taken alongside other blocks.
     const alongside = item

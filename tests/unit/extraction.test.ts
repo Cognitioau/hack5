@@ -1058,9 +1058,12 @@ describe("a lasso's loop", () => {
     expect(holdsLineStart(outline, word(190, 230))).toBe(true);
     expect(holdsLineStart(outline, word(185, 195))).toBe(true);
     expect(holdsLineStart(outline, word(140, 170))).toBe(false);
-    // Near the top the oval cuts the corner: a long first word is still reached, a short one 45 px off is not.
-    expect(holdsLineStart(outline, word(200, 260, 150))).toBe(true);
-    expect(holdsLineStart(outline, word(200, 230, 150))).toBe(false);
+    // Near the top the oval cuts the corner: a long first word is still
+    // reached all down its height, a short one 42 px off at its top is not.
+    expect(holdsLineStart(outline, word(200, 260, 160))).toBe(true);
+    expect(holdsLineStart(outline, word(200, 230, 160))).toBe(false);
+    // The tip of the oval crosses a line's middle, not its first word's top.
+    expect(holdsLineStart(outline, word(280, 320, 145))).toBe(false);
     expect(holdsLineStart(outline, word(290, 330, 270))).toBe(false);
   });
 

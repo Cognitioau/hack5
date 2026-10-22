@@ -34,7 +34,9 @@ const boxes = Array.from(
 // Set in monospace, so its lines break in the same places under any platform's fonts.
 const columnHtml = `<!doctype html><meta charset="utf-8"><title>Helper notes</title>
   <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px }</style>
-  <section><ol id="steps">${steps.map((step) => `<li>${step}</li>`).join('')}</ol></section>
+  <section><h2 id="title">What to do if it won't stop</h2>
+  <ol id="steps">${steps.map((step) => `<li>${step}</li>`).join('')}</ol>
+  <p id="next">${dense.slice(0, 6).join(' ')}</p></section>
   <section><ul id="ways"><li>Menu Bar Button</li><li>Keyboard Shortcut</li><li>Hot Corner</li></ul></section>
   <section><ul id="pair" style="padding-left: 300px; margin-bottom: 0"><li>Menu Bar Button</li><li>Hot Corner</li></ul>
   <p id="below" style="margin-top: 0">A paragraph sits right below them. Go now. Then the rest of it carries on past the list.</p></section>
@@ -246,9 +248,16 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
     });
     expect((await saved(fixture, page, 1))?.candidate.text).toBe(steps.join('\n\n'));
 
+    // Snug round the heading and the steps, the oval bulging across the
+    // paragraph right below them: the heading and the steps, nothing of it.
+    await loopRound(page, await textBox(page, '#title, #steps li'));
+    expect((await saved(fixture, page, 2))?.candidate.text).toBe(
+      ["What to do if it won't stop", ...steps].join('\n\n'),
+    );
+
     // Round a short list: each item, linked back from the first to the last.
     await loopRound(page, await textBox(page, '#ways li'));
-    expect((await saved(fixture, page, 2))?.candidate).toMatchObject({
+    expect((await saved(fixture, page, 3))?.candidate).toMatchObject({
       text: 'Menu Bar Button\n\nKeyboard Shortcut\n\nHot Corner',
       passageUrl: `${url}#:~:text=Menu%20Bar%20Button,Hot%20Corner`,
     });
@@ -268,7 +277,7 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
     expect(under.left).toBeGreaterThan(centre.x - 100);
     expect(under.right).toBeLessThan(centre.x + 100);
     await drawCircle(page, centre, 'Shift', 1, { x: 120, y: under.bottom + 8 - centre.y });
-    expect((await saved(fixture, page, 3))?.candidate.text).toBe('Menu Bar Button\n\nHot Corner');
+    expect((await saved(fixture, page, 4))?.candidate.text).toBe('Menu Bar Button\n\nHot Corner');
 
     // Three lines tall, centred on the first word of a sentence that starts
     // mid-line: that sentence, though the loop holds the end of the one before.
@@ -289,7 +298,7 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
       throw new Error('No sentence starts mid-line');
     }, boxes);
     await drawCircle(page, aim, 'Shift', 1, { x: 130, y: 46 });
-    expect((await saved(fixture, page, 4))?.candidate.text).toBe(boxes[aim.index]);
+    expect((await saved(fixture, page, 5))?.candidate.text).toBe(boxes[aim.index]);
 
     // A small circle on a link takes the link.
     const link = await textBox(page, '#link a');
@@ -298,7 +307,7 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
       { x: (link.left + link.right) / 2, y: (link.top + link.bottom) / 2 },
       'Shift',
     );
-    expect((await saved(fixture, page, 5))?.candidate).toMatchObject({
+    expect((await saved(fixture, page, 6))?.candidate).toMatchObject({
       kind: 'link',
       url: `${vault.origin}/guide`,
       text: 'setup guide for the helper',
