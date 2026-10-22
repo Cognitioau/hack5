@@ -612,16 +612,25 @@ test('in the core build, a lasso centred on a picture reads the text round it', 
       route.fulfill({
         contentType: 'text/html',
         body: `<!doctype html><meta charset="utf-8"><title>A fern</title>
-          <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px }</style>
+          <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px } p { text-align: center }</style>
           <p id="above">The fern grows in shade and needs water every week.</p>
-          <p style="text-align: center"><img id="fern" src="/fern.png" width="120" height="90" alt="A fern"></p>
+          <p><img id="fern" src="/fern.png" width="120" height="90" alt="A fern"></p>
           <p id="below">Its fronds unroll in spring and turn brown by winter.</p>`,
       }),
     );
     const page = await fixture.context.newPage();
     await page.goto(url);
     await wake(fixture, page);
-    await loopRound(page, await textBox(page, '#above, #fern, #below'));
+    const round = await textBox(page, '#above, #fern, #below');
+    // The loop's centre is on the picture.
+    const picture = await page.evaluate(() => {
+      const box = document.querySelector('#fern')?.getBoundingClientRect();
+      return box ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null;
+    });
+    const middle = { x: (round.left + round.right) / 2, y: (round.top + round.bottom) / 2 };
+    expect(picture && middle.x > picture.left + 10 && middle.x < picture.right - 10).toBe(true);
+    expect(picture && middle.y > picture.top + 10 && middle.y < picture.bottom - 10).toBe(true);
+    await loopRound(page, round);
     expect((await saved(fixture, page, 1))?.candidate).toMatchObject({
       kind: 'text',
       text: 'The fern grows in shade and needs water every week.\n\nIts fronds unroll in spring and turn brown by winter.',
