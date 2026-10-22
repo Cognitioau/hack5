@@ -79,7 +79,7 @@ const textHtml = `<!doctype html><meta charset="utf-8"><title>Kit notes</title>
   <section><p id="detail">${detail.join(' ')}</p>
   <p id="tail">Next paragraph starts here with a short line. And then it carries on for a while longer so it wraps across the page and past.</p></section>
   <section><p id="first">${points(1).join(' ')}</p><p id="second">${points(2).join(' ')}</p></section>
-  <section><nav id="crumbs"><a href="/">Home page of the shop</a> › <a href="/cameras">Cameras and lenses</a></nav>
+  <section><nav id="crumbs"><ul><li><a href="/">Home page of the shop</a></li><li><a href="/cameras">Cameras and lenses</a></li></ul></nav>
   <ul id="todo"><li>Ship the kit by Friday. <details><summary>Why</summary>The reason stays folded away.</details></li>
   <li>Email the buyer <span class="sr-only">(opens in a new tab)</span>the tracking number.</li></ul></section>
   <section><ul id="cards"><li><div>Canon EOS R8</div><div>Full-frame body with a fast autofocus system.</div><div>$1,499</div></li>
