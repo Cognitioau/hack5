@@ -195,7 +195,12 @@ function collectText(
   const boundary = (): void => {
     if (text && !text.endsWith('\n')) text += '\n';
   };
-  const visit = (node: Node): void => {
+  /**
+   * `beside` when the parent lays its children out side by side, as a flex
+   * row or a grid does; `atomic` inside an inline box such as an
+   * `inline-flex` link or an `inline-block` formula.
+   */
+  const visit = (node: Node, beside = false, atomic = false): void => {
     if (invalid) return;
     // Only what is collected counts, so a passage in a huge container still reads.
     if (within && !within.intersectsNode(node)) return;
@@ -254,13 +259,31 @@ function collectText(
       return;
     }
     const nestedBlock = element !== target && element.matches(BLOCK_SELECTOR);
-    // Rows laid out as blocks, as `div`s in a list item are, read as lines of their own.
-    const laidOut = element !== target && !nestedBlock && BLOCK_DISPLAY.test(style?.display ?? '');
+    const display = style?.display ?? '';
+    // Rows laid out as blocks, as `div`s in a list item are, read as lines of
+    // their own. Chrome also reports a float, a positioned box, a flex row's
+    // or a grid's items and a block inside an inline box as blocks, but each
+    // sits within its line, so it reads within it.
+    const laidOut =
+      element !== target &&
+      !nestedBlock &&
+      !beside &&
+      !atomic &&
+      BLOCK_DISPLAY.test(display) &&
+      !/^(?:left|right|inline-start|inline-end)$/u.test(style?.getPropertyValue('float') ?? '') &&
+      !/^(?:absolute|fixed)$/u.test(style?.position ?? '');
     if (element.tagName === 'BR' || nestedBlock || laidOut) boundary();
     // The normal path captures a sentence in one semantic block. Only explicit
     // selection is allowed to collect multiple blocks.
     if (nestedBlock && !within) return;
-    for (const child of element.childNodes) visit(child);
+    const sideBySide =
+      display === 'contents'
+        ? beside
+        : /^(?:inline-)?grid$/u.test(display) ||
+          (/^(?:inline-)?flex$/u.test(display) &&
+            !(style?.flexDirection ?? '').startsWith('column'));
+    const inline = atomic || (element !== target && display.startsWith('inline-'));
+    for (const child of element.childNodes) visit(child, sideBySide, inline);
     if (nestedBlock || laidOut) boundary();
   };
   visit(target);
@@ -1591,11 +1614,42 @@ function passageBoxes(
   return boxes;
 }
 
-/** The text of a passage's first or last line break-free run, as a text fragment matches within one block. */
+/**
+ * Whether the line break at `index` is one read between blocks, rather than
+ * one in the page's own text, as a `pre` keeps.
+ */
+function betweenBlocks(map: TextMap, index: number): boolean {
+  let low = 0;
+  let high = map.pieces.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if ((map.pieces[middle]?.start ?? 0) <= index) low = middle + 1;
+    else high = middle;
+  }
+  const piece = map.pieces[low - 1];
+  return !piece || index >= piece.end;
+}
+
+/**
+ * A passage's first or last run between the line breaks read between blocks,
+ * as a text fragment matches each of its ends within one block.
+ */
 function passageEnd(map: TextMap, span: TextSpan, last: boolean): TextSpan {
-  const inside = map.text.slice(span.start, span.end);
-  const from = last ? span.start + inside.lastIndexOf('\n') + 1 : span.start;
-  const to = last || !inside.includes('\n') ? span.end : span.start + inside.indexOf('\n');
+  let from = span.start;
+  let to = span.end;
+  if (last) {
+    for (let index = span.end - 1; index >= span.start; index -= 1)
+      if (map.text[index] === '\n' && betweenBlocks(map, index)) {
+        from = index + 1;
+        break;
+      }
+  } else {
+    for (let index = span.start; index < span.end; index += 1)
+      if (map.text[index] === '\n' && betweenBlocks(map, index)) {
+        to = index;
+        break;
+      }
+  }
   return boundedSpan(map.text, from, to, Number.POSITIVE_INFINITY);
 }
 

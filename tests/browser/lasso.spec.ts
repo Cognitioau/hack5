@@ -104,6 +104,24 @@ const textHtml = `<!doctype html><meta charset="utf-8"><title>Kit notes</title>
   ).join('')}</table></section>
   <section><pre id="code" style="font: 12px/14px monospace">${code}</pre></section>`;
 
+// Boxes Chrome reports as blocks that sit within a line, and rows stacked in a flex column.
+const inlineHtml = `<!doctype html><meta charset="utf-8"><title>Kit pages</title>
+  <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px }</style>
+  <section><p id="link">See the <a href="/ref" style="display: inline-flex; align-items: center; gap: 2px"><span>API reference</span><svg width="10" height="10"></svg></a> for details on every option. The next sentence stays apart.</p></section>
+  <section><p id="cap"><span style="float: left; font-size: 48px; line-height: 48px; margin-right: 4px">T</span>he quick brown fox jumps over the lazy dog near the river. Second sentence follows here.</p></section>
+  <section><p id="row" style="display: flex; flex-wrap: wrap; column-gap: 10px">Ship the order with <strong>tracked postage</strong> before noon today. Then email the buyer.</p></section>
+  <section><p id="formula">The value of <span style="display: inline-block"><span style="display: block">x squared</span></span> grows quickly as the input rises. Another line.</p></section>
+  <section><ul><li id="stacked" style="display: flex; flex-direction: column"><div>Blue kettle</div><div>Boils water in two minutes flat.</div><div>$40</div></li></ul></section>
+  <section><p id="badge">The kit ships <span style="position: relative"><span style="position: absolute; left: 0; top: -18px; font-size: 10px">new</span></span> today with a case. Another sentence.</p></section>
+  <section><pre id="functions">${[
+    'function first(kit) {',
+    '  return kit.ready;',
+    '}',
+    'function second(kit) {',
+    '  return kit.ship();',
+    '}',
+  ].join('\n')}</pre></section>`;
+
 // Sections sit far apart, so a loop drawn generously round one stays clear of the others.
 const stepsHtml = `<!doctype html><meta charset="utf-8"><title>Stop a stuck helper</title>
   <style>body { font: 16px/24px sans-serif; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px } h2 { margin-bottom: 48px }</style>
@@ -595,6 +613,78 @@ test('a lasso lights every line it takes and takes what it goes round across blo
         1,
       );
     for (let line = 66; line <= 93; line++) expect(taken).toContain(`L${line} `);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+test('a grab keeps a sentence whole round boxes Chrome only calls blocks, and reads rows stacked in a column apart', async () => {
+  test.setTimeout(120_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const url = `${vault.origin}/inline`;
+    await fixture.context.route(url, (route) =>
+      route.fulfill({ contentType: 'text/html', body: inlineHtml }),
+    );
+    const page = await fixture.context.newPage();
+    await page.goto(url);
+    await wake(fixture, page);
+    const grabs: [string, string, string][] = [
+      // A link laid out as a flex box, its words in a box of their own.
+      ['#link', 'details', 'See the API reference for details on every option.'],
+      // A floated drop cap.
+      ['#cap', 'quick', 'The quick brown fox jumps over the lazy dog near the river.'],
+      // A paragraph laid out as a flex row.
+      ['#row', 'noon', 'Ship the order with tracked postage before noon today.'],
+      // A block inside an inline box, as typeset formulas are built.
+      ['#formula', 'grows', 'The value of x squared grows quickly as the input rises.'],
+      // Rows stacked in a flex column: one row, not the card run together.
+      ['#stacked', 'Boils', 'Boils water in two minutes flat.'],
+      // A badge placed over the line.
+      ['#badge', 'case', 'The kit ships new today with a case.'],
+    ];
+    for (const [index, [selector, word, sentence]] of grabs.entries()) {
+      await textBox(page, selector);
+      const at = await page.evaluate(
+        ({ selector, word }) => {
+          const walker = document.createTreeWalker(
+            document.querySelector(selector) as Node,
+            NodeFilter.SHOW_TEXT,
+          );
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const start = (node as Text).data.indexOf(word);
+            if (start < 0) continue;
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, start + word.length);
+            const box = range.getBoundingClientRect();
+            return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+          }
+          throw new Error(`No ${word} in ${selector}`);
+        },
+        { selector, word },
+      );
+      await page.mouse.move(at.x, at.y);
+      await page.keyboard.press('Alt+Shift+Z');
+      expect((await saved(fixture, page, index + 1))?.candidate.text, selector).toBe(sentence);
+    }
+
+    // Round code whose lines end in a lone brace, with room to spare: linked
+    // back to its last line's words, not to the first brace after its start.
+    const functions = await textBox(page, '#functions');
+    await loopRound(page, {
+      left: functions.left - 40,
+      top: functions.top - 30,
+      right: functions.right + 40,
+      bottom: functions.bottom + 30,
+    });
+    const code = await saved(fixture, page, grabs.length + 1);
+    expect(decodeURIComponent(code?.candidate.passageUrl?.split(':~:text=')[1] ?? '')).toBe(
+      'function first(kit) { return,{ return kit.ship(); }',
+    );
   } finally {
     await fixture.close();
     await vault.close();
