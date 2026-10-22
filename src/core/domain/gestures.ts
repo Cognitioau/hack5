@@ -131,6 +131,29 @@ export class GestureTracker {
  * of text, while a swing of the arm across the whole screen is no loop.
  */
 const MAX_LOOP_SPAN = 1_000;
+/** A gap this long between a pointer's moves, in milliseconds, is the page being busy. */
+const STALL = 40;
+
+/**
+ * The moves Chrome merged into a pointer event, to trace before its own point,
+ * when the time since the last point traced is a stall: while a page is busy,
+ * as when a loop's highlight is being read, Chrome merges the moves made
+ * meanwhile into one event, and without them a loop drawn then jumps. Only
+ * moves between the last point and the event's own count, oldest first; an
+ * event after no stall adds none.
+ */
+export function stalledMoves(
+  merged: readonly GesturePoint[],
+  after: number,
+  at: number,
+): GesturePoint[] {
+  if (at - after < STALL) return [];
+  return merged
+    .filter(
+      (move) => [move.x, move.y, move.at].every(Number.isFinite) && move.at > after && move.at < at,
+    )
+    .sort((a, b) => a.at - b.at);
+}
 
 interface CircleBounds {
   x: number;
@@ -259,7 +282,7 @@ export class CircleGestureTracker {
     return 'none';
   }
 
-  /** The loop as traced so far, thinned evenly once it is long. */
+  /** The loop as traced so far, thinned by halves once it is long, its oldest stretches sparsest. */
   getLoop(): readonly GesturePoint[] {
     return [...this.points];
   }

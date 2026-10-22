@@ -43,6 +43,54 @@ const columnHtml = `<!doctype html><meta charset="utf-8"><title>Helper notes</ti
   <section><p id="boxes">${boxes.join(' ')}</p></section>
   <section><p id="link">Read the <a href="/guide">setup guide for the helper</a> before you begin, as it lists every shortcut.</p></section>`;
 
+// Notes and links in every sentence, as an encyclopaedia sets them.
+const facts = Array.from(
+  { length: 18 },
+  (_, index) =>
+    `Fact ${index + 1} about the camera kit is in the notes[${index + 100}] for the kit.`,
+);
+const cited = facts
+  .map((fact, index) =>
+    fact
+      .replace('camera kit', '<a href="/kit">camera kit</a>')
+      .replace(`[${index + 100}]`, `<sup><a href="#n${index}">[${index + 100}]</a></sup>`),
+  )
+  .join(' ');
+const detail = Array.from(
+  { length: 14 },
+  (_, index) =>
+    `Sentence ${index + 1} explains a detail about the camera kit and how the parts fit together.`,
+);
+const points = (part: number) =>
+  Array.from(
+    { length: 8 },
+    (_, index) => `Point ${part}.${index + 1} covers how the camera kit is packed and sent.`,
+  );
+// Highlighted code: many elements to a line, too many to read the block whole.
+const code = Array.from(
+  { length: 160 },
+  (_, line) => `<span>L${line}</span>${' <i>x</i>'.repeat(30)}`,
+).join('\n');
+const textHtml = `<!doctype html><meta charset="utf-8"><title>Kit notes</title>
+  <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0 }
+  td { padding: 1px 4px }</style>
+  <section><p id="cited">${cited}</p></section>
+  <section><p id="detail">${detail.join(' ')}</p>
+  <p id="tail">Next paragraph starts here with a short line. And then it carries on for a while longer so it wraps across the page and past.</p></section>
+  <section><p id="first">${points(1).join(' ')}</p><p id="second">${points(2).join(' ')}</p></section>
+  <section><nav id="crumbs"><a href="/">Home page of the shop</a> › <a href="/cameras">Cameras and lenses</a></nav>
+  <ul id="todo"><li>Ship the kit by Friday. <details><summary>Why</summary>The reason stays folded away.</details></li>
+  <li>Email the buyer <span class="sr-only">(opens in a new tab)</span>the tracking number.</li></ul></section>
+  <section><ul id="cards"><li><div>Canon EOS R8</div><div>Full-frame body with a fast autofocus system.</div><div>$1,499</div></li>
+  <li><div>Nikon Z6 III</div><div>Partly stacked sensor for quick readout.</div><div>$2,499</div></li></ul></section>
+  <section><table id="grid">${Array.from(
+    { length: 12 },
+    (_, row) =>
+      `<tr>${Array.from({ length: 11 }, (_, column) => `<td>c${row * 11 + column + 1}</td>`).join('')}</tr>`,
+  ).join('')}</table></section>
+  <section><pre id="code" style="font: 12px/14px monospace">${code}</pre></section>`;
+
 // Sections sit far apart, so a loop drawn generously round one stays clear of the others.
 const stepsHtml = `<!doctype html><meta charset="utf-8"><title>Stop a stuck helper</title>
   <style>body { font: 16px/24px sans-serif; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px } h2 { margin-bottom: 48px }</style>
@@ -76,7 +124,9 @@ async function textBox(page: Page, selector: string): Promise<Box> {
           if (!node.textContent?.trim()) continue;
           const range = document.createRange();
           range.selectNodeContents(node);
-          boxes.push(range.getBoundingClientRect());
+          // Text a page folds away has no box.
+          const box = range.getBoundingClientRect();
+          if (box.width > 0 && box.height > 0) boxes.push(box);
         }
         return boxes;
       });
@@ -129,6 +179,71 @@ async function aimAt(page: Page, selector: string, sentence: string) {
     },
     { selector, sentence },
   );
+}
+
+/**
+ * The boxes the hand lights while a loop is drawn, read through the browser's
+ * protocol, which reaches into the hand's closed shadow root.
+ */
+async function lit(page: Page): Promise<Box[]> {
+  type Node = {
+    nodeId: number;
+    attributes?: string[];
+    children?: Node[];
+    shadowRoots?: Node[];
+  };
+  const client = await page.context().newCDPSession(page);
+  try {
+    const { root } = (await client.send('DOM.getDocument', { depth: -1, pierce: true })) as {
+      root: Node;
+    };
+    const targets: number[] = [];
+    const walk = (node: Node, inHand: boolean): void => {
+      const attributes = node.attributes ?? [];
+      const named = (name: string) => attributes[attributes.indexOf(name) + 1] ?? '';
+      if (inHand && attributes.includes('class') && named('class').split(' ').includes('target'))
+        targets.push(node.nodeId);
+      const hand = inHand || attributes.includes('data-zombie-hand-ui');
+      for (const child of node.children ?? []) walk(child, hand);
+      for (const shadow of node.shadowRoots ?? []) walk(shadow, hand);
+    };
+    walk(root, false);
+    const boxes: Box[] = [];
+    for (const nodeId of targets) {
+      const result = (await client.send('DOM.getBoxModel', { nodeId }).catch(() => null)) as {
+        model: { border: number[] };
+      } | null;
+      const [left = 0, top = 0, , , right = 0, bottom = 0] = result?.model.border ?? [];
+      if (right > left && bottom > top) boxes.push({ left, top, right, bottom });
+    }
+    return boxes;
+  } finally {
+    await client.detach();
+  }
+}
+
+/** The lines a paragraph's words lie on, one box each, as Chrome lays them out. */
+async function lines(page: Page, selector: string): Promise<Box[]> {
+  return page.evaluate((selector) => {
+    const element = document.querySelector(selector);
+    const walker = document.createTreeWalker(element ?? document, NodeFilter.SHOW_TEXT);
+    const rows: { left: number; top: number; right: number; bottom: number }[] = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const box of range.getClientRects()) {
+        if (box.width <= 0 || !node.textContent?.trim()) continue;
+        const row = rows.find(
+          (other) => Math.abs(other.top + other.bottom - box.top - box.bottom) < box.height,
+        );
+        if (row) {
+          row.left = Math.min(row.left, box.left);
+          row.right = Math.max(row.right, box.right);
+        } else rows.push({ left: box.left, top: box.top, right: box.right, bottom: box.bottom });
+      }
+    }
+    return rows;
+  }, selector);
 }
 
 const seen = new Set<string>();
@@ -311,6 +426,161 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
       kind: 'link',
       url: `${vault.origin}/guide`,
       text: 'setup guide for the helper',
+    });
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+test('a lasso lights every line it takes and takes what it goes round across blocks, never folded, clipped or navigation text', async () => {
+  test.setTimeout(240_000);
+  // Each save is held open a moment, so what the hand lights as it takes a passage can be read.
+  const vault = await startVaultFixture({ writeDelayMs: 1_500 });
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const url = `${vault.origin}/notes`;
+    await fixture.context.route(url, (route) =>
+      route.fulfill({ contentType: 'text/html', body: textHtml }),
+    );
+    const page = await fixture.context.newPage();
+    await page.goto(url);
+    await wake(fixture, page);
+
+    // A paragraph thick with links and notes: as it is taken, every line of
+    // it is lit, the last as well as the first.
+    const paragraph = await textBox(page, '#cited');
+    const rows = await lines(page, '#cited');
+    expect(rows.length).toBeGreaterThan(12);
+    await loopRound(page, paragraph);
+    const boxes = await lit(page);
+    for (const row of rows) {
+      // Lit across its whole width, by one box or several side by side.
+      let reached = row.left;
+      for (const box of boxes
+        .filter((box) => box.top <= row.top + 2 && box.bottom >= row.bottom - 2)
+        .sort((a, b) => a.left - b.left))
+        if (box.left <= reached + 2) reached = Math.max(reached, box.right);
+      expect(reached, `line at ${Math.round(row.top)} is lit to its end`).toBeGreaterThanOrEqual(
+        row.right - 2,
+      );
+    }
+    expect((await saved(fixture, page, 1))?.candidate.text).toBe(facts.join(' '));
+
+    // Over the middle of a paragraph, far from its lines' starts, its rim
+    // across the first line of the next: the sentences it goes round, and
+    // nothing of the next paragraph.
+    const middle = await textBox(page, '#detail');
+    await drawCircle(
+      page,
+      { x: (middle.left + middle.right) / 2, y: middle.bottom - 50 },
+      'Shift',
+      1,
+      { x: 200, y: 115 },
+    );
+    const over = (await saved(fixture, page, 2))?.candidate.text ?? '';
+    expect(detail.join(' ')).toContain(over);
+    expect(over.match(/Sentence \d+ /gu)?.length ?? 0).toBeGreaterThanOrEqual(3);
+
+    // Centred in the gap between two paragraphs, over neither's lines'
+    // starts: sentences of both.
+    const pair = await textBox(page, '#first, #second');
+    const gap = await page.evaluate(() => {
+      const above = document.querySelector('#first')?.getBoundingClientRect();
+      const below = document.querySelector('#second')?.getBoundingClientRect();
+      return above && below ? (above.bottom + below.top) / 2 : 0;
+    });
+    expect(gap).toBeGreaterThan(pair.top);
+    await drawCircle(page, { x: (pair.left + pair.right) / 2, y: gap }, 'Shift', 1, {
+      x: 250,
+      y: 100,
+    });
+    const both = (await saved(fixture, page, 3))?.candidate.text.split('\n\n') ?? [];
+    expect(both).toHaveLength(2);
+    expect(points(1).join(' ')).toContain(both[0] ?? '-');
+    expect(points(2).join(' ')).toContain(both[1] ?? '-');
+    expect(both[0]?.match(/Point 1\.\d/gu)?.length ?? 0).toBeGreaterThanOrEqual(2);
+
+    // Round a trail of links and a list: the items, never the navigation, an
+    // answer folded away in a closed details or words kept for screen readers.
+    await loopRound(page, await textBox(page, '#crumbs, #todo li'));
+    expect((await saved(fixture, page, 4))?.candidate.text).toBe(
+      'Ship the kit by Friday.\n\nEmail the buyer the tracking number.',
+    );
+
+    // Cards set in rows of plain blocks: their words apart, and a link back
+    // that opens the page at them.
+    await loopRound(page, await textBox(page, '#cards li'));
+    const cards = await saved(fixture, page, 5);
+    expect(cards?.candidate).toMatchObject({
+      text: 'Canon EOS R8 Full-frame body with a fast autofocus system. $1,499\n\nNikon Z6 III Partly stacked sensor for quick readout. $2,499',
+      passageUrl: `${url}#:~:text=Canon%20EOS%20R8,%242%2C499`,
+    });
+    const opened = await fixture.context.newPage();
+    await opened.goto(cards?.candidate.passageUrl ?? url);
+    await expect.poll(() => opened.evaluate(() => scrollY), { timeout: 5_000 }).toBeGreaterThan(0);
+    await opened.close();
+
+    // Round more cells than a loop reads: the first it reads, marked cut short.
+    await loopRound(page, await textBox(page, '#grid td'));
+    const grid = await saved(fixture, page, 6);
+    expect(grid?.candidate.truncated).toBe(true);
+    expect(grid?.candidate.text.split('\n\n')).toHaveLength(120);
+
+    // Round forty lines of code too large to read whole: each line once.
+    await textBox(page, '#code');
+    const block = await page.evaluate(() => {
+      const spans = [...document.querySelectorAll('#code span')];
+      const top = spans[60]?.getBoundingClientRect();
+      const bottom = spans[99]?.getBoundingClientRect();
+      const pre = document.querySelector('#code span')?.parentElement?.getBoundingClientRect();
+      if (!top || !bottom || !pre) throw new Error('Code not laid out');
+      return { left: pre.left, top: top.top, right: pre.left + 450, bottom: bottom.bottom };
+    });
+    await drawCircle(
+      page,
+      { x: (block.left + block.right) / 2, y: (block.top + block.bottom) / 2 },
+      'Shift',
+      1,
+      { x: (block.right - block.left) / 2 + 60, y: (block.bottom - block.top) / 2 + 24 },
+    );
+    const taken = (await saved(fixture, page, 7))?.candidate.text ?? '';
+    for (let line = 0; line < 160; line++)
+      expect(taken.split(`L${line} `).length - 1, `line ${line} at most once`).toBeLessThanOrEqual(
+        1,
+      );
+    for (let line = 66; line <= 93; line++) expect(taken).toContain(`L${line} `);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+test('in the core build, a lasso centred on a picture reads the text round it', async () => {
+  test.setTimeout(120_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('core');
+  try {
+    await configureVault(fixture, vault, false);
+    const url = `${vault.origin}/figure`;
+    await fixture.context.route(url, (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><meta charset="utf-8"><title>A fern</title>
+          <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px }</style>
+          <p id="above">The fern grows in shade and needs water every week.</p>
+          <p><img id="fern" src="/fern.png" width="120" height="90" alt="A fern"></p>
+          <p id="below">Its fronds unroll in spring and turn brown by winter.</p>`,
+      }),
+    );
+    const page = await fixture.context.newPage();
+    await page.goto(url);
+    await wake(fixture, page);
+    await loopRound(page, await textBox(page, '#above, #fern, #below'));
+    expect((await saved(fixture, page, 1))?.candidate).toMatchObject({
+      kind: 'text',
+      text: 'The fern grows in shade and needs water every week.\n\nIts fronds unroll in spring and turn brown by winter.',
     });
   } finally {
     await fixture.close();

@@ -5,7 +5,13 @@ import {
   noVaultMessage,
   type PublicCapture,
 } from '../core/contracts/index';
-import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core/domain/gestures';
+import {
+  CircleGestureTracker,
+  type GestureDecision,
+  GestureTracker,
+  type GesturePoint,
+  stalledMoves,
+} from '../core/domain/gestures';
 import type { Article } from '../adapters/browser/article';
 import {
   extractCandidate,
@@ -387,6 +393,7 @@ function activate(): () => void {
     centre: { x: number; y: number },
   ): ExtractedCandidate | null => {
     const extracted = extractEnclosed(document, loop, centre, {
+      images: features.images,
       ...(!__CORE_ONLY__ && features.youtube ? { special: extractYouTubeCandidate } : {}),
     });
     if (extracted?.candidate.kind === 'image' && !features.images) return null;
@@ -735,10 +742,25 @@ function activate(): () => void {
       return;
     }
     if (phase !== 'aiming' || !circle) return;
-    trail.push(point);
+    // After the page was busy, as reading the highlight makes it, the moves
+    // made meanwhile come merged into this one; tracing them keeps the loop.
+    const merged = stalledMoves(
+      (event.getCoalescedEvents?.() ?? []).map((move) => ({
+        x: move.clientX,
+        y: move.clientY,
+        at: move.timeStamp,
+      })),
+      trail.at(-1)?.at ?? point.at,
+      point.at,
+    );
+    let decision: GestureDecision = 'none';
+    for (const move of [...merged, point]) {
+      trail.push(move);
+      decision = circle.add(move);
+      if (decision !== 'none') break;
+    }
     trail = trail.slice(-256);
     view.setTrail(trail);
-    const decision = circle.add(point);
     const center = circle.getCenter();
     // Reading every word in a loop costs more than reading the sentence at a
     // point, and on a page of many thousands of elements far more, so the

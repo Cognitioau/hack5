@@ -4,6 +4,7 @@ import {
   GestureTracker,
   isCircle,
   isShake,
+  stalledMoves,
   type GesturePoint,
 } from '../../src/core/domain/gestures';
 
@@ -241,6 +242,38 @@ describe('modifier-held circle geometry', () => {
     const fresh = new CircleGestureTracker();
     for (const point of orbit().slice(0, 30)) fresh.add(point);
     expect(fresh.getLoop()).toEqual(orbit().slice(0, 30));
+  });
+
+  it('keeps a loop drawn while the page was busy whole, from the moves merged into one event', () => {
+    // A second's loop, sampled every 16 ms, with a 200 ms stall a third of
+    // the way round: Chrome hands the moves made meanwhile to the next event.
+    const loop = Array.from({ length: 64 }, (_, index) => {
+      const angle = (index / 63) * Math.PI * 2;
+      return {
+        x: anchor.x + Math.cos(angle) * 120,
+        y: anchor.y + Math.sin(angle) * 80,
+        at: index * 16,
+      };
+    });
+    const stall = loop.filter((point) => point.at > 300 && point.at < 500);
+    const after = loop.filter((point) => point.at <= 300 || point.at >= 500);
+    expect(trace(after).decisions).not.toContain('confirm');
+    const tracker = new CircleGestureTracker();
+    const decisions: string[] = [];
+    let last = Number.NEGATIVE_INFINITY;
+    for (const point of after) {
+      for (const move of stalledMoves([...stall].reverse(), last, point.at))
+        decisions.push(tracker.add(move));
+      decisions.push(tracker.add(point));
+      last = point.at;
+    }
+    expect(decisions).toContain('confirm');
+    // An event after no stall adds nothing, and only moves since the last point count.
+    expect(stalledMoves(stall, 300, 320)).toEqual([]);
+    expect(stalledMoves(loop, 300, 400).map((move) => move.at)).toEqual([
+      304, 320, 336, 352, 368, 384,
+    ]);
+    expect(stalledMoves([{ x: Number.NaN, y: 0, at: 350 }], 300, 400)).toEqual([]);
   });
 
   it('ignores malformed and time-reversed input and bounds dense samples', () => {
