@@ -179,6 +179,30 @@ test('a lasso takes what its loop goes round: steps by their starts, a heading w
     expect((await saved(fixture, page, 4))?.candidate.text).toBe(dense[4]);
     await drawCircle(page, await aimAt(page, '#terse', terse[16] ?? ''), 'Shift');
     expect((await saved(fixture, page, 5))?.candidate.text).toBe(terse[16]);
+
+    // Words already highlighted under the loop's centre are taken as they
+    // are, however much more the loop goes round.
+    const highlighted = 'talks about camera bundles';
+    await textBox(page, '#dense');
+    const middle = await page.evaluate((words) => {
+      const text = document.querySelector('#dense')?.firstChild as Text;
+      const start = text.data.indexOf(words, text.data.indexOf('Sentence 7 '));
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, start + words.length);
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
+      const [line] = Array.from(range.getClientRects()).sort((a, b) => b.width - a.width);
+      if (!line) throw new Error('Selection not laid out');
+      return { x: line.left + line.width / 2, y: line.top + line.height / 2 };
+    }, highlighted);
+    await loopRound(page, {
+      left: middle.x - 160,
+      top: middle.y - 50,
+      right: middle.x + 160,
+      bottom: middle.y + 50,
+    });
+    expect((await saved(fixture, page, 6))?.candidate.text).toBe(highlighted);
   } finally {
     await fixture.close();
     await vault.close();
