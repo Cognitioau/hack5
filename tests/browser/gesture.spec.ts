@@ -105,22 +105,29 @@ test('the lasso takes a sentence from text set in plain divs and spans, as searc
           <div id="results" style="min-height: 1400px"><div class="result">
             <a href="https://shop.example/bundles"><h3>Camera bundles - Example shop</h3></a>
             <div class="row"><span id="address">https://shop.example › bundles</span></div>
-            <div id="snippet"><span>Explore the camera bundles at the first local store. Free shipping on <em>most</em> orders.</span></div>
+            <div id="snippet" style="width: 300px"><span>Explore the camera bundles at the first local store. Free shipping on <em>most</em> orders.</span></div>
           </div><div>More results from shop.example</div></div>`,
       }),
     );
     const page = await fixture.context.newPage();
     await page.goto(results);
     await wake(fixture, page);
-    const words = await page.locator('#snippet span').boundingBox();
     const address = await page.locator('#address').boundingBox();
-    if (!words || !address) throw new Error('Missing result');
-    // Far below the results and well right of a line's end, Chrome still puts
-    // its caret in the nearest words, lines with no full stop to end them, yet
-    // the hand slips: nothing is recorded over the seconds a grab would take.
+    const most = await page.locator('#snippet em').boundingBox();
+    const [first, second] = await page
+      .locator('#snippet span')
+      .evaluate((node) =>
+        Array.from(node.getClientRects(), ({ x, top, bottom }) => ({ x, top, bottom })),
+      );
+    if (!address || !most || !first || !second) throw new Error('Missing result');
+    // Far below the results, and right of a line's end by 300 px and by 25 px,
+    // Chrome still puts its caret in the nearest words, lines with no full stop
+    // to end them, yet the hand slips: nothing is recorded over the seconds a
+    // grab would take.
     for (const away of [
       { x: 300, y: 700 },
       { x: address.x + address.width + 300, y: address.y + address.height / 2 },
+      { x: address.x + address.width + 25, y: address.y + address.height / 2 },
     ]) {
       await drawCircle(page, away, 'Shift');
       for (let waited = 0; waited < 2_500; waited += 250) {
@@ -128,15 +135,21 @@ test('the lasso takes a sentence from text set in plain divs and spans, as searc
         await page.waitForTimeout(250);
       }
     }
-    await drawCircle(page, { x: words.x + 60, y: words.y + 12 }, 'Shift');
+    // In the gap between two lines of the snippet, off both lines' words.
+    expect(second.top - first.bottom).toBeGreaterThan(2);
+    await drawCircle(page, { x: first.x + 40, y: (first.bottom + second.top) / 2 }, 'Shift');
     await expect.poll(async () => (await state(fixture))[0]?.persistence).toBe('saved-vault');
+    await page.waitForTimeout(2_500);
+    await drawCircle(page, { x: most.x + most.width / 2, y: most.y + most.height / 2 }, 'Shift');
+    await expect
+      .poll(async () => (await state(fixture)).map((capture) => capture.persistence))
+      .toEqual(['saved-vault', 'saved-vault']);
     const captures = await state(fixture);
-    expect(captures).toHaveLength(1);
-    expect(captures[0]?.candidate).toMatchObject({
-      kind: 'text',
-      url: results,
-      text: 'Explore the camera bundles at the first local store.',
-    });
+    expect(captures.map((capture) => capture.candidate.text).sort()).toEqual([
+      'Explore the camera bundles at the first local store.',
+      'Free shipping on most orders.',
+    ]);
+    expect(captures[0]?.candidate).toMatchObject({ kind: 'text', url: results });
   } finally {
     await fixture.close();
     await vault.close();

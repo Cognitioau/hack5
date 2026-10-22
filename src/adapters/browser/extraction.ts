@@ -58,6 +58,12 @@ const MAX_OVERLAYS = 4;
 /** How far beside the lines of text set in plain `div`s the pointer may rest and still take them, in pixels. */
 const MAX_LOOSE_REACH = 16;
 /**
+ * Displays that keep an element in the line around it, in text set in plain
+ * `div`s and `span`s. An `inline-block` or `inline-flex` box, as a chip or a
+ * card is, is laid out on its own there.
+ */
+const LOOSE_INLINE_DISPLAY = /^(?:inline|contents|none|ruby(?:-base|-text)?)$/u;
+/**
  * Elements that draw at the pointer whatever their style: media and frames.
  * Fields are editable, SVG and MathML draw by their namespace, and an image
  * ends the lookup.
@@ -225,9 +231,10 @@ function collectText(
  * blank lines (two line breaks), a nested block or a control, at most a few
  * thousand characters and a few hundred nodes either side, with the elements
  * holding them. Walked outward from the node, so a huge block costs no more
- * than its paragraph. Null when the node is not text inside the block.
+ * than its paragraph. Null when the node is not text inside the block. In
+ * loose text, an inline box of its own also ends the paragraph.
  */
-function paragraphWindow(block: Element, anchor: Node): Set<Node> | null {
+function paragraphWindow(block: Element, anchor: Node, loose = false): Set<Node> | null {
   if (anchor.nodeType !== 3 || !block.contains(anchor)) return null;
   const view = block.ownerDocument.defaultView;
   const known = new Map<Element, boolean>();
@@ -240,7 +247,7 @@ function paragraphWindow(block: Element, anchor: Node): Set<Node> | null {
         element.matches(BLOCK_SELECTOR) ||
         isEditable(element) ||
         element.matches(CONTROL_SELECTOR) ||
-        !/^(?:inline|contents|none|ruby)/u.test(
+        !(loose ? LOOSE_INLINE_DISPLAY : /^(?:inline|contents|none|ruby)/u).test(
           view?.getComputedStyle(element).display ?? 'inline',
         );
       known.set(element, stop);
@@ -342,34 +349,34 @@ function blockText(document: Document, block: Element, anchor: Node | null): Tex
  * out as a block, never the block whole, which may hold many such lines.
  */
 function looseText(document: Document, block: Element, anchor: Node | null): TextMap | null {
-  const window = anchor && paragraphWindow(block, anchor);
+  const window = anchor && paragraphWindow(block, anchor, true);
   return window ? collectText(document, block, undefined, window) : null;
 }
 
-/** The nearest element holding the target that is laid out as a block, short of the page itself. */
+/** The nearest element holding the target that is laid out on its own, short of the page itself. */
 function laidOutBlock(document: Document, target: Element): Element | null {
   for (
     let at: Element | null = target;
     at && at !== document.body && at !== document.documentElement;
     at = at.parentElement
   )
-    if (
-      !/^(?:inline|contents|none|ruby)/u.test(
-        document.defaultView?.getComputedStyle(at).display ?? 'inline',
-      )
-    )
+    if (!LOOSE_INLINE_DISPLAY.test(document.defaultView?.getComputedStyle(at).display ?? 'inline'))
       return at;
   return null;
 }
 
-/** Whether the pointer rests on or just beside one of a passage's lines. */
-function beside(passage: ExtractedCandidate, point: ViewportPoint): boolean {
-  return (passage.rectangles ?? []).some(
-    (line) =>
-      point.x >= line.x - MAX_LOOSE_REACH &&
-      point.x <= line.x + line.width + MAX_LOOSE_REACH &&
-      point.y >= line.y - MAX_LOOSE_REACH &&
-      point.y <= line.y + line.height + MAX_LOOSE_REACH,
+/** Whether the pointer rests on or just beside any of a range's line boxes. */
+function beside(range: Range, point: ViewportPoint): boolean {
+  const boxes =
+    typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
+  return boxes.some(
+    (box) =>
+      box.width > 0 &&
+      box.height > 0 &&
+      point.x >= box.left - MAX_LOOSE_REACH &&
+      point.x <= box.right + MAX_LOOSE_REACH &&
+      point.y >= box.top - MAX_LOOSE_REACH &&
+      point.y <= box.bottom + MAX_LOOSE_REACH,
   );
 }
 
@@ -831,6 +838,10 @@ function textCandidate(
     : boundedSpan(map.text, 0, map.text.length, 1_600);
   const evidence = mappedRange(document, map, span);
   if (!evidence || span.text.length < 3) return null;
+  // Over blank space Chrome puts its caret in the nearest words, however far
+  // off, so loose text is taken only beside them; checked before the details
+  // are read, as this runs on every move of an aimed lasso.
+  if (loose && !beside(evidence, point)) return null;
   return {
     candidate: {
       kind: 'text',
@@ -966,8 +977,7 @@ export function extractCandidate(
   // Text set in plain `div`s and `span`s, as search results are, is read only
   // when the caret lies in it and the pointer on or beside its lines.
   const loose = laidOutBlock(document, target);
-  const passage = loose && textCandidate(document, point, loose, pageUrl, true);
-  return passage && beside(passage, point) ? passage : null;
+  return loose ? textCandidate(document, point, loose, pageUrl, true) : null;
 }
 
 /** The current explicit page selection, wherever the pointer is. */
