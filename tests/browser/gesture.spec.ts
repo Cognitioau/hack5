@@ -100,7 +100,7 @@ test('the lasso takes a sentence from text set in plain divs and spans, as searc
     await fixture.context.route(results, (route) =>
       route.fulfill({
         contentType: 'text/html',
-        body: `<!doctype html><title>camera bundles - Search</title>
+        body: `<!doctype html><meta charset="utf-8"><title>camera bundles - Search</title>
           <style>body { font: 16px/24px sans-serif; margin: 40px } .row { display: flex; gap: 8px }</style>
           <div id="results" style="min-height: 1400px"><div class="result">
             <a href="https://shop.example/bundles"><h3>Camera bundles - Example shop</h3></a>
