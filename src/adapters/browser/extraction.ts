@@ -251,13 +251,15 @@ function collectText(
       style?.visibility === 'hidden' ||
       style?.visibility === 'collapse' ||
       style?.opacity === '0' ||
-      (style && clippedAway(style)) ||
       // A closed `details` shows only its summary, which is a control.
       (element.tagName === 'DETAILS' && !element.hasAttribute('open'))
     ) {
       boundary();
       return;
     }
+    // Words clipped away for screen readers draw nothing, not even a line
+    // break, so the sentence round them reads on without them.
+    if (style && clippedAway(style)) return;
     const nestedBlock = element !== target && element.matches(BLOCK_SELECTOR);
     const display = style?.display ?? '';
     // Rows laid out as blocks, as `div`s in a list item are, read as lines of
@@ -1615,42 +1617,21 @@ function passageBoxes(
 }
 
 /**
- * Whether the line break at `index` is one read between blocks, rather than
- * one in the page's own text, as a `pre` keeps.
- */
-function betweenBlocks(map: TextMap, index: number): boolean {
-  let low = 0;
-  let high = map.pieces.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    if ((map.pieces[middle]?.start ?? 0) <= index) low = middle + 1;
-    else high = middle;
-  }
-  const piece = map.pieces[low - 1];
-  return !piece || index >= piece.end;
-}
-
-/**
- * A passage's first or last run between the line breaks read between blocks,
- * as a text fragment matches each of its ends within one block.
+ * A passage's first or last line holding words, as a text fragment matches
+ * each of its ends within one line: of a block, or of code, whose lone
+ * closing brace would match the first brace after the start.
  */
 function passageEnd(map: TextMap, span: TextSpan, last: boolean): TextSpan {
+  const lines: { start: number; end: number }[] = [];
   let from = span.start;
-  let to = span.end;
-  if (last) {
-    for (let index = span.end - 1; index >= span.start; index -= 1)
-      if (map.text[index] === '\n' && betweenBlocks(map, index)) {
-        from = index + 1;
-        break;
-      }
-  } else {
-    for (let index = span.start; index < span.end; index += 1)
-      if (map.text[index] === '\n' && betweenBlocks(map, index)) {
-        to = index;
-        break;
-      }
-  }
-  return boundedSpan(map.text, from, to, Number.POSITIVE_INFINITY);
+  for (let index = span.start; index <= span.end; index += 1)
+    if (index === span.end || map.text[index] === '\n') {
+      lines.push({ start: from, end: index });
+      from = index + 1;
+    }
+  const worded = lines.filter((line) => /[\p{L}\p{N}]/u.test(map.text.slice(line.start, line.end)));
+  const line = (last ? worded.at(-1) : worded[0]) ?? { start: span.start, end: span.end };
+  return boundedSpan(map.text, line.start, line.end, Number.POSITIVE_INFINITY);
 }
 
 /**

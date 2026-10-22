@@ -112,6 +112,7 @@ const inlineHtml = `<!doctype html><meta charset="utf-8"><title>Kit pages</title
   <section><p id="row" style="display: flex; flex-wrap: wrap; column-gap: 10px">Ship the order with <strong>tracked postage</strong> before noon today. Then email the buyer.</p></section>
   <section><p id="formula">The value of <span style="display: inline-block"><span style="display: block">x squared</span></span> grows quickly as the input rises. Another line.</p></section>
   <section><ul><li id="stacked" style="display: flex; flex-direction: column"><div>Blue kettle</div><div>Boils water in two minutes flat.</div><div>$40</div></li></ul></section>
+  <section><p id="aside">Find out <a href="/help">more<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0)"> about benefits</span></a> if you are eligible for help.</p></section>
   <section><p id="badge">The kit ships <span style="position: relative"><span style="position: absolute; left: 0; top: -18px; font-size: 10px">new</span></span> today with a case. Another sentence.</p></section>
   <section><pre id="functions">${[
     'function first(kit) {',
@@ -643,6 +644,8 @@ test('a grab keeps a sentence whole round boxes Chrome only calls blocks, and re
       ['#formula', 'grows', 'The value of x squared grows quickly as the input rises.'],
       // Rows stacked in a flex column: one row, not the card run together.
       ['#stacked', 'Boils', 'Boils water in two minutes flat.'],
+      // Words kept for screen readers, clipped away: the sentence without them.
+      ['#aside', 'eligible', 'Find out more if you are eligible for help.'],
       // A badge placed over the line.
       ['#badge', 'case', 'The kit ships new today with a case.'],
     ];
@@ -673,7 +676,8 @@ test('a grab keeps a sentence whole round boxes Chrome only calls blocks, and re
     }
 
     // Round code whose lines end in a lone brace, with room to spare: linked
-    // back to its last line's words, not to the first brace after its start.
+    // back from its first line to its last with words in it, which Chrome
+    // finds, never to a lone brace.
     const functions = await textBox(page, '#functions');
     await loopRound(page, {
       left: functions.left - 40,
@@ -683,8 +687,21 @@ test('a grab keeps a sentence whole round boxes Chrome only calls blocks, and re
     });
     const code = await saved(fixture, page, grabs.length + 1);
     expect(decodeURIComponent(code?.candidate.passageUrl?.split(':~:text=')[1] ?? '')).toBe(
-      'function first(kit) { return,{ return kit.ship(); }',
+      'function first(kit) {,return kit.ship();',
     );
+    const opened = await fixture.context.newPage();
+    await opened.goto(code?.candidate.passageUrl ?? url);
+    await expect
+      .poll(
+        () =>
+          opened.evaluate(() => {
+            const box = document.querySelector('#functions')?.getBoundingClientRect();
+            return scrollY > 0 && !!box && box.top >= 0 && box.bottom <= innerHeight;
+          }),
+        { timeout: 5_000 },
+      )
+      .toBe(true);
+    await opened.close();
   } finally {
     await fixture.close();
     await vault.close();
