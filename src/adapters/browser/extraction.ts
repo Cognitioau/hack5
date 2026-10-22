@@ -1078,6 +1078,51 @@ function outlineRow(outline: readonly ViewportPoint[], y: number): [number, numb
   return from <= to ? [from, to] : null;
 }
 
+/** A word's box on screen. */
+type WordBox = Pick<DOMRectReadOnly, 'left' | 'top' | 'right' | 'bottom'>;
+
+/**
+ * Whether a loop holds a word, for the sentence it is in. A loop drawn round
+ * a sentence holds it inside its rim; any other loop clear of the rim by half
+ * the word's height, so a rim passing over a line holds none of that line.
+ */
+export function holdsWord(
+  outline: readonly ViewportPoint[],
+  word: WordBox,
+  precise: boolean,
+): boolean {
+  const clear = precise ? 0 : (word.bottom - word.top) / 2;
+  return [
+    { x: word.left - clear, y: word.top - clear },
+    { x: word.right + clear, y: word.top - clear },
+    { x: word.left - clear, y: word.bottom + clear },
+    { x: word.right + clear, y: word.bottom + clear },
+  ].every((corner) => insideOutline(outline, corner));
+}
+
+/**
+ * How many of a sentence's words a loop must hold to take it: every one for
+ * a loop drawn round a sentence, else a quarter of them, two at least.
+ */
+export function wordsToTake(total: number, precise: boolean): number {
+  return precise ? total : Math.min(total, Math.max(2, Math.ceil(total / 4)));
+}
+
+/**
+ * Whether a loop holds the start of a line, given its first word: across the
+ * line's middle the loop reaches back into that word, or two lines' height
+ * into a short one, as an oval cutting a column's corners still does.
+ */
+export function holdsLineStart(outline: readonly ViewportPoint[], first: WordBox): boolean {
+  const height = first.bottom - first.top;
+  const row = outlineRow(outline, first.top + height / 2);
+  return (
+    row !== null &&
+    row[0] <= first.left + Math.max(first.right - first.left, height * 2) &&
+    row[1] >= first.left
+  );
+}
+
 /**
  * The sentences of a text, as spans, ending where sentenceAt ends one: after
  * a full stop, question or exclamation mark followed by a space, or at a line
@@ -1183,7 +1228,12 @@ function* insidePoints(
  * of what it is centred on (a sentence, or a link's text); first to last, so
  * nothing between them drops out. A loop that takes from more than one block,
  * as one drawn down a list's steps does, takes whole each block whose every
- * line it holds the start of; a loop within one block keeps to its sentences.
+ * line it holds the start of, and of any other block only sentences on lines
+ * whose start it holds, so the bulge of an oval drawn round a column, across
+ * the middle of the lines above and below it, takes nothing from them; a loop
+ * within one block keeps to its sentences. A loop holds a line's start when,
+ * across the middle of the line, it reaches back into its first word, as an
+ * oval cutting a column's corners still does.
  * For a sentence, a word is held only clear of the rim by half its height, so
  * a rim passing over a line takes none of that line. A loop only a few lines
  * of a block's text tall is drawn round a sentence: beyond the one at its
@@ -1199,13 +1249,14 @@ function lassoPassages(
   const tall =
     Math.max(...outline.map((point) => point.y)) - Math.min(...outline.map((point) => point.y));
   const seen = new Set<Node>();
-  /** Each block the loop takes from: its sentences, which it holds, and whether it holds every line's start. */
+  /** Each block the loop takes from: its sentences, which it holds (alone, and alongside other blocks), and whether it holds every line's start. */
   const blocks: {
     map: TextMap;
     block: Element;
     sentences: { start: number; end: number }[];
     centred: Set<number>;
     taken: Set<number>;
+    alongside: Set<number>;
     starts: boolean;
   }[] = [];
   const read = (node: Node | null | undefined): void => {
@@ -1251,18 +1302,13 @@ function lassoPassages(
     let lines = 0;
     let heldStarts = 0;
     let line: DOMRect | null = null;
+    /** Whether the loop holds the start of the line being read, and the sentences on such lines. */
+    let lineHeld = false;
+    const lined = new Set<number>();
     /** Whether the loop is drawn round a sentence of this block's text, judged by its first word. */
     let precise: boolean | null = null;
     const range = document.createRange();
     if (typeof range.getClientRects !== 'function') return;
-    /** Whether the loop holds a word's box, clear of the rim by `clear`. */
-    const holds = (bounds: DOMRect, clear: number): boolean =>
-      [
-        { x: bounds.left - clear, y: bounds.top - clear },
-        { x: bounds.right + clear, y: bounds.top - clear },
-        { x: bounds.left - clear, y: bounds.bottom + clear },
-        { x: bounds.right + clear, y: bounds.bottom + clear },
-      ].every((corner) => insideOutline(outline, corner));
     for (const piece of map.pieces) {
       range.setStart(piece.node, piece.nodeOffset);
       range.setEnd(piece.node, piece.nodeOffset + piece.end - piece.start);
@@ -1285,26 +1331,30 @@ function lassoPassages(
         range.setEnd(piece.node, offset + word[0].length);
         const bounds = range.getBoundingClientRect();
         if (!(bounds.width > 0 && bounds.height > 0)) continue;
-        // A word half a line below the one before it starts a new line. A
-        // loop's rim cuts the corners of the text it goes round, so a line's
-        // start needs only to be inside it.
+        // A word half a line below the one before it starts a new line.
         if (!line || bounds.top >= line.top + line.height / 2) {
           lines += 1;
-          if (reaches && holds(bounds, 0)) heldStarts += 1;
+          lineHeld = reaches && holdsLineStart(outline, bounds);
+          if (lineHeld) heldStarts += 1;
         }
         line = bounds;
+        if (lineHeld) lined.add(index);
         precise ??= tall < LASSO_SENTENCE_LINES * bounds.height;
-        if (taken.has(index) || !reaches || !holds(bounds, precise ? 0 : bounds.height / 2))
-          continue;
+        if (taken.has(index) || !reaches || !holdsWord(outline, bounds, precise)) continue;
         const count = (held[index] ?? 0) + 1;
         held[index] = count;
         const total = words[index] ?? 1;
-        if (count >= (precise ? total : Math.min(total, Math.max(2, Math.ceil(total / 4)))))
-          taken.add(index);
+        if (count >= wordsToTake(total, precise)) taken.add(index);
       }
     }
     const starts = item && lines > 0 && heldStarts === lines;
-    if (taken.size || starts) blocks.push({ map, block, sentences, centred, taken, starts });
+    // Read line by line, only a sentence on a line whose start the loop holds
+    // is taken alongside other blocks.
+    const alongside = item
+      ? new Set([...taken].filter((index) => centred.has(index) || lined.has(index)))
+      : taken;
+    if (taken.size || starts)
+      blocks.push({ map, block, sentences, centred, taken, alongside, starts });
   };
   if (centre) {
     // The centre's own passages are read first, whatever the loop's looks find.
@@ -1329,8 +1379,8 @@ function lassoPassages(
   }
   const region = blocks.length > 1;
   const passages: LassoPassage[] = [];
-  for (const { map, block, sentences, centred, taken, starts } of blocks) {
-    const chosen = region && starts ? new Set(sentences.keys()) : taken;
+  for (const { map, block, sentences, centred, taken, alongside, starts } of blocks) {
+    const chosen = !region ? taken : starts ? new Set(sentences.keys()) : alongside;
     const first = sentences[Math.min(...chosen)];
     const last = sentences[Math.max(...chosen)];
     const more = [...chosen].some((index) => !centred.has(index));

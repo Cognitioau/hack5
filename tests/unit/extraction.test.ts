@@ -5,6 +5,8 @@ import {
   extractCandidate,
   extractPage,
   extractSelection,
+  holdsLineStart,
+  holdsWord,
   insideOutline,
   loopOutline,
   pageByline,
@@ -14,6 +16,7 @@ import {
   readingStyle,
   sentenceAt,
   sentenceSpans,
+  wordsToTake,
 } from '../../src/adapters/browser/extraction';
 
 const rectangle = new DOMRect(30, 40, 200, 60);
@@ -1025,6 +1028,40 @@ describe("a lasso's loop", () => {
       expect(insideOutline(outline, { x: 300, y: 262 })).toBe(false);
       expect(insideOutline(outline, { x: 395, y: 250 })).toBe(false);
     }
+  });
+
+  it('holds a word clear of its rim, or only inside it when drawn round a sentence', () => {
+    const outline = loopOutline(ring());
+    // An 18 px word whose top is 4 px inside the rim's top, and one well inside.
+    const grazed = { left: 290, top: 144, right: 310, bottom: 162 };
+    const inside = { left: 290, top: 180, right: 310, bottom: 198 };
+    expect(holdsWord(outline, grazed, true)).toBe(true);
+    expect(holdsWord(outline, grazed, false)).toBe(false);
+    expect(holdsWord(outline, inside, false)).toBe(true);
+    expect(holdsWord(outline, { ...inside, left: 395, right: 405 }, true)).toBe(false);
+  });
+
+  it('takes a sentence for a quarter of its words, two at least, or all when drawn round one', () => {
+    expect([1, 2, 5, 8, 17].map((total) => wordsToTake(total, false))).toEqual([1, 2, 2, 2, 5]);
+    expect(wordsToTake(8, true)).toBe(8);
+  });
+
+  it('holds a line by its start: across its middle, reaching back into its first word', () => {
+    const outline = loopOutline(ring());
+    // The rim crosses the middle row (y 200) at x 200.
+    const word = (left: number, right: number, middle = 200) => ({
+      left,
+      right,
+      top: middle - 9,
+      bottom: middle + 9,
+    });
+    expect(holdsLineStart(outline, word(190, 230))).toBe(true);
+    expect(holdsLineStart(outline, word(185, 195))).toBe(true);
+    expect(holdsLineStart(outline, word(140, 170))).toBe(false);
+    // Near the top the oval cuts the corner: a long first word is still reached, a short one 45 px off is not.
+    expect(holdsLineStart(outline, word(200, 260, 150))).toBe(true);
+    expect(holdsLineStart(outline, word(200, 230, 150))).toBe(false);
+    expect(holdsLineStart(outline, word(290, 330, 270))).toBe(false);
   });
 
   it('still holds its middle when left open, begun from the middle or traced past its start', () => {

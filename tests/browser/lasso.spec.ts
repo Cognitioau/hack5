@@ -27,6 +27,20 @@ const terse = Array.from({ length: 30 }, (_, index) =>
       ? `Step ${index + 1} waits for the lens kit.`
       : `Step ${index + 1} packs the camera bag and strap.`,
 );
+const boxes = Array.from(
+  { length: 30 },
+  (_, index) => `Box ${index + 1} goes on the shelf, as is.`,
+);
+// Set in monospace, so its lines break in the same places under any platform's fonts.
+const columnHtml = `<!doctype html><meta charset="utf-8"><title>Helper notes</title>
+  <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px }</style>
+  <section><ol id="steps">${steps.map((step) => `<li>${step}</li>`).join('')}</ol></section>
+  <section><ul id="ways"><li>Menu Bar Button</li><li>Keyboard Shortcut</li><li>Hot Corner</li></ul></section>
+  <section><ul id="pair" style="padding-left: 300px; margin-bottom: 0"><li>Menu Bar Button</li><li>Hot Corner</li></ul>
+  <p id="below" style="margin-top: 0">A paragraph sits right below them. Go now. Then the rest of it carries on past the list.</p></section>
+  <section><p id="boxes">${boxes.join(' ')}</p></section>
+  <section><p id="link">Read the <a href="/guide">setup guide for the helper</a> before you begin, as it lists every shortcut.</p></section>`;
+
 // Sections sit far apart, so a loop drawn generously round one stays clear of the others.
 const stepsHtml = `<!doctype html><meta charset="utf-8"><title>Stop a stuck helper</title>
   <style>body { font: 16px/24px sans-serif; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px } h2 { margin-bottom: 48px }</style>
@@ -203,6 +217,92 @@ test('a lasso takes what its loop goes round: steps by their starts, a heading w
       bottom: middle.y + 50,
     });
     expect((await saved(fixture, page, 6))?.candidate.text).toBe(highlighted);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+test('a lasso keeps to the lines it holds: corners cut, a short list, a line it only crosses, a few lines round a sentence, a link', async () => {
+  test.setTimeout(150_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const url = `${vault.origin}/column`;
+    await fixture.context.route(url, (route) =>
+      route.fulfill({ contentType: 'text/html', body: columnHtml }),
+    );
+    const page = await fixture.context.newPage();
+    await page.goto(url);
+    await wake(fixture, page);
+
+    // An oval over the left of the steps, its rim cutting into the first
+    // words of the top and bottom lines: still every step.
+    const list = await textBox(page, '#steps li');
+    await drawCircle(page, { x: list.left + 80, y: (list.top + list.bottom) / 2 }, 'Shift', 1, {
+      x: 100,
+      y: (list.bottom - list.top) / 2 + 20,
+    });
+    expect((await saved(fixture, page, 1))?.candidate.text).toBe(steps.join('\n\n'));
+
+    // Round a short list: each item, linked back from the first to the last.
+    await loopRound(page, await textBox(page, '#ways li'));
+    expect((await saved(fixture, page, 2))?.candidate).toMatchObject({
+      text: 'Menu Bar Button\n\nKeyboard Shortcut\n\nHot Corner',
+      passageUrl: `${url}#:~:text=Menu%20Bar%20Button,Hot%20Corner`,
+    });
+
+    // Round two items, its bottom across the middle of the line below them,
+    // far from that line's start: the items, and nothing of that line.
+    await textBox(page, '#pair li, #below');
+    const pair = await textBox(page, '#pair li');
+    const under = await page.evaluate(() => {
+      const text = document.querySelector('#below')?.firstChild as Text;
+      const range = document.createRange();
+      range.setStart(text, text.data.indexOf('Go now.'));
+      range.setEnd(text, text.data.indexOf('Go now.') + 'Go now.'.length);
+      return range.getBoundingClientRect().toJSON() as Box;
+    });
+    const centre = { x: (pair.left + pair.right) / 2, y: (pair.top + pair.bottom) / 2 };
+    expect(under.left).toBeGreaterThan(centre.x - 100);
+    expect(under.right).toBeLessThan(centre.x + 100);
+    await drawCircle(page, centre, 'Shift', 1, { x: 120, y: under.bottom + 8 - centre.y });
+    expect((await saved(fixture, page, 3))?.candidate.text).toBe('Menu Bar Button\n\nHot Corner');
+
+    // Three lines tall, centred on the first word of a sentence that starts
+    // mid-line: that sentence, though the loop holds the end of the one before.
+    await textBox(page, '#boxes');
+    const aim = await page.evaluate((boxes) => {
+      const paragraph = document.querySelector('#boxes');
+      const text = paragraph?.firstChild as Text;
+      const edges = paragraph?.getBoundingClientRect();
+      for (const index of [12, 13, 14, 15, 16]) {
+        const start = text.data.indexOf(boxes[index] ?? '');
+        const range = document.createRange();
+        range.setStart(text, start);
+        range.setEnd(text, start + 3);
+        const word = range.getBoundingClientRect();
+        if (edges && word.left - edges.left > 160 && edges.right - word.left > 160)
+          return { index, x: word.left + word.width / 2, y: word.top + word.height / 2 };
+      }
+      throw new Error('No sentence starts mid-line');
+    }, boxes);
+    await drawCircle(page, aim, 'Shift', 1, { x: 130, y: 46 });
+    expect((await saved(fixture, page, 4))?.candidate.text).toBe(boxes[aim.index]);
+
+    // A small circle on a link takes the link.
+    const link = await textBox(page, '#link a');
+    await drawCircle(
+      page,
+      { x: (link.left + link.right) / 2, y: (link.top + link.bottom) / 2 },
+      'Shift',
+    );
+    expect((await saved(fixture, page, 5))?.candidate).toMatchObject({
+      kind: 'link',
+      url: `${vault.origin}/guide`,
+      text: 'setup guide for the helper',
+    });
   } finally {
     await fixture.close();
     await vault.close();
