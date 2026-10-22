@@ -104,24 +104,35 @@ test('the lasso takes a sentence from text set in plain divs and spans, as searc
           <style>body { font: 16px/24px sans-serif; margin: 40px } .row { display: flex; gap: 8px }</style>
           <div id="results" style="min-height: 1400px"><div class="result">
             <a href="https://shop.example/bundles"><h3>Camera bundles - Example shop</h3></a>
-            <div class="row"><span>https://shop.example › bundles</span></div>
+            <div class="row"><span id="address">https://shop.example › bundles</span></div>
             <div id="snippet"><span>Explore the camera bundles at the first local store. Free shipping on <em>most</em> orders.</span></div>
-          </div></div>`,
+          </div><div>More results from shop.example</div></div>`,
       }),
     );
     const page = await fixture.context.newPage();
     await page.goto(results);
     await wake(fixture, page);
-    // Far below the results, over nothing but the page's own box.
-    await drawCircle(page, { x: 300, y: 700 }, 'Shift');
-    await page.waitForTimeout(300);
-    expect(await state(fixture)).toHaveLength(0);
     const words = await page.locator('#snippet span').boundingBox();
-    if (!words) throw new Error('Missing snippet');
+    const address = await page.locator('#address').boundingBox();
+    if (!words || !address) throw new Error('Missing result');
+    // Far below the results and well right of a line's end, Chrome still puts
+    // its caret in the nearest words, lines with no full stop to end them, yet
+    // the hand slips: nothing is recorded over the seconds a grab would take.
+    for (const away of [
+      { x: 300, y: 700 },
+      { x: address.x + address.width + 300, y: address.y + address.height / 2 },
+    ]) {
+      await drawCircle(page, away, 'Shift');
+      for (let waited = 0; waited < 2_500; waited += 250) {
+        expect(await state(fixture)).toHaveLength(0);
+        await page.waitForTimeout(250);
+      }
+    }
     await drawCircle(page, { x: words.x + 60, y: words.y + 12 }, 'Shift');
     await expect.poll(async () => (await state(fixture))[0]?.persistence).toBe('saved-vault');
-    const [capture] = await state(fixture);
-    expect(capture?.candidate).toMatchObject({
+    const captures = await state(fixture);
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.candidate).toMatchObject({
       kind: 'text',
       url: results,
       text: 'Explore the camera bundles at the first local store.',
