@@ -45,7 +45,7 @@ const columnHtml = `<!doctype html><meta charset="utf-8"><title>Helper notes</ti
 
 // Notes and links in every sentence, as an encyclopaedia sets them.
 const facts = Array.from(
-  { length: 18 },
+  { length: 30 },
   (_, index) =>
     `Fact ${index + 1} about the camera kit is in the notes[${index + 100}] for the kit.`,
 );
@@ -61,6 +61,17 @@ const detail = Array.from(
   (_, index) =>
     `Sentence ${index + 1} explains a detail about the camera kit and how the parts fit together.`,
 );
+// Rows a line each, and a lead paragraph over a longer one.
+const oneLine = Array.from(
+  { length: 6 },
+  (_, index) => `Row ${index + 1} names one part the kit ships with, and its box.`,
+);
+const lead =
+  'Lead one says the kit ships in a padded case with a strap. Lead two says the case fits under any seat on a plane.';
+const fits = Array.from(
+  { length: 10 },
+  (_, index) => `Body ${index + 1} says how part ${index + 1} fits in.`,
+);
 const points = (part: number) =>
   Array.from(
     { length: 8 },
@@ -75,10 +86,12 @@ const textHtml = `<!doctype html><meta charset="utf-8"><title>Kit notes</title>
   <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0 }
   td { padding: 1px 4px }</style>
-  <section><p id="cited">${cited}</p></section>
+  <section><p id="cited" style="font: 12px/16px monospace">${cited}</p></section>
   <section><p id="detail">${detail.join(' ')}</p>
   <p id="tail">Next paragraph starts here with a short line. And then it carries on for a while longer so it wraps across the page and past.</p></section>
   <section><p id="first">${points(1).join(' ')}</p><p id="second">${points(2).join(' ')}</p></section>
+  <section id="rows">${oneLine.map((row) => `<p style="margin: 0">${row}</p>`).join('')}</section>
+  <section><p id="lead" style="margin: 0 0 24px">${lead}</p><p id="body" style="margin: 0">${fits.join(' ')}</p></section>
   <section><nav id="crumbs"><ul><li><a href="/">Home page of the shop</a></li><li><a href="/cameras">Cameras and lenses</a></li></ul></nav>
   <ul id="todo"><li>Ship the kit by Friday. <details><summary>Why</summary>The reason stays folded away.</details></li>
   <li>Email the buyer <span class="sr-only">(opens in a new tab)</span>the tracking number.</li></ul></section>
@@ -453,6 +466,14 @@ test('a lasso lights every line it takes and takes what it goes round across blo
     const paragraph = await textBox(page, '#cited');
     const rows = await lines(page, '#cited');
     expect(rows.length).toBeGreaterThan(12);
+    // More boxes than the hand draws, its links and notes counted.
+    expect(
+      await page.evaluate(() => {
+        const range = document.createRange();
+        range.selectNodeContents(document.querySelector('#cited') as Node);
+        return range.getClientRects().length;
+      }),
+    ).toBeGreaterThan(128);
     await loopRound(page, paragraph);
     const boxes = await lit(page);
     for (const row of rows) {
@@ -502,17 +523,40 @@ test('a lasso lights every line it takes and takes what it goes round across blo
     expect(points(2).join(' ')).toContain(both[1] ?? '-');
     expect(both[0]?.match(/Point 1\.\d/gu)?.length ?? 0).toBeGreaterThanOrEqual(2);
 
+    // Round the right part of rows a line each, their starts outside it:
+    // every row it goes round the middle of, not only the one at its centre.
+    const stacked = await textBox(page, '#rows');
+    await drawCircle(
+      page,
+      { x: stacked.left + 330, y: (stacked.top + stacked.bottom) / 2 },
+      'Shift',
+      1,
+      { x: 230, y: 150 },
+    );
+    expect((await saved(fixture, page, 4))?.candidate.text).toBe(oneLine.join('\n\n'));
+
+    // A tall loop whose top holds two lines of a lead paragraph, but neither
+    // line's start: the lead as well as the paragraph at its centre.
+    const leading = await textBox(page, '#lead, #body');
+    const body = await page.evaluate(() => {
+      const box = document.querySelector('#body')?.getBoundingClientRect();
+      return box ? (box.top + box.bottom) / 2 : 0;
+    });
+    expect(body).toBeGreaterThan(leading.top);
+    await drawCircle(page, { x: leading.left + 360, y: body }, 'Shift', 1, { x: 300, y: 160 });
+    expect((await saved(fixture, page, 5))?.candidate.text).toBe(`${lead}\n\n${fits.join(' ')}`);
+
     // Round a trail of links and a list: the items, never the navigation, an
     // answer folded away in a closed details or words kept for screen readers.
     await loopRound(page, await textBox(page, '#crumbs, #todo li'));
-    expect((await saved(fixture, page, 4))?.candidate.text).toBe(
+    expect((await saved(fixture, page, 6))?.candidate.text).toBe(
       'Ship the kit by Friday.\n\nEmail the buyer the tracking number.',
     );
 
     // Cards set in rows of plain blocks: their words apart, and a link back
     // that opens the page at them.
     await loopRound(page, await textBox(page, '#cards li'));
-    const cards = await saved(fixture, page, 5);
+    const cards = await saved(fixture, page, 7);
     expect(cards?.candidate).toMatchObject({
       text: 'Canon EOS R8 Full-frame body with a fast autofocus system. $1,499\n\nNikon Z6 III Partly stacked sensor for quick readout. $2,499',
       passageUrl: `${url}#:~:text=Canon%20EOS%20R8,%242%2C499`,
@@ -524,7 +568,7 @@ test('a lasso lights every line it takes and takes what it goes round across blo
 
     // Round more cells than a loop reads: the first it reads, marked cut short.
     await loopRound(page, await textBox(page, '#grid td'));
-    const grid = await saved(fixture, page, 6);
+    const grid = await saved(fixture, page, 8);
     expect(grid?.candidate.truncated).toBe(true);
     expect(grid?.candidate.text.split('\n\n')).toHaveLength(120);
 
@@ -545,7 +589,7 @@ test('a lasso lights every line it takes and takes what it goes round across blo
       1,
       { x: (block.right - block.left) / 2 + 60, y: (block.bottom - block.top) / 2 + 24 },
     );
-    const taken = (await saved(fixture, page, 7))?.candidate.text ?? '';
+    const taken = (await saved(fixture, page, 9))?.candidate.text ?? '';
     for (let line = 0; line < 160; line++)
       expect(taken.split(`L${line} `).length - 1, `line ${line} at most once`).toBeLessThanOrEqual(
         1,
@@ -570,7 +614,7 @@ test('in the core build, a lasso centred on a picture reads the text round it', 
         body: `<!doctype html><meta charset="utf-8"><title>A fern</title>
           <style>body { font: 16px/24px monospace; margin: 320px 0 400px 180px; width: 640px }</style>
           <p id="above">The fern grows in shade and needs water every week.</p>
-          <p><img id="fern" src="/fern.png" width="120" height="90" alt="A fern"></p>
+          <p style="text-align: center"><img id="fern" src="/fern.png" width="120" height="90" alt="A fern"></p>
           <p id="below">Its fronds unroll in spring and turn brown by winter.</p>`,
       }),
     );
