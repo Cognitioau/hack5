@@ -15,8 +15,10 @@ import {
   pickHand,
   poseAt,
   releaseDuration,
+  rimLift,
   scrapAt,
   splitFrames,
+  tintChannel,
 } from '../../src/ui/grave';
 import { GRAVE_HANDS } from '../../src/ui/grave-sprite';
 import { PAPER_GRID, paperFacets, type SheetKind } from '../../src/ui/paper';
@@ -513,5 +515,36 @@ describe('grave choreography invariants', () => {
     });
     expect(dark.dark).toBe(true);
     expect(layoutFor('text').dark).toBe(false);
+  });
+
+  it('lifts only the torn rim on dark pages, so it shows around the black hole', () => {
+    const hand = GRAVE_HANDS[0];
+    if (!hand) throw new Error('No hand');
+    const { width, height } = hand.size;
+    // The lift `radii` hole radii to the right of the hole's centre, in a frame `shrink` times smaller.
+    const at = (lift: Float32Array | null, radii: number, shrink = 1) => {
+      const x = Math.floor((hand.hole.x + radii * hand.hole.radius) / shrink);
+      return lift?.[Math.floor(hand.hole.y / shrink) * (width / shrink) + x] ?? 0;
+    };
+    // A light page's wall is multiplied by the page's own colour, as before.
+    expect(rimLift([255, 255, 255], hand, width, height)).toBeNull();
+    expect(rimLift([110, 110, 110], hand, width, height)).toBeNull();
+    // No step where pages start counting as dark.
+    const edge = 0.4 * 255 - 0.5;
+    expect(at(rimLift([edge, edge, edge], hand, width, height), 1.3)).toBeLessThan(0.01);
+    // On a near-black page the rim, which lies between 0.9 and 2.2 hole radii in every
+    // take, is lifted; the black core and the wall beyond, with its dust, are not.
+    const lift = rimLift([27, 27, 27], hand, width, height);
+    const page = 27 / 255;
+    expect(at(lift, 0.5)).toBe(0);
+    expect(at(lift, 2.5)).toBe(0);
+    // The footage's grey rim (about half its white) comes out clearly lighter than the
+    // page, where unlifted it would sink below it; grey dust beyond stays below it.
+    expect(tintChannel(128, page, at(lift, 1.3))).toBeGreaterThan(27 + 15);
+    expect(tintChannel(128, page, at(lift, 2.5))).toBeLessThan(27);
+    // Frames decoded smaller get the same ring.
+    const smaller = rimLift([27, 27, 27], hand, width / 2, height / 2);
+    expect(at(smaller, 1.3, 2)).toBeCloseTo(at(lift, 1.3), 2);
+    expect(at(smaller, 2.5, 2)).toBe(0);
   });
 });
