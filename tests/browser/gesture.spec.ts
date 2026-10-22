@@ -90,6 +90,48 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
   }
 });
 
+test('the lasso takes a sentence from text set in plain divs and spans, as search results are', async () => {
+  test.setTimeout(120_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const results = `${vault.origin}/results`;
+    await fixture.context.route(results, (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><title>camera bundles - Search</title>
+          <style>body { font: 16px/24px sans-serif; margin: 40px } .row { display: flex; gap: 8px }</style>
+          <div id="results" style="min-height: 1400px"><div class="result">
+            <a href="https://shop.example/bundles"><h3>Camera bundles - Example shop</h3></a>
+            <div class="row"><span>https://shop.example › bundles</span></div>
+            <div id="snippet"><span>Explore the camera bundles at the first local store. Free shipping on <em>most</em> orders.</span></div>
+          </div></div>`,
+      }),
+    );
+    const page = await fixture.context.newPage();
+    await page.goto(results);
+    await wake(fixture, page);
+    // Far below the results, over nothing but the page's own box.
+    await drawCircle(page, { x: 300, y: 700 }, 'Shift');
+    await page.waitForTimeout(300);
+    expect(await state(fixture)).toHaveLength(0);
+    const words = await page.locator('#snippet span').boundingBox();
+    if (!words) throw new Error('Missing snippet');
+    await drawCircle(page, { x: words.x + 60, y: words.y + 12 }, 'Shift');
+    await expect.poll(async () => (await state(fixture))[0]?.persistence).toBe('saved-vault');
+    const [capture] = await state(fixture);
+    expect(capture?.candidate).toMatchObject({
+      kind: 'text',
+      url: results,
+      text: 'Explore the camera bundles at the first local store.',
+    });
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
 test('universal activation follows tabs, navigation and restart, respects exclusions, and pauses everywhere', async () => {
   test.setTimeout(120_000);
   const vault = await startVaultFixture();

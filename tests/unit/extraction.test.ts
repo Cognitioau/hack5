@@ -147,6 +147,7 @@ describe('bounded untrusted page extraction', () => {
     expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
   });
 
+  // No caret lies under the pointer in any of these, so plain `div` text has nothing to read.
   it.each([
     '<div id="control">A generic container is not a text target.</div>',
     '<div><span id="control">Neither is an unscoped inline fragment.</span></div>',
@@ -584,6 +585,65 @@ describe('bounded untrusted page extraction', () => {
       value: () => ({ offsetNode: words, offset: 30 }),
     });
     expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe('second line here');
+  });
+
+  it('takes the sentence at the pointer from text set in plain divs and spans, as search results are', () => {
+    fixture(
+      '<div id="result"><div><span>https://shop.example › bundles</span></div><div id="snippet"><span>Explore the camera bundles at the first local store. Free shipping on most orders.</span></div><div><div id="label">What customers love</div><div id="love">Customers praise the fast shipping. Staff are <em>helpful</em> and kind.</div></div></div>',
+      '#snippet span',
+    );
+    const caret = (selector: string, offset: number, at = 0): void => {
+      Object.defineProperty(document, 'caretPositionFromPoint', {
+        configurable: true,
+        value: () => ({ offsetNode: document.querySelector(selector)?.childNodes[at], offset }),
+      });
+    };
+    caret('#snippet span', 10);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate).toMatchObject({
+      kind: 'text',
+      url: 'https://example.org/article',
+      text: 'Explore the camera bundles at the first local store.',
+    });
+    // A line laid out as a block is its own paragraph, never run into the next.
+    target = document.querySelector('#label') as Element;
+    caret('#label', 4);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'What customers love',
+    );
+    target = document.querySelector('#love') as Element;
+    caret('#love', 4, 2);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Staff are helpful and kind.',
+    );
+    // Between the lines of a result, the pointer is over the result, and the
+    // caret Chrome gives is in the line it lies nearest.
+    target = document.querySelector('#result') as Element;
+    caret('#love', 4);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Customers praise the fast shipping.',
+    );
+  });
+
+  it('still slips off plain text when no caret lies under the pointer, or its lines lie far off', () => {
+    fixture('<div id="here"></div><div id="there">Text somewhere else entirely.</div>', '#here');
+    // No caret, as over an empty box.
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    // A caret Chrome put in a different block.
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      configurable: true,
+      value: () => ({ offsetNode: document.querySelector('#there')?.firstChild, offset: 4 }),
+    });
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    // Over the empty end of a box holding text, Chrome still gives a caret in its
+    // nearest line, which lies well away from the pointer.
+    target = document.querySelector('#there') as Element;
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Text somewhere else entirely.',
+    );
+    expect(extractCandidate(document, { x: 80, y: 400 })).toBeNull();
+    // The page itself is never the passage.
+    target = document.body;
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
   });
 
   it('resolves safe links and refuses executable or credential-bearing destinations', () => {

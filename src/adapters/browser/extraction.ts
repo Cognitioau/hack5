@@ -55,6 +55,8 @@ const MAX_WINDOW_TEXT = 6_000;
 const MAX_WINDOW_SIDE_NODES = (MAX_SOURCE_NODES - 128) / 2;
 /** Transparent layers looked through to find an image under the pointer. */
 const MAX_OVERLAYS = 4;
+/** How far beside the lines of text set in plain `div`s the pointer may rest and still take them, in pixels. */
+const MAX_LOOSE_REACH = 16;
 /**
  * Elements that draw at the pointer whatever their style: media and frames.
  * Fields are editable, SVG and MathML draw by their namespace, and an image
@@ -332,6 +334,43 @@ function blockText(document: Document, block: Element, anchor: Node | null): Tex
   if (whole || !anchor || !block.contains(anchor)) return whole;
   const window = paragraphWindow(block, anchor);
   return window ? collectText(document, block, undefined, window) : null;
+}
+
+/**
+ * The paragraph around a node in text a page sets in plain `div`s and `span`s,
+ * as search results and many apps do: the run of text ending at anything laid
+ * out as a block, never the block whole, which may hold many such lines.
+ */
+function looseText(document: Document, block: Element, anchor: Node | null): TextMap | null {
+  const window = anchor && paragraphWindow(block, anchor);
+  return window ? collectText(document, block, undefined, window) : null;
+}
+
+/** The nearest element holding the target that is laid out as a block, short of the page itself. */
+function laidOutBlock(document: Document, target: Element): Element | null {
+  for (
+    let at: Element | null = target;
+    at && at !== document.body && at !== document.documentElement;
+    at = at.parentElement
+  )
+    if (
+      !/^(?:inline|contents|none|ruby)/u.test(
+        document.defaultView?.getComputedStyle(at).display ?? 'inline',
+      )
+    )
+      return at;
+  return null;
+}
+
+/** Whether the pointer rests on or just beside one of a passage's lines. */
+function beside(passage: ExtractedCandidate, point: ViewportPoint): boolean {
+  return (passage.rectangles ?? []).some(
+    (line) =>
+      point.x >= line.x - MAX_LOOSE_REACH &&
+      point.x <= line.x + line.width + MAX_LOOSE_REACH &&
+      point.y >= line.y - MAX_LOOSE_REACH &&
+      point.y <= line.y + line.height + MAX_LOOSE_REACH,
+  );
 }
 
 /** Normalize whitespace while retaining the exact DOM endpoints of the result. */
@@ -771,6 +810,7 @@ function textCandidate(
   point: ViewportPoint,
   target: Element,
   pageUrl: string,
+  loose = false,
 ): ExtractedCandidate | null {
   const extended = document as Document & {
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
@@ -780,7 +820,7 @@ function textCandidate(
   const range = position ? null : extended.caretRangeFromPoint?.(point.x, point.y);
   const node = position?.offsetNode ?? range?.startContainer;
   const offset = position?.offset ?? range?.startOffset ?? 0;
-  const map = blockText(document, target, node ?? null);
+  const map = (loose ? looseText : blockText)(document, target, node ?? null);
   if (!map) return null;
   const piece = map.pieces.find((entry) => entry.node === node);
   // A paragraph window starts and ends on whole nodes, so a piece is its whole node.
@@ -922,7 +962,12 @@ export function extractCandidate(
   }
 
   const block = target.closest(BLOCK_SELECTOR);
-  return block ? textCandidate(document, point, block, pageUrl) : null;
+  if (block) return textCandidate(document, point, block, pageUrl);
+  // Text set in plain `div`s and `span`s, as search results are, is read only
+  // when the caret lies in it and the pointer on or beside its lines.
+  const loose = laidOutBlock(document, target);
+  const passage = loose && textCandidate(document, point, loose, pageUrl, true);
+  return passage && beside(passage, point) ? passage : null;
 }
 
 /** The current explicit page selection, wherever the pointer is. */
