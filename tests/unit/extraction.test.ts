@@ -5,12 +5,15 @@ import {
   extractCandidate,
   extractPage,
   extractSelection,
+  insideOutline,
+  loopOutline,
   pageByline,
   passageLink,
   publicWebUrl,
   publishedDate,
   readingStyle,
   sentenceAt,
+  sentenceSpans,
 } from '../../src/adapters/browser/extraction';
 
 const rectangle = new DOMRect(30, 40, 200, 60);
@@ -826,6 +829,17 @@ describe('a passage that stands on its own', () => {
     expect(passageLink('https://example.org/a', '  ')).toBeUndefined();
   });
 
+  it('links a passage over several blocks by the opening words of the first and the closing words of the last', () => {
+    // However few words the first block has, the start never runs on into the next block.
+    expect(passageLink('https://example.org/a', 'Menu Bar Button', 'Hot Corner')).toBe(
+      'https://example.org/a#:~:text=Menu%20Bar%20Button,Hot%20Corner',
+    );
+    expect(
+      passageLink('https://example.org/a', 'one two three four five', 'six seven eight nine ten'),
+    ).toBe('https://example.org/a#:~:text=one%20two%20three%20four,seven%20eight%20nine%20ten');
+    expect(passageLink('https://example.org/a', 'words', ' ')).toBeUndefined();
+  });
+
   it('reads a heading broken across lines as words, without what it hides', () => {
     fixture(
       `<h1>The curious<br>field journal.<span hidden>Permalink</span></h1>
@@ -974,5 +988,74 @@ describe('sentence boundaries', () => {
     expect(sentenceAt('First. Second! Third?', 9)).toBe('Second!');
     expect(sentenceAt('Line one\nLine two', 14)).toBe('Line two');
     expect(sentenceAt('Only sentence', 100)).toBe('Only sentence');
+  });
+
+  it('splits a text into the sentences the pointer would take, every word in exactly one', () => {
+    const text = 'First. Second! Third?\nFourth line, e.g. here.  Fifth. 3.5 stays whole\n\nLast';
+    const spans = sentenceSpans(text);
+    for (const word of text.matchAll(/\S+/gu)) {
+      const at = word.index ?? 0;
+      const holding = spans.filter((span) => span.start <= at && at < span.end);
+      expect(holding).toHaveLength(1);
+      const [span] = holding;
+      expect(text.slice(span?.start, span?.end).replace(/\s+/gu, ' ').trim()).toBe(
+        sentenceAt(text, at),
+      );
+    }
+    expect(sentenceSpans('  \n ')).toEqual([]);
+    expect(sentenceSpans('No stop at all')).toEqual([{ start: 0, end: 14 }]);
+  });
+});
+
+describe("a lasso's loop", () => {
+  const ring = (turns = 1, from = 0): { x: number; y: number }[] =>
+    Array.from({ length: 49 }, (_, index) => {
+      const angle = from + (index / 48) * Math.PI * 2 * turns;
+      return { x: 300 + Math.cos(angle) * 100, y: 200 + Math.sin(angle) * 60 };
+    });
+
+  it('holds what it goes round, either way round, and nothing outside it', () => {
+    for (const loop of [ring(), [...ring()].reverse()]) {
+      const outline = loopOutline(loop);
+      expect(insideOutline(outline, { x: 300, y: 200 })).toBe(true);
+      expect(insideOutline(outline, { x: 395, y: 200 })).toBe(true);
+      // On the rim counts as inside; just past it does not.
+      expect(insideOutline(outline, { x: 400, y: 200 })).toBe(true);
+      expect(insideOutline(outline, { x: 401, y: 200 })).toBe(false);
+      expect(insideOutline(outline, { x: 300, y: 262 })).toBe(false);
+      expect(insideOutline(outline, { x: 395, y: 250 })).toBe(false);
+    }
+  });
+
+  it('still holds its middle when left open, begun from the middle or traced past its start', () => {
+    const open = loopOutline(ring(0.85));
+    expect(insideOutline(open, { x: 300, y: 200 })).toBe(true);
+    const approach = Array.from({ length: 8 }, (_, index) => ({ x: 300 + index * 12, y: 200 }));
+    const begun = loopOutline([...approach, ...ring()]);
+    expect(insideOutline(begun, { x: 210, y: 200 })).toBe(true);
+    expect(insideOutline(begun, { x: 401, y: 200 })).toBe(false);
+    const past = loopOutline(ring(1.2));
+    expect(insideOutline(past, { x: 205, y: 200 })).toBe(true);
+    expect(insideOutline(past, { x: 300, y: 265 })).toBe(false);
+  });
+
+  it('encloses nothing with too few points, a straight stroke or malformed input', () => {
+    expect(loopOutline([])).toEqual([]);
+    expect(
+      loopOutline([
+        { x: 1, y: 1 },
+        { x: 5, y: 5 },
+      ]),
+    ).toEqual([]);
+    const stroke = Array.from({ length: 20 }, (_, index) => ({ x: index * 10, y: index * 5 }));
+    expect(loopOutline(stroke)).toEqual([]);
+    expect(insideOutline(loopOutline(stroke), { x: 50, y: 25 })).toBe(false);
+    expect(
+      loopOutline([
+        { x: Number.NaN, y: 0 },
+        { x: 0, y: Number.POSITIVE_INFINITY },
+        { x: 0, y: 0 },
+      ]),
+    ).toEqual([]);
   });
 });

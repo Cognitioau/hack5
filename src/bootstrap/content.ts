@@ -9,6 +9,7 @@ import { CircleGestureTracker, GestureTracker, type GesturePoint } from '../core
 import type { Article } from '../adapters/browser/article';
 import {
   extractCandidate,
+  extractEnclosed,
   extractPage,
   extractSelection,
   isEditable,
@@ -20,6 +21,8 @@ import { currentVideoSeconds, extractYouTubeCandidate } from '../features/youtub
 import { HandView, type StateOptions } from '../ui/hand';
 
 type Phase = 'idle' | 'aiming' | 'arming' | 'armed' | 'saving' | 'saved' | 'error';
+/** How often, at most, an aimed lasso's highlight follows the loop, in milliseconds. */
+const PREVIEW_INTERVAL = 120;
 type SessionWindow = Window & { __zombieHandDispose?: () => void };
 const sessionWindow = window as SessionWindow;
 
@@ -54,6 +57,10 @@ function activate(): () => void {
   let modifier: 'Shift' | 'Control' | null = null;
   let consumedHold = false;
   let circle: CircleGestureTracker | null = null;
+  /** What the loop drawn so far would take, when that was last read, and how long reading took. */
+  let preview: ExtractedCandidate | null = null;
+  let previewAt = Number.NEGATIVE_INFINITY;
+  let previewCost = 0;
   let trail: GesturePoint[] = [];
   let locked: ExtractedCandidate | null = null;
   let token: string | null = null;
@@ -99,7 +106,7 @@ function activate(): () => void {
   };
 
   const idle = (
-    detail = 'Select text and click the hand, or click it with nothing selected to grab the page. Hold Shift or Ctrl and circle a sentence; release early to cancel.',
+    detail = 'Select text and click the hand, or click it with nothing selected to grab the page. Hold Shift or Ctrl and circle what you want; release early to cancel.',
   ): void => {
     if (disposed) return;
     phase = 'idle';
@@ -368,6 +375,18 @@ function activate(): () => void {
   ): ExtractedCandidate | null => {
     const extracted = extractCandidate(document, position, {
       preferSelection,
+      ...(!__CORE_ONLY__ && features.youtube ? { special: extractYouTubeCandidate } : {}),
+    });
+    if (extracted?.candidate.kind === 'image' && !features.images) return null;
+    return extracted;
+  };
+
+  /** What a lasso's loop takes, centred where the loop is. */
+  const enclosedBy = (
+    loop: readonly GesturePoint[],
+    centre: { x: number; y: number },
+  ): ExtractedCandidate | null => {
+    const extracted = extractEnclosed(document, loop, centre, {
       ...(!__CORE_ONLY__ && features.youtube ? { special: extractYouTubeCandidate } : {}),
     });
     if (extracted?.candidate.kind === 'image' && !features.images) return null;
@@ -657,6 +676,9 @@ function activate(): () => void {
     tracker = new GestureTracker(point);
     if (consumedHold) return;
     circle = new CircleGestureTracker();
+    preview = null;
+    previewAt = Number.NEGATIVE_INFINITY;
+    previewCost = 0;
     trail = [];
     phase = 'aiming';
     view.setUndoAvailable(false);
@@ -666,7 +688,7 @@ function activate(): () => void {
     view.setState(
       'armed',
       'Circle the words.',
-      'Close a circle around the passage. Release the key or press Escape to cancel.',
+      'Close a loop around what you want. Release the key or press Escape to cancel.',
     );
     if (pointerKnown) {
       const first = { ...point, at: performance.now() };
@@ -718,7 +740,20 @@ function activate(): () => void {
     view.setTrail(trail);
     const decision = circle.add(point);
     const center = circle.getCenter();
-    const candidate = center ? candidateAt(false, center) : null;
+    // Reading every word in a loop costs more than reading the sentence at a
+    // point, and on a page of many thousands of elements far more, so the
+    // highlight follows the loop a few times a second, never spending more
+    // than a fifth of the time on it. A closed loop is always read afresh.
+    if (
+      decision === 'confirm' ||
+      point.at - previewAt >= Math.max(PREVIEW_INTERVAL, previewCost * 4)
+    ) {
+      const started = performance.now();
+      preview = center ? enclosedBy(circle.getLoop(), center) : null;
+      previewAt = performance.now();
+      previewCost = previewAt - started;
+    }
+    const candidate = preview;
     view.setTarget(
       candidate?.rectangle ?? null,
       candidate?.candidate.text || candidate?.candidate.title || '',
@@ -736,7 +771,7 @@ function activate(): () => void {
       view.setTrail([]);
       if (!candidate) {
         showError(
-          'No capturable passage at the centre of that circle. Try around text, an image or a video. Form fields are excluded.',
+          'Nothing to take inside that loop. Circle text, a picture or a video; form fields are left out.',
         );
         return;
       }

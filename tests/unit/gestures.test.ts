@@ -174,11 +174,22 @@ describe('modifier-held circle geometry', () => {
     expect(trace(points).decisions).toContain('confirm');
   });
 
+  it('confirms a loop wide or tall enough to go round a column of text', () => {
+    const stretched = (across: number, down: number): GesturePoint[] =>
+      orbit().map((point) => ({
+        ...point,
+        x: anchor.x + ((point.x - anchor.x) / 55) * across,
+        y: anchor.y + ((point.y - anchor.y) / 55) * down,
+      }));
+    expect(trace(stretched(400, 180)).decisions).toContain('confirm');
+    expect(trace(stretched(160, 460)).decisions).toContain('confirm');
+  });
+
   it('rejects incomplete arcs, jitter, huge swipes, flat loops and missing arcs', () => {
     const rejected = [
       orbit(1, 55, 0.7),
       orbit(1, 18),
-      orbit(1, 260),
+      orbit(1, 520),
       orbit().map((point) => ({ ...point, y: anchor.y + (point.y - anchor.y) / 4 })),
       orbit().filter((_, index) => index < 19 || index > 43),
     ];
@@ -206,6 +217,30 @@ describe('modifier-held circle geometry', () => {
         ...orbit().map((point) => ({ ...point, at: point.at + 4_001 })),
       ]).decisions,
     ).not.toContain('confirm');
+  });
+
+  it('hands back the whole attempt as its loop, from its first point, thinned when dense', () => {
+    const tracker = new CircleGestureTracker();
+    const dense = Array.from({ length: 721 }, (_, index) => ({
+      x: anchor.x + Math.cos((index / 720) * Math.PI * 2) * 200,
+      y: anchor.y + Math.sin((index / 720) * Math.PI * 2) * 200,
+      at: index * 4,
+    }));
+    const added: GesturePoint[] = [];
+    for (const point of dense) {
+      added.push(point);
+      if (tracker.add(point) === 'confirm') break;
+    }
+    const loop = tracker.getLoop();
+    expect(loop.length).toBeLessThanOrEqual(256);
+    expect(loop[0]).toEqual(dense[0]);
+    expect(loop.at(-1)).toEqual(added.at(-1));
+    // Thinned evenly: no stretch of the loop is lost.
+    const gaps = loop.slice(1).map((point, index) => point.at - (loop[index]?.at ?? 0));
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(4 * 8);
+    const fresh = new CircleGestureTracker();
+    for (const point of orbit().slice(0, 30)) fresh.add(point);
+    expect(fresh.getLoop()).toEqual(orbit().slice(0, 30));
   });
 
   it('ignores malformed and time-reversed input and bounds dense samples', () => {

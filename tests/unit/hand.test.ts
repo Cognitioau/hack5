@@ -207,6 +207,20 @@ describe('target-local hand presentation', () => {
     expect(grab).toHaveBeenCalledOnce();
   });
 
+  it('lights every line a capture carries, up to the most it can carry', () => {
+    const lines = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        x: 40 + (index % 2) * 380,
+        y: 4 + Math.floor(index / 2) * 9,
+        width: 300,
+        height: 8,
+      }));
+    view.setTarget(rectangle, 'Every step of a long list', lines(100));
+    expect(shadow.querySelectorAll('.target')).toHaveLength(100);
+    view.setTarget(rectangle, 'More lines than a capture carries', lines(130));
+    expect(shadow.querySelectorAll('.target')).toHaveLength(128);
+  });
+
   it('renders untrusted snippet copies as text and never alters the source passage', () => {
     const malicious = '<img src=x onerror="alert(1)"> & a source quotation';
     view.setTarget(rectangle, malicious, [

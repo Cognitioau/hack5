@@ -1,0 +1,285 @@
+import { test, expect, type Page } from '@playwright/test';
+import {
+  configureVault,
+  drawCircle,
+  launchExtension,
+  state,
+  wake,
+  type ExtensionFixture,
+} from './helpers/extension-fixture';
+import { startVaultFixture } from './helpers/vault-fixture';
+
+const steps = [
+  'Open the Activity Monitor from the Utilities folder and look for the process named in the warning, then select it and choose Quit from the toolbar.',
+  'Restart the menu bar helper by holding Option while clicking its icon. That resets its preferences but keeps every shortcut you have set up.',
+  'Remove the login item from System Settings under General, then sign out and back in so the change takes effect for every account.',
+];
+const dense = Array.from(
+  { length: 12 },
+  (_, index) =>
+    `Sentence ${index + 1} of the notes talks about camera bundles and the shipping times for most orders.`,
+);
+// Short sentences, where a small circle's rim crosses whole sentences on the lines above and below.
+const terse = Array.from({ length: 30 }, (_, index) =>
+  index % 3 === 0
+    ? `Step ${index + 1} ships.`
+    : index % 3 === 1
+      ? `Step ${index + 1} waits for the lens kit.`
+      : `Step ${index + 1} packs the camera bag and strap.`,
+);
+// Sections sit far apart, so a loop drawn generously round one stays clear of the others.
+const stepsHtml = `<!doctype html><meta charset="utf-8"><title>Stop a stuck helper</title>
+  <style>body { font: 16px/24px sans-serif; margin: 320px 0 400px 180px; width: 640px } section { margin-bottom: 140px } h2 { margin-bottom: 48px }</style>
+  <section><h2 id="heading">What to do if it won't stop</h2>
+  <ol id="steps">${steps.map((step) => `<li>${step}</li>`).join('')}</ol></section>
+  <section><p id="after" style="width: 420px">A paragraph on its own, with a <button>Copy</button> button, <span aria-hidden="true">a hidden aside,</span> and a field: <input value="A form field must never be captured"></p></section>
+  <section><p id="dense">${dense.join(' ')}</p></section>
+  <section><p id="terse">${terse.join(' ')}</p></section>`;
+
+interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * Where the text (or picture) of everything `selector` matches lies on screen,
+ * centred in view. Any scroll ends an aimed lasso, so this waits until the
+ * page has had its scroll event before anything is drawn.
+ */
+async function textBox(page: Page, selector: string): Promise<Box> {
+  return page.evaluate(async (selector) => {
+    // The words' own boxes: a range over a block holding blocks would span their full width.
+    const measure = (): DOMRect[] =>
+      [...document.querySelectorAll(selector)].flatMap((element) => {
+        if (element instanceof HTMLImageElement) return [element.getBoundingClientRect()];
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        const boxes: DOMRect[] = [];
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!node.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          boxes.push(range.getBoundingClientRect());
+        }
+        return boxes;
+      });
+    const union = (boxes: DOMRect[]) => ({
+      left: Math.min(...boxes.map((box) => box.left)),
+      top: Math.min(...boxes.map((box) => box.top)),
+      right: Math.max(...boxes.map((box) => box.right)),
+      bottom: Math.max(...boxes.map((box) => box.bottom)),
+    });
+    const first = measure();
+    if (!first.length) throw new Error(`Nothing matches ${selector}`);
+    const before = union(first);
+    window.scrollBy({
+      top: (before.top + before.bottom) / 2 - innerHeight / 2,
+      behavior: 'instant',
+    });
+    await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    return union(measure());
+  }, selector);
+}
+
+/**
+ * A loop round a box, as a hand draws one: an oval through its corners, a
+ * little outside them, and never so flat that it is no loop at all.
+ */
+async function loopRound(page: Page, box: Box, modifier: 'Shift' | 'Control' = 'Shift') {
+  const center = { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+  const across = ((box.right - box.left) / 2) * Math.SQRT2 + 10;
+  const down = Math.max(((box.bottom - box.top) / 2) * Math.SQRT2 + 10, across / 2.5);
+  await drawCircle(page, center, modifier, 1, { x: across, y: down });
+}
+
+/** The middle of a sentence's longest line, with a line of the same paragraph above and below it. */
+async function aimAt(page: Page, selector: string, sentence: string) {
+  await textBox(page, selector);
+  return page.evaluate(
+    ({ selector, sentence }) => {
+      const text = document.querySelector(selector)?.firstChild as Text;
+      const range = document.createRange();
+      const start = text.data.indexOf(sentence);
+      range.setStart(text, start);
+      range.setEnd(text, start + sentence.length);
+      const [line] = Array.from(range.getClientRects()).sort((a, b) => b.width - a.width);
+      if (!line) throw new Error('Sentence not laid out');
+      const aim = { x: line.left + Math.min(line.width / 2, 120), y: line.top + line.height / 2 };
+      for (const y of [aim.y - line.height, aim.y + line.height])
+        if (document.caretPositionFromPoint(aim.x, y)?.offsetNode !== text)
+          throw new Error('The sentence needs a line of its paragraph above and below');
+      return aim;
+    },
+    { selector, sentence },
+  );
+}
+
+const seen = new Set<string>();
+
+/** The capture just taken, once the vault has it and the hand has settled. */
+async function saved(fixture: ExtensionFixture, page: Page, count: number) {
+  await expect
+    .poll(async () => (await state(fixture)).map((capture) => capture.persistence))
+    .toEqual(Array.from({ length: count }, () => 'saved-vault'));
+  await page.waitForTimeout(2_500);
+  const fresh = (await state(fixture)).filter((capture) => !seen.has(capture.id));
+  expect(fresh).toHaveLength(1);
+  for (const capture of fresh) seen.add(capture.id);
+  return fresh[0];
+}
+
+test('a lasso takes what its loop goes round: steps by their starts, a heading with them, one sentence, never a control', async () => {
+  test.setTimeout(150_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const url = `${vault.origin}/steps`;
+    await fixture.context.route(url, (route) =>
+      route.fulfill({ contentType: 'text/html', body: stepsHtml }),
+    );
+    const page = await fixture.context.newPage();
+    await page.goto(url);
+    await wake(fixture, page);
+
+    // Round the start of each step only, as in a quick loop down a list:
+    // every step is taken, whole and in order, a blank line between them.
+    const list = await textBox(page, '#steps li');
+    await loopRound(page, { ...list, right: list.left + 200 });
+    const byStarts = await saved(fixture, page, 1);
+    expect(byStarts?.candidate).toEqual({
+      kind: 'text',
+      url,
+      title: 'Stop a stuck helper',
+      text: steps.join('\n\n'),
+      context: { heading: "What to do if it won't stop" },
+      passageUrl: `${url}#:~:text=Open%20the%20Activity%20Monitor,effect%20for%20every%20account.`,
+    });
+    const note = vault.files.get(`Zombie Hand/captures/${byStarts?.id}.md`)?.toString() ?? '';
+    for (const step of steps) expect(note).toContain(step);
+
+    // Wider than any loop the lasso closed before: the heading and every step.
+    const section = await textBox(page, '#heading, #steps li');
+    expect(section.right - section.left).toBeGreaterThan(440);
+    await loopRound(page, section, 'Control');
+    expect((await saved(fixture, page, 2))?.candidate.text).toBe(
+      ["What to do if it won't stop", ...steps].join('\n\n'),
+    );
+
+    // A paragraph holding a button, a hidden aside and a form field: only its words.
+    await loopRound(page, await textBox(page, '#after'));
+    expect((await saved(fixture, page, 3))?.candidate.text).toBe(
+      'A paragraph on its own, with a button, and a field:',
+    );
+
+    // A small circle on one sentence of a paragraph, its rim across the lines
+    // above and below: that sentence alone, long or short.
+    await drawCircle(page, await aimAt(page, '#dense', dense[4] ?? ''), 'Shift');
+    expect((await saved(fixture, page, 4))?.candidate.text).toBe(dense[4]);
+    await drawCircle(page, await aimAt(page, '#terse', terse[16] ?? ''), 'Shift');
+    expect((await saved(fixture, page, 5))?.candidate.text).toBe(terse[16]);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+test('a lasso round search results takes each result whole, in order, and nothing beyond them', async () => {
+  test.setTimeout(120_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const url = `${vault.origin}/results`;
+    const result = (id: string, title: string, address: string, snippet: string) =>
+      `<div class="result" id="${id}"><a href="https://${address.split(' ')[0]}/"><h3>${title}</h3></a>
+        <div class="row"><span>https://${address}</span></div>
+        <div style="width: 300px"><span>${snippet}</span></div></div>`;
+    await fixture.context.route(url, (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><meta charset="utf-8"><title>camera bundles - Search</title>
+          <style>body { font: 16px/24px sans-serif; margin: 320px 0 400px 180px } .row { display: flex; gap: 8px } .result { margin-bottom: 28px }</style>
+          <div id="results">${result('one', 'Camera bundles - Example shop', 'shop.example › bundles', 'Explore the camera bundles at the first local store. Free shipping on <em>most</em> orders.')}
+          ${result('two', 'Lens kits - Example shop', 'lens.example › kits', 'Compare lens kits for every camera body. Returns are free for thirty days.')}</div>
+          <div style="margin-top: 160px">More results from shop.example</div>`,
+      }),
+    );
+    const page = await fixture.context.newPage();
+    await page.goto(url);
+    await wake(fixture, page);
+    await loopRound(page, await textBox(page, '.result'));
+    const capture = await saved(fixture, page, 1);
+    expect(capture?.candidate).toMatchObject({
+      kind: 'text',
+      url,
+      text: [
+        'Camera bundles - Example shop',
+        'https://shop.example › bundles',
+        'Explore the camera bundles at the first local store. Free shipping on most orders.',
+        'Lens kits - Example shop',
+        'https://lens.example › kits',
+        'Compare lens kits for every camera body. Returns are free for thirty days.',
+      ].join('\n\n'),
+      passageUrl: `${url}#:~:text=Camera%20bundles%20%2D%20Example,free%20for%20thirty%20days.`,
+    });
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+test('a lasso round a picture takes the picture, and round two the larger', async () => {
+  test.setTimeout(120_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const article = await fixture.context.newPage();
+    await article.goto(`${vault.origin}/article`);
+    await wake(fixture, article);
+    await loopRound(article, await textBox(article, '#fern'));
+    const fern = await saved(fixture, article, 1);
+    expect(fern?.candidate).toMatchObject({
+      kind: 'image',
+      image: { url: `${vault.origin}/fern.png`, alt: 'A synthetic green fern specimen' },
+    });
+
+    // Centred on the gap between them, where there is nothing to take, the
+    // loop holds no words, so it takes the larger picture it goes round.
+    const url = `${vault.origin}/pictures`;
+    await fixture.context.route(url, (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><meta charset="utf-8"><title>Two ferns</title>
+          <style>body { font: 16px/24px sans-serif; margin: 320px 0 400px 180px }</style>
+          <p>Two pictures, far below.</p>
+          <div id="pair" style="display: flex; align-items: center; gap: 140px; margin-top: 200px">
+            <img src="/fern.png" width="90" height="90" alt="A small fern">
+            <img src="/fern.png" width="180" height="140" alt="A large fern"></div>`,
+      }),
+    );
+    const pictures = await fixture.context.newPage();
+    await pictures.goto(url);
+    await wake(fixture, pictures);
+    await textBox(pictures, '#pair img');
+    const pair = await pictures
+      .locator('#pair img')
+      .evaluateAll((images) =>
+        images.map((image) => image.getBoundingClientRect().toJSON() as Box),
+      );
+    const [small, large] = pair;
+    if (!small || !large) throw new Error('Missing pictures');
+    const box = { left: small.left, top: large.top, right: large.right, bottom: large.bottom };
+    const center = { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+    expect(center.x).toBeGreaterThan(small.right);
+    expect(center.x).toBeLessThan(large.left);
+    await loopRound(pictures, box);
+    const larger = await saved(fixture, pictures, 2);
+    expect(larger?.candidate).toMatchObject({ kind: 'image', image: { alt: 'A large fern' } });
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});

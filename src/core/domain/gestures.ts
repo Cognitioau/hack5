@@ -126,6 +126,12 @@ export class GestureTracker {
   }
 }
 
+/**
+ * The widest a lasso's loop may be, across or down: room to go round a column
+ * of text, while a swing of the arm across the whole screen is no loop.
+ */
+const MAX_LOOP_SPAN = 1_000;
+
 interface CircleBounds {
   x: number;
   y: number;
@@ -141,7 +147,7 @@ function circleBounds(points: readonly GesturePoint[]): CircleBounds | null {
   const top = Math.min(...ys);
   const width = Math.max(...xs) - left;
   const height = Math.max(...ys) - top;
-  if (width < 40 || height < 40 || width > 440 || height > 440) return null;
+  if (width < 40 || height < 40 || width > MAX_LOOP_SPAN || height > MAX_LOOP_SPAN) return null;
   return { x: left + width / 2, y: top + height / 2, width, height };
 }
 
@@ -172,7 +178,7 @@ function isClosedOval(points: readonly GesturePoint[], bounds: CircleBounds): bo
   const radiusY = Math.max(...projected.map((point) => Math.abs(point.y)));
   const major = Math.max(radiusX, radiusY);
   const minor = Math.min(radiusX, radiusY);
-  if (minor < 20 || major > 220 || major / minor > 3) return false;
+  if (minor < 20 || major > MAX_LOOP_SPAN / 2 || major / minor > 3) return false;
   const normalized = projected.map((point) => ({
     x: point.x / radiusX,
     y: point.y / radiusY,
@@ -251,6 +257,11 @@ export class CircleGestureTracker {
       return 'cancel';
     }
     return 'none';
+  }
+
+  /** The loop as traced so far, thinned evenly once it is long. */
+  getLoop(): readonly GesturePoint[] {
+    return [...this.points];
   }
 
   /** A provisional preview center; only `confirm` authorizes a completed loop. */
