@@ -25,6 +25,8 @@ export interface ExtractedCandidate {
 }
 
 export interface ExtractionOptions {
+  /** Whether pictures may be taken; without them a lasso centred on one reads the text round it. */
+  images?: boolean;
   preferSelection?: boolean;
   special?: (document: Document, target: Element) => CaptureCandidate | null;
 }
@@ -69,12 +71,35 @@ const LOOSE_INLINE_DISPLAY = /^(?:inline|contents|none|ruby(?:-base|-text)?)$/u;
  * ends the lookup.
  */
 const PAINTING_TAGS = new Set(['audio', 'canvas', 'embed', 'iframe', 'object', 'video']);
+/**
+ * Displays that lay an element out as a block of its own, as text fragments
+ * count them: words either side of one never run together.
+ */
+const BLOCK_DISPLAY = /^(?:block|flow-root|flex|grid|table|list-item)$/u;
+/** What a closed `details` folds away: everything but its summary. */
+const FOLDED_SELECTOR = 'details:not([open]) > :not(summary)';
 const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
 const PARAGRAPH_SELECTOR = 'p,li,blockquote,dd,td,pre,figcaption';
 const MAX_CONTEXT_PARAGRAPH = 1_500;
 /** Headings looked at above a passage, nearest first, past page furniture and hidden ones. */
 const MAX_HEADINGS = 200;
 const MAX_LINKED_DATA = 200_000;
+/** How far apart a lasso looks for text inside its loop, across and down, in pixels. */
+const LASSO_COLUMN = 32;
+const LASSO_ROW = 10;
+/** Pictures are larger than words, so a loop looks for them more sparsely. */
+const LASSO_IMAGE_STEP = 24;
+const MAX_LASSO_LOOKS = 4_000;
+const MAX_LASSO_PASSAGES = 120;
+/** The most words a block may have for a loop to take it whole by its lines' starts. */
+const MAX_LASSO_ITEM_WORDS = 400;
+/** A loop less tall than this many of a block's words is drawn round one of its sentences. */
+const LASSO_SENTENCE_LINES = 7;
+
+/** Candidates read from a live selection, which a lasso centred on it takes as they are. */
+const fromSelection = new WeakSet<ExtractedCandidate>();
+/** The words a sentence candidate was read from, which a lasso centred on them always keeps. */
+const evidenceOf = new WeakMap<ExtractedCandidate, Range>();
 
 interface TextPiece {
   node: Text;
@@ -125,15 +150,27 @@ export function targetRectangle(element: Element, document: Document): TargetRec
   };
 }
 
+/** Clipped to a pixel or less, as `sr-only` and `visually-hidden` classes keep text for screen readers alone. */
+function clippedAway(style: CSSStyleDeclaration): boolean {
+  return (
+    (style.position === 'absolute' || style.position === 'fixed') &&
+    Number.parseFloat(style.width) <= 1 &&
+    Number.parseFloat(style.height) <= 1 &&
+    (style.overflow !== 'visible' || style.clip !== 'auto' || style.clipPath !== 'none')
+  );
+}
+
 function hiddenByPage(element: Element, document: Document): boolean {
   for (let current: Element | null = element; current; current = current.parentElement) {
     const style = document.defaultView?.getComputedStyle(current);
     if (
       current.matches(OMITTED_SELECTOR) ||
+      current.matches(FOLDED_SELECTOR) ||
       style?.display === 'none' ||
       style?.visibility === 'hidden' ||
       style?.visibility === 'collapse' ||
-      style?.opacity === '0'
+      style?.opacity === '0' ||
+      (style && clippedAway(style))
     )
       return true;
   }
@@ -158,7 +195,12 @@ function collectText(
   const boundary = (): void => {
     if (text && !text.endsWith('\n')) text += '\n';
   };
-  const visit = (node: Node): void => {
+  /**
+   * `beside` when the parent lays its children out side by side, as a flex
+   * row or a grid does; `atomic` inside an inline box such as an
+   * `inline-flex` link or an `inline-block` formula.
+   */
+  const visit = (node: Node, beside = false, atomic = false): void => {
     if (invalid) return;
     // Only what is collected counts, so a passage in a huge container still reads.
     if (within && !within.intersectsNode(node)) return;
@@ -208,18 +250,43 @@ function collectText(
       style?.display === 'none' ||
       style?.visibility === 'hidden' ||
       style?.visibility === 'collapse' ||
-      style?.opacity === '0'
+      style?.opacity === '0' ||
+      // A closed `details` shows only its summary, which is a control.
+      (element.tagName === 'DETAILS' && !element.hasAttribute('open'))
     ) {
       boundary();
       return;
     }
+    // Words clipped away for screen readers draw nothing, not even a line
+    // break, so the sentence round them reads on without them.
+    if (style && clippedAway(style)) return;
     const nestedBlock = element !== target && element.matches(BLOCK_SELECTOR);
-    if (element.tagName === 'BR' || nestedBlock) boundary();
+    const display = style?.display ?? '';
+    // Rows laid out as blocks, as `div`s in a list item are, read as lines of
+    // their own. Chrome also reports a float, a positioned box, a flex row's
+    // or a grid's items and a block inside an inline box as blocks, but each
+    // sits within its line, so it reads within it.
+    const laidOut =
+      element !== target &&
+      !nestedBlock &&
+      !beside &&
+      !atomic &&
+      BLOCK_DISPLAY.test(display) &&
+      !/^(?:left|right|inline-start|inline-end)$/u.test(style?.getPropertyValue('float') ?? '') &&
+      !/^(?:absolute|fixed)$/u.test(style?.position ?? '');
+    if (element.tagName === 'BR' || nestedBlock || laidOut) boundary();
     // The normal path captures a sentence in one semantic block. Only explicit
     // selection is allowed to collect multiple blocks.
     if (nestedBlock && !within) return;
-    for (const child of element.childNodes) visit(child);
-    if (nestedBlock) boundary();
+    const sideBySide =
+      display === 'contents'
+        ? beside
+        : /^(?:inline-)?grid$/u.test(display) ||
+          (/^(?:inline-)?flex$/u.test(display) &&
+            !(style?.flexDirection ?? '').startsWith('column'));
+    const inline = atomic || (element !== target && display.startsWith('inline-'));
+    for (const child of element.childNodes) visit(child, sideBySide, inline);
+    if (nestedBlock || laidOut) boundary();
   };
   visit(target);
   return invalid || !pieces.length ? null : { text, pieces };
@@ -335,12 +402,27 @@ function paragraphWindow(block: Element, anchor: Node, loose = false): Set<Node>
   return nodes;
 }
 
-/** The text of a block, or of the paragraph around a node when the block is too large. */
-function blockText(document: Document, block: Element, anchor: Node | null): TextMap | null {
+/** A paragraph window without the text in `skip`, read already, so two windows never share a line. */
+function unread(window: Set<Node>, skip?: ReadonlySet<Node>): Set<Node> {
+  if (skip)
+    for (const node of window) if (node.nodeType === 3 && skip.has(node)) window.delete(node);
+  return window;
+}
+
+/**
+ * The text of a block, or of the paragraph around a node when the block is
+ * too large, less any of it in `skip`.
+ */
+function blockText(
+  document: Document,
+  block: Element,
+  anchor: Node | null,
+  skip?: ReadonlySet<Node>,
+): TextMap | null {
   const whole = collectText(document, block);
   if (whole || !anchor || !block.contains(anchor)) return whole;
   const window = paragraphWindow(block, anchor);
-  return window ? collectText(document, block, undefined, window) : null;
+  return window ? collectText(document, block, undefined, unread(window, skip)) : null;
 }
 
 /**
@@ -348,9 +430,14 @@ function blockText(document: Document, block: Element, anchor: Node | null): Tex
  * as search results and many apps do: the run of text ending at anything laid
  * out as a block, never the block whole, which may hold many such lines.
  */
-function looseText(document: Document, block: Element, anchor: Node | null): TextMap | null {
+function looseText(
+  document: Document,
+  block: Element,
+  anchor: Node | null,
+  skip?: ReadonlySet<Node>,
+): TextMap | null {
   const window = anchor && paragraphWindow(block, anchor, true);
-  return window ? collectText(document, block, undefined, window) : null;
+  return window ? collectText(document, block, undefined, unread(window, skip)) : null;
 }
 
 /** The nearest element holding the target that is laid out on its own, short of the page itself. */
@@ -506,7 +593,7 @@ function selectionCandidate(
   if (span.text.length < 2 || !selectedRange) return null;
   const highlight = selectionHighlight(document, map, targetRectangle(target, document));
   const geometry = textGeometry(document, target, selectedRange);
-  return {
+  const candidate: ExtractedCandidate = {
     candidate: {
       kind: 'text',
       url: pageUrl,
@@ -518,6 +605,8 @@ function selectionCandidate(
     ...geometry,
     ...(highlight.length ? { highlight } : {}),
   };
+  fromSelection.add(candidate);
+  return candidate;
 }
 
 /**
@@ -608,16 +697,28 @@ type PassageDetails = Pick<CaptureCandidate, 'context' | 'passageUrl' | 'byline'
 
 /**
  * A link that opens the page scrolled to the passage, as a text fragment: the
- * whole passage when short, otherwise its first and last four words.
+ * whole passage when short, otherwise its first and last four words. A passage
+ * running over several blocks, which a fragment cannot match in one piece,
+ * starts with the first block's opening words and ends with the last's closing
+ * words, given as `ending`.
  */
-export function passageLink(pageUrl: string, evidence: string): string | undefined {
-  const words = evidence.replace(/…$/u, '').split(/\s+/u).filter(Boolean);
-  if (!words.length) return undefined;
+export function passageLink(
+  pageUrl: string,
+  evidence: string,
+  ending?: string,
+): string | undefined {
+  const wordsOf = (value: string): string[] =>
+    value.replace(/…$/u, '').split(/\s+/u).filter(Boolean);
+  const words = wordsOf(evidence);
+  const last = ending === undefined ? words : wordsOf(ending);
+  if (!words.length || !last.length) return undefined;
   // Dashes and commas are text-directive syntax, so they are escaped too.
   const encode = (part: string[]): string =>
     encodeURIComponent(part.join(' ')).replace(/-/gu, '%2D');
   const directive =
-    words.length <= 8 ? encode(words) : `${encode(words.slice(0, 4))},${encode(words.slice(-4))}`;
+    ending === undefined && words.length <= 8
+      ? encode(words)
+      : `${encode(words.slice(0, 4))},${encode(last.slice(-4))}`;
   const url = new URL(pageUrl);
   const fragment = url.hash.replace(/:~:.*$/u, '');
   url.hash = '';
@@ -772,16 +873,21 @@ export function pageByline(document: Document): Byline | undefined {
   return Object.keys(byline).length ? byline : undefined;
 }
 
-/** What a grabbed passage needs to stand on its own in the vault. */
+/**
+ * What a grabbed passage needs to stand on its own in the vault. A passage
+ * over several blocks links back by `ends`: its first block's text and its
+ * last's, as a text fragment matches each within one block.
+ */
 function passageDetails(
   document: Document,
   pageUrl: string,
   range: Range,
   evidence: string,
+  ends?: readonly [string, string],
 ): PassageDetails {
   const heading = headingBefore(document, range.startContainer);
   const paragraph = paragraphAround(document, range, evidence);
-  const passageUrl = passageLink(pageUrl, evidence);
+  const passageUrl = ends ? passageLink(pageUrl, ends[0], ends[1]) : passageLink(pageUrl, evidence);
   const byline = pageByline(document);
   return {
     ...(heading || paragraph
@@ -842,7 +948,7 @@ function textCandidate(
   // off, so loose text is taken only beside them; checked before the details
   // are read, as this runs on every move of an aimed lasso.
   if (loose && !beside(evidence, point)) return null;
-  return {
+  const candidate: ExtractedCandidate = {
     candidate: {
       kind: 'text',
       url: pageUrl,
@@ -853,6 +959,8 @@ function textCandidate(
     target,
     ...textGeometry(document, target, evidence),
   };
+  evidenceOf.set(candidate, evidence);
+  return candidate;
 }
 
 /** Whether an element draws anything of its own at the point: a fill, a shadow, a blur, text, media or a field. */
@@ -984,6 +1092,691 @@ export function extractCandidate(
 export function extractSelection(document: Document): ExtractedCandidate | null {
   const pageUrl = publicWebUrl(document.location.href, document.location.href);
   return pageUrl ? selectionCandidate(document, { x: 0, y: 0 }, true, pageUrl) : null;
+}
+
+/** Positive when the path a → b → c turns one way, negative the other, zero when straight. */
+const turn = (a: ViewportPoint, b: ViewportPoint, c: ViewportPoint): number =>
+  (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+/**
+ * The convex outline of a lasso's loop: everything the loop goes round, so a
+ * loop left a little open, or begun from its middle, still holds what it
+ * circles. Empty when the points enclose nothing.
+ */
+export function loopOutline(points: readonly ViewportPoint[]): ViewportPoint[] {
+  const sorted = points
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map(({ x, y }) => ({ x, y }))
+    .sort((a, b) => a.x - b.x || a.y - b.y);
+  // Andrew's monotone chain: each half keeps only points where the path turns the same way.
+  const bends = (kept: ViewportPoint[], point: ViewportPoint): boolean => {
+    const last = kept.at(-1);
+    const before = kept.at(-2);
+    return !!last && !!before && turn(before, last, point) <= 0;
+  };
+  const half = (ordered: readonly ViewportPoint[]): ViewportPoint[] => {
+    const kept: ViewportPoint[] = [];
+    for (const point of ordered) {
+      while (bends(kept, point)) kept.pop();
+      kept.push(point);
+    }
+    return kept.slice(0, -1);
+  };
+  const outline = [...half(sorted), ...half([...sorted].reverse())];
+  return outline.length >= 3 ? outline : [];
+}
+
+/** Whether a point lies inside a loop's outline, or on it. */
+export function insideOutline(outline: readonly ViewportPoint[], point: ViewportPoint): boolean {
+  return (
+    outline.length >= 3 &&
+    outline.every(
+      (corner, index) => turn(corner, outline[(index + 1) % outline.length] ?? corner, point) >= 0,
+    )
+  );
+}
+
+/** Where a loop's outline crosses a row of the page, left to right; null when it misses the row. */
+function outlineRow(outline: readonly ViewportPoint[], y: number): [number, number] | null {
+  let from = Number.POSITIVE_INFINITY;
+  let to = Number.NEGATIVE_INFINITY;
+  outline.forEach((a, index) => {
+    const b = outline[(index + 1) % outline.length] ?? a;
+    if (y < Math.min(a.y, b.y) || y > Math.max(a.y, b.y)) return;
+    const xs = a.y === b.y ? [a.x, b.x] : [a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x)];
+    from = Math.min(from, ...xs);
+    to = Math.max(to, ...xs);
+  });
+  return from <= to ? [from, to] : null;
+}
+
+/** A word's box on screen. */
+type WordBox = Pick<DOMRectReadOnly, 'left' | 'top' | 'right' | 'bottom'>;
+
+/**
+ * Whether a loop holds a word, for the sentence it is in. A loop drawn round
+ * a sentence holds it inside its rim; any other loop clear of the rim by half
+ * the word's height, so a rim passing over a line holds none of that line.
+ */
+export function holdsWord(
+  outline: readonly ViewportPoint[],
+  word: WordBox,
+  precise: boolean,
+): boolean {
+  const clear = precise ? 0 : (word.bottom - word.top) / 2;
+  return [
+    { x: word.left - clear, y: word.top - clear },
+    { x: word.right + clear, y: word.top - clear },
+    { x: word.left - clear, y: word.bottom + clear },
+    { x: word.right + clear, y: word.bottom + clear },
+  ].every((corner) => insideOutline(outline, corner));
+}
+
+/**
+ * How many of a sentence's words a loop must hold to take it: every one for
+ * a loop drawn round a sentence, else a quarter of them, two at least.
+ */
+export function wordsToTake(total: number, precise: boolean): number {
+  return precise ? total : Math.min(total, Math.max(2, Math.ceil(total / 4)));
+}
+
+/**
+ * Whether a loop holds the start of a line, given its first word: across the
+ * word's top, middle and bottom the loop reaches back into it, or two lines'
+ * height into a short one, as an oval cutting a column's corners still does
+ * and one whose tip only crosses the line does not.
+ */
+export function holdsLineStart(outline: readonly ViewportPoint[], first: WordBox): boolean {
+  const height = first.bottom - first.top;
+  const reach = first.left + Math.max(first.right - first.left, height * 2);
+  return [first.top, first.top + height / 2, first.bottom].every((y) => {
+    const row = outlineRow(outline, y);
+    return row !== null && row[0] <= reach && row[1] >= first.left;
+  });
+}
+
+/**
+ * The sentences of a text, as spans, ending where sentenceAt ends one: after
+ * a full stop, question or exclamation mark followed by a space, or at a line
+ * break. Every word lies in exactly one.
+ */
+export function sentenceSpans(text: string): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  let start = 0;
+  for (const match of text.matchAll(/[.!?](?=\s|$)|\n/gu)) {
+    const at = match.index ?? 0;
+    const end = match[0] === '\n' ? at : at + 1;
+    if (text.slice(start, end).trim()) spans.push({ start, end });
+    start = at + 1;
+  }
+  if (text.slice(start).trim()) spans.push({ start, end: text.length });
+  return spans;
+}
+
+interface LassoPassage {
+  map: TextMap;
+  block: Element;
+  /** Where the passage starts and ends in its block's text, on whole sentences. */
+  start: number;
+  end: number;
+  /** Whether it holds more than the sentence the loop is centred on. */
+  more: boolean;
+}
+
+type CaretDocument = Document & {
+  caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  caretRangeFromPoint?: (x: number, y: number) => Range | null;
+};
+
+/**
+ * The text a node is read with, as the sentence under the pointer would be:
+ * its block's, or for text set in plain `div`s the paragraph around it. Null
+ * for text the pointer never takes: hidden, editable, a control's, the hand's.
+ * Text in `skip`, read already, is left out of a large block's paragraph.
+ */
+function passageAround(
+  document: Document,
+  node: Text,
+  skip?: ReadonlySet<Node>,
+): { map: TextMap; block: Element } | null {
+  const element = node.parentElement;
+  if (
+    !element ||
+    isEditable(element) ||
+    element.closest(CONTROL_SELECTOR) ||
+    element.closest(OMITTED_SELECTOR)
+  )
+    return null;
+  const block = element.closest(BLOCK_SELECTOR);
+  if (block) {
+    const map = blockText(document, block, node, skip);
+    return map ? { map, block } : null;
+  }
+  const loose = laidOutBlock(document, element);
+  const map = loose && looseText(document, loose, node, skip);
+  return loose && map ? { map, block: loose } : null;
+}
+
+/** Where a piece's node offset falls in its block's text. */
+function pieceOffset(piece: TextPiece, offset: number): number {
+  return piece.start + Math.max(0, Math.min(offset - piece.nodeOffset, piece.end - piece.start));
+}
+
+/** The part of the viewport a loop's outline covers. */
+function outlineBox(document: Document, outline: readonly ViewportPoint[]) {
+  const window = document.defaultView;
+  const xs = outline.map((point) => point.x);
+  const ys = outline.map((point) => point.y);
+  return {
+    left: Math.max(0, Math.min(...xs)),
+    top: Math.max(0, Math.min(...ys)),
+    right: Math.min(window?.innerWidth ?? document.documentElement.clientWidth, Math.max(...xs)),
+    bottom: Math.min(window?.innerHeight ?? document.documentElement.clientHeight, Math.max(...ys)),
+  };
+}
+
+/** Evenly spaced points inside a loop's outline, row by row, at most `limit` of them. */
+function* insidePoints(
+  document: Document,
+  outline: readonly ViewportPoint[],
+  column: number,
+  row: number,
+  limit: number,
+): Generator<ViewportPoint> {
+  const box = outlineBox(document, outline);
+  let looked = 0;
+  for (let y = box.top + row / 2; y < box.bottom; y += row) {
+    const span = outlineRow(outline, y);
+    if (!span) continue;
+    const from = Math.max(box.left, span[0]);
+    const to = Math.min(box.right, span[1]);
+    if (to <= from) continue;
+    const count = Math.max(1, Math.ceil((to - from) / column));
+    for (let index = 0; index < count; index++) {
+      if (looked++ >= limit) return;
+      yield { x: from + ((to - from) * (index + 0.5)) / count, y };
+    }
+  }
+}
+
+/**
+ * The passages a loop holds, in page order, and whether it reached text past
+ * the most blocks it reads. In each block it reaches: every sentence it holds
+ * a quarter of the words of, two at least, and the sentences of what it is
+ * centred on (a sentence, or a link's text); first to last, so nothing between
+ * them drops out. A loop that takes from more than one block, as one drawn
+ * down a list's steps does, takes whole each block whose every line it holds
+ * the start of. A block it holds words of only on one line, in the top or
+ * bottom quarter of its height and away from its centre, is one its rim
+ * crosses: of it, only sentences on lines whose start it holds are taken, so
+ * the bulge of an oval drawn round a column, across the middle of the line
+ * above or below it, takes nothing. A loop holds a line's start when, along
+ * the top, middle and bottom of the line's first word, it reaches back into
+ * that word, as an oval cutting a column's corners still does.
+ * For a sentence, a word is held only clear of the rim by half its height, so
+ * a rim passing over a line takes none of that line. A loop only a few lines
+ * of a block's text tall is drawn round a sentence: beyond the one at its
+ * centre it takes only sentences it holds whole, and a block whole by its
+ * lines' starts only when it encloses most of its words, as a small circle's
+ * rim crosses the lines, and the starts of short blocks, above and below its
+ * sentence, while a loop round a short list holds most of each item.
+ */
+function lassoPassages(
+  document: Document,
+  outline: readonly ViewportPoint[],
+  centre: Range | null,
+): { passages: LassoPassage[]; cut: boolean } {
+  const area = outlineBox(document, outline);
+  const highest = Math.min(...outline.map((point) => point.y));
+  const lowest = Math.max(...outline.map((point) => point.y));
+  const tall = lowest - highest;
+  const seen = new Set<Node>();
+  let cut = false;
+  /** Each block the loop takes from: its sentences, which it holds (alone, and alongside other blocks), and whether it holds every line's start. */
+  const blocks: {
+    map: TextMap;
+    block: Element;
+    sentences: { start: number; end: number }[];
+    centred: Set<number>;
+    taken: Set<number>;
+    alongside: Set<number>;
+    starts: boolean;
+  }[] = [];
+  const read = (node: Node | null | undefined): void => {
+    if (node?.nodeType !== 3 || seen.has(node)) return;
+    // Past the most blocks it reads, a loop reaching more text is cut short.
+    const around = cut ? null : passageAround(document, node as Text, seen);
+    seen.add(node);
+    if (!around) return;
+    if (blocks.length >= MAX_LASSO_PASSAGES) {
+      cut = true;
+      return;
+    }
+    const { map, block } = around;
+    for (const piece of map.pieces) seen.add(piece.node);
+    const sentences = sentenceSpans(map.text);
+    /** The sentence holding a character: the last starting at or before it. */
+    const sentenceOf = (offset: number): number => {
+      let low = 0;
+      let high = sentences.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if ((sentences[middle]?.start ?? 0) <= offset) low = middle + 1;
+        else high = middle;
+      }
+      return low - 1;
+    };
+    const centred = new Set<number>();
+    for (const piece of centre ? map.pieces : []) {
+      if (!centre?.intersectsNode(piece.node)) continue;
+      const from =
+        piece.node === centre.startContainer ? pieceOffset(piece, centre.startOffset) : piece.start;
+      const to =
+        piece.node === centre.endContainer ? pieceOffset(piece, centre.endOffset) : piece.end;
+      if (to > from)
+        sentences.forEach((sentence, index) => {
+          if (sentence.end > from && sentence.start < to) centred.add(index);
+        });
+    }
+    const taken = new Set(centred);
+    /** Whether the loop holds more of this block than words along one line at its rim: words in its middle half, or on two lines. */
+    let across = centred.size > 0;
+    let heldTop = Number.POSITIVE_INFINITY;
+    let heldBottom = Number.NEGATIVE_INFINITY;
+    /** How many words each sentence has, and how many of them the loop holds. */
+    const words = sentences.map(
+      (sentence) => map.text.slice(sentence.start, sentence.end).match(/\S+/gu)?.length ?? 0,
+    );
+    const held = sentences.map(() => 0);
+    // A block the size of a list item or paragraph is read line by line, to
+    // see whether the loop holds the start of every line.
+    const item = words.reduce((sum, count) => sum + count, 0) <= MAX_LASSO_ITEM_WORDS;
+    let lines = 0;
+    let heldStarts = 0;
+    let line: DOMRect | null = null;
+    /** Whether the loop holds the start of the line being read, and the sentences on such lines. */
+    let lineHeld = false;
+    /** For a loop drawn round a sentence, how many of the block's words it encloses, of how many. */
+    let enclosed = 0;
+    let seenWords = 0;
+    const lined = new Set<number>();
+    /** Whether the loop is drawn round a sentence of this block's text, judged by its first word. */
+    let precise: boolean | null = null;
+    const range = document.createRange();
+    if (typeof range.getClientRects !== 'function') return;
+    for (const piece of map.pieces) {
+      range.setStart(piece.node, piece.nodeOffset);
+      range.setEnd(piece.node, piece.nodeOffset + piece.end - piece.start);
+      const reaches = Array.from(range.getClientRects()).some(
+        (box) =>
+          box.width > 0 &&
+          box.height > 0 &&
+          box.right > area.left &&
+          box.left < area.right &&
+          box.bottom > area.top &&
+          box.top < area.bottom,
+      );
+      if (!reaches && !item) continue;
+      for (const word of map.text.slice(piece.start, piece.end).matchAll(/\S+/gu)) {
+        const start = piece.start + (word.index ?? 0);
+        const index = sentenceOf(start);
+        if (index < 0 || (!item && across && taken.has(index))) continue;
+        const offset = piece.nodeOffset + start - piece.start;
+        range.setStart(piece.node, offset);
+        range.setEnd(piece.node, offset + word[0].length);
+        const bounds = range.getBoundingClientRect();
+        if (!(bounds.width > 0 && bounds.height > 0)) continue;
+        // A word half a line below the one before it starts a new line.
+        if (!line || bounds.top >= line.top + line.height / 2) {
+          lines += 1;
+          lineHeld = reaches && holdsLineStart(outline, bounds);
+          if (lineHeld) heldStarts += 1;
+        }
+        line = bounds;
+        if (lineHeld) lined.add(index);
+        precise ??= tall < LASSO_SENTENCE_LINES * bounds.height;
+        if (precise) {
+          seenWords += 1;
+          if (reaches && holdsWord(outline, bounds, true)) enclosed += 1;
+        }
+        const settled = taken.has(index);
+        if (!reaches || (settled && across) || !holdsWord(outline, bounds, precise)) continue;
+        if (!across) {
+          heldTop = Math.min(heldTop, bounds.top);
+          heldBottom = Math.max(heldBottom, bounds.bottom);
+          const middle = (bounds.top + bounds.bottom) / 2;
+          across =
+            (middle > highest + tall / 4 && middle < lowest - tall / 4) ||
+            heldBottom - heldTop > bounds.height * 1.5;
+        }
+        if (settled) continue;
+        const count = (held[index] ?? 0) + 1;
+        held[index] = count;
+        const total = words[index] ?? 1;
+        if (count >= wordsToTake(total, precise)) taken.add(index);
+      }
+    }
+    const starts =
+      item && lines > 0 && heldStarts === lines && (!precise || enclosed * 2 > seenWords);
+    // Of a block its rim only crosses, a loop takes alongside other blocks
+    // only sentences on lines whose start it holds.
+    const alongside = across ? taken : new Set([...taken].filter((index) => lined.has(index)));
+    if (taken.size || starts)
+      blocks.push({ map, block, sentences, centred, taken, alongside, starts });
+  };
+  if (centre) {
+    // The centre's own passages are read first, whatever the loop's looks find.
+    const walker = document.createTreeWalker(centre.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+    for (
+      let node: Node | null = walker.currentNode, looked = 0;
+      node && looked < MAX_SOURCE_NODES;
+      node = walker.nextNode(), looked++
+    )
+      if (centre.intersectsNode(node)) read(node);
+  }
+  const caret = document as CaretDocument;
+  for (const { x, y } of insidePoints(
+    document,
+    outline,
+    LASSO_COLUMN,
+    LASSO_ROW,
+    MAX_LASSO_LOOKS,
+  )) {
+    const position = caret.caretPositionFromPoint?.(x, y);
+    read(position ? position.offsetNode : caret.caretRangeFromPoint?.(x, y)?.startContainer);
+  }
+  const region = blocks.length > 1;
+  const passages: LassoPassage[] = [];
+  for (const { map, block, sentences, centred, taken, alongside, starts } of blocks) {
+    const chosen = !region ? taken : starts ? new Set(sentences.keys()) : alongside;
+    const first = sentences[Math.min(...chosen)];
+    const last = sentences[Math.max(...chosen)];
+    const more = [...chosen].some((index) => !centred.has(index));
+    if (first && last) passages.push({ map, block, start: first.start, end: last.end, more });
+  }
+  const startOf = (passage: LassoPassage): Node =>
+    passage.map.pieces.find((piece) => piece.end > passage.start)?.node ?? passage.block;
+  passages.sort((a, b) => {
+    const first = startOf(a);
+    const second = startOf(b);
+    if (first === second) return a.start - b.start;
+    return first.compareDocumentPosition(second) & first.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+  return { passages, cut };
+}
+
+/**
+ * A point on the largest picture a loop mostly goes round, at least as large
+ * as a line of text, for a loop that holds no text.
+ */
+function lassoImage(document: Document, outline: readonly ViewportPoint[]): ViewportPoint | null {
+  const seen = new Set<Element>();
+  let best: { point: ViewportPoint; area: number } | null = null;
+  for (const point of insidePoints(
+    document,
+    outline,
+    LASSO_IMAGE_STEP,
+    LASSO_IMAGE_STEP,
+    MAX_LASSO_LOOKS,
+  )) {
+    const image = imageBeneath(document, point);
+    if (!image || seen.has(image)) continue;
+    seen.add(image);
+    const bounds = image.getBoundingClientRect();
+    if (bounds.width < 24 || bounds.height < 24) continue;
+    // Mostly inside: over half of a grid laid across it.
+    let inside = 0;
+    for (let row = 0; row < 5; row++)
+      for (let column = 0; column < 5; column++)
+        if (
+          insideOutline(outline, {
+            x: bounds.left + (bounds.width * (column + 0.5)) / 5,
+            y: bounds.top + (bounds.height * (row + 0.5)) / 5,
+          })
+        )
+          inside += 1;
+    const area = bounds.width * bounds.height;
+    if (inside > 12 && (!best || area > best.area)) best = { point, area };
+  }
+  return best?.point ?? null;
+}
+
+/** The most boxes a lasso's highlight is drawn with, as many as the hand draws. */
+const MAX_HIGHLIGHT_BOXES = 128;
+
+/**
+ * Fragments of one line, such as bold words and links, as one box per line;
+ * `across` joins every box of a row, however far apart, as the columns of a
+ * table's row.
+ */
+function lineBoxes(rectangles: readonly TargetRectangle[], across = false): TargetRectangle[] {
+  // A raised note can start a line's box away from its first words, so the
+  // boxes are joined again until no two of one line are left apart.
+  let lines = joinLines(rectangles, across);
+  for (let joined = joinLines(lines, across); joined.length < lines.length; ) {
+    lines = joined;
+    joined = joinLines(lines, across);
+  }
+  return lines;
+}
+
+function joinLines(rectangles: readonly TargetRectangle[], across: boolean): TargetRectangle[] {
+  const lines: TargetRectangle[] = [];
+  for (const box of [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const line = lines.find((other) => {
+      const overlap =
+        Math.min(other.y + other.height, box.y + box.height) - Math.max(other.y, box.y);
+      const shorter = Math.min(other.height, box.height);
+      const gap = Math.max(other.x, box.x) - Math.min(other.x + other.width, box.x + box.width);
+      return overlap > shorter / 2 && (across || gap <= shorter);
+    });
+    if (!line) {
+      lines.push({ ...box });
+      continue;
+    }
+    const right = Math.max(line.x + line.width, box.x + box.width);
+    const bottom = Math.max(line.y + line.height, box.y + box.height);
+    line.x = Math.min(line.x, box.x);
+    line.y = Math.min(line.y, box.y);
+    line.width = right - line.x;
+    line.height = bottom - line.y;
+  }
+  return lines;
+}
+
+/**
+ * A passage's words in the viewport, as boxes read one text node at a time,
+ * so the boxes of the links and notes round them never crowd them out.
+ */
+function passageBoxes(
+  document: Document,
+  map: TextMap,
+  span: TextSpan,
+  fallback: TargetRectangle,
+): TargetRectangle[] {
+  const boxes: TargetRectangle[] = [];
+  const range = document.createRange();
+  if (typeof range.getClientRects !== 'function') return boxes;
+  for (const piece of map.pieces) {
+    if (piece.end <= span.start || piece.start >= span.end) continue;
+    range.setStart(piece.node, piece.nodeOffset + Math.max(0, span.start - piece.start));
+    range.setEnd(piece.node, piece.nodeOffset + Math.min(piece.end, span.end) - piece.start);
+    for (const box of range.getClientRects())
+      if (
+        [box.x, box.y, box.width, box.height].every(Number.isFinite) &&
+        box.width > 0 &&
+        box.height > 0 &&
+        box.right > 0 &&
+        box.bottom > 0 &&
+        box.left < fallback.viewportWidth &&
+        box.top < fallback.viewportHeight
+      )
+        boxes.push({ ...fallback, x: box.x, y: box.y, width: box.width, height: box.height });
+  }
+  return boxes;
+}
+
+/**
+ * A passage's first or last line holding words, as a text fragment matches
+ * each of its ends within one line: of a block, or of code, whose lone
+ * closing brace would match the first brace after the start.
+ */
+function passageEnd(map: TextMap, span: TextSpan, last: boolean): TextSpan {
+  const lines: { start: number; end: number }[] = [];
+  let from = span.start;
+  for (let index = span.start; index <= span.end; index += 1)
+    if (index === span.end || map.text[index] === '\n') {
+      lines.push({ start: from, end: index });
+      from = index + 1;
+    }
+  const worded = lines.filter((line) => /[\p{L}\p{N}]/u.test(map.text.slice(line.start, line.end)));
+  const line = (last ? worded.at(-1) : worded[0]) ?? { start: span.start, end: span.end };
+  return boundedSpan(map.text, line.start, line.end, Number.POSITIVE_INFINITY);
+}
+
+/**
+ * One text capture of a loop's passages, a blank line between them, as a
+ * whole-page excerpt joins its paragraphs; `cut` when the loop reached more
+ * than was read.
+ */
+function lassoCandidate(
+  document: Document,
+  pageUrl: string,
+  passages: readonly LassoPassage[],
+  cut = false,
+): ExtractedCandidate | null {
+  const parts: string[] = [];
+  const read: { range: Range; block: Element; map: TextMap; span: TextSpan }[] = [];
+  let truncated = cut;
+  for (const passage of passages) {
+    const room = MAX_TEXT - parts.reduce((sum, part) => sum + part.length + 2, 0);
+    const whole = boundedSpan(
+      passage.map.text,
+      passage.start,
+      passage.end,
+      Number.POSITIVE_INFINITY,
+    );
+    const span =
+      whole.text.length > room
+        ? boundedSpan(passage.map.text, passage.start, passage.end, room)
+        : whole;
+    const range = span.text.length >= 2 ? mappedRange(document, passage.map, span) : null;
+    if (range) {
+      parts.push(span.text);
+      read.push({ range, block: passage.block, map: passage.map, span });
+    }
+    if (span !== whole) {
+      truncated = true;
+      break;
+    }
+  }
+  const first = read[0];
+  const last = read.at(-1);
+  if (!first || !last) return null;
+  const text = parts.join('\n\n');
+  const rectangles: TargetRectangle[] = [];
+  let left = Number.POSITIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+  for (const { range, block, map, span } of read) {
+    const fallback = targetRectangle(block, document);
+    rectangles.push(...passageBoxes(document, map, span, fallback));
+    const bounds = range.getBoundingClientRect();
+    const box =
+      [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) &&
+      bounds.width > 0 &&
+      bounds.height > 0
+        ? bounds
+        : fallback;
+    left = Math.min(left, box.x);
+    top = Math.min(top, box.y);
+    right = Math.max(right, box.x + box.width);
+    bottom = Math.max(bottom, box.y + box.height);
+  }
+  const whole = document.createRange();
+  whole.setStart(first.range.startContainer, first.range.startOffset);
+  whole.setEnd(last.range.endContainer, last.range.endOffset);
+  // Lines past what the hand draws join into rows, so none drops out of the highlight.
+  let lines = lineBoxes(rectangles);
+  if (lines.length > MAX_HIGHLIGHT_BOXES) lines = lineBoxes(lines, true);
+  lines = lines.slice(0, MAX_HIGHLIGHT_BOXES);
+  // One run of text links back as a sentence does; more, by their first and last runs.
+  const opening = passageEnd(first.map, first.span, false);
+  const closing = passageEnd(last.map, last.span, true);
+  const ends: [string, string] | undefined =
+    read.length > 1 || opening.start !== first.span.start || opening.end !== last.span.end
+      ? [opening.text, closing.text]
+      : undefined;
+  return {
+    candidate: {
+      kind: 'text',
+      url: pageUrl,
+      title: cleanText(document.title || text, 300),
+      text,
+      ...passageDetails(document, pageUrl, whole, text, ends),
+      ...(truncated ? { truncated: true as const } : {}),
+    },
+    target: first.block,
+    rectangle: {
+      ...targetRectangle(first.block, document),
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top,
+    },
+    ...(lines.length ? { rectangles: lines } : {}),
+  };
+}
+
+/**
+ * What a lasso's loop takes. A picture, video or live selection at its centre
+ * is taken as itself. Otherwise every sentence with a whole word inside the
+ * loop, whole, in page order with a blank line between passages, the sentence
+ * at its centre always among them; a loop holding no more than the sentence
+ * or link at its centre takes just that, as the pointer would, and one holding
+ * no text takes the picture it goes round.
+ */
+export function extractEnclosed(
+  document: Document,
+  loop: readonly ViewportPoint[],
+  centre: ViewportPoint,
+  options: ExtractionOptions = {},
+): ExtractedCandidate | null {
+  const found = extractCandidate(document, centre, options);
+  const pictures = options.images !== false;
+  // Without pictures, a loop centred on one reads the text round it.
+  const centred = found?.candidate.kind === 'image' && !pictures ? null : found;
+  const pageUrl = publicWebUrl(document.location.href, document.location.href);
+  const outline = loopOutline(loop);
+  if (!pageUrl || !outline.length) return centred;
+  if (
+    centred &&
+    (fromSelection.has(centred) || !['text', 'link', 'file'].includes(centred.candidate.kind))
+  )
+    return centred;
+  let held: Range | null = null;
+  if (centred?.candidate.kind === 'text') held = evidenceOf.get(centred) ?? null;
+  else if (centred) {
+    held = document.createRange();
+    held.selectNodeContents(centred.target);
+  }
+  const { passages, cut } = lassoPassages(document, outline, held);
+  if (!passages.length) {
+    if (centred || !pictures) return centred;
+    const point = lassoImage(document, outline);
+    const image = point && extractCandidate(document, point, options);
+    return image && image.candidate.kind === 'image' ? image : null;
+  }
+  if (centred && !cut && passages.every((passage) => !passage.more)) return centred;
+  const enclosed = lassoCandidate(document, pageUrl, passages, cut);
+  // However its block is read, the sentence at the centre is never lost.
+  if (
+    centred?.candidate.kind === 'text' &&
+    !enclosed?.candidate.text.includes(centred.candidate.text)
+  )
+    return centred;
+  return enclosed ?? centred;
 }
 
 /**

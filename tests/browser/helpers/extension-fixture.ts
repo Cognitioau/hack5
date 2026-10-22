@@ -253,18 +253,21 @@ export async function captureAt(
 }
 
 /** Trusted hardware-style input. Start on the rim, with no dwell or mouse drag. */
+/** Trace a loop round `center`: a 52 px circle, or an oval with the given radii across and down. */
 export async function drawCircle(
   page: Page,
   center: { x: number; y: number },
   modifier: 'Shift' | 'Control' | null,
   portion = 1,
+  radius: number | { x: number; y: number } = 52,
 ): Promise<void> {
-  await page.mouse.move(center.x + 52, center.y);
+  const { x: across, y: down } = typeof radius === 'number' ? { x: radius, y: radius } : radius;
+  await page.mouse.move(center.x + across, center.y);
   if (modifier) await page.keyboard.down(modifier);
   try {
     for (let step = 1; step <= 64 * portion; step++) {
       const angle = (step / 64) * Math.PI * 2;
-      await page.mouse.move(center.x + Math.cos(angle) * 52, center.y + Math.sin(angle) * 52);
+      await page.mouse.move(center.x + Math.cos(angle) * across, center.y + Math.sin(angle) * down);
       await page.waitForTimeout(6);
     }
   } finally {

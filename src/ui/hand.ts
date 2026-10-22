@@ -286,7 +286,8 @@ export class HandView {
     this.targets.hidden = rectangle === null || presentation.kind === 'page';
     if (rectangle) {
       const targetRectangles = rectangles?.length ? rectangles : [rectangle];
-      for (const area of presentation.kind === 'page' ? [] : targetRectangles.slice(0, 64)) {
+      // As many lines as a capture carries, so a loop round a column lights every line it takes.
+      for (const area of presentation.kind === 'page' ? [] : targetRectangles.slice(0, 128)) {
         if (![area.x, area.y, area.width, area.height].every(Number.isFinite)) continue;
         const left = Math.max(0, area.x - 2);
         const top = Math.max(0, area.y - 1);

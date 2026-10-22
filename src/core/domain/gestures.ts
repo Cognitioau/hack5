@@ -126,6 +126,35 @@ export class GestureTracker {
   }
 }
 
+/**
+ * The widest a lasso's loop may be, across or down: room to go round a column
+ * of text, while a swing of the arm across the whole screen is no loop.
+ */
+const MAX_LOOP_SPAN = 1_000;
+/** A gap this long between a pointer's moves, in milliseconds, is the page being busy. */
+const STALL = 40;
+
+/**
+ * The moves Chrome merged into a pointer event, to trace before its own point,
+ * when the time since the last point traced is a stall: while a page is busy,
+ * as when a loop's highlight is being read, Chrome merges the moves made
+ * meanwhile into one event, and without them a loop drawn then jumps. Only
+ * moves between the last point and the event's own count, oldest first; an
+ * event after no stall adds none.
+ */
+export function stalledMoves(
+  merged: readonly GesturePoint[],
+  after: number,
+  at: number,
+): GesturePoint[] {
+  if (at - after < STALL) return [];
+  return merged
+    .filter(
+      (move) => [move.x, move.y, move.at].every(Number.isFinite) && move.at > after && move.at < at,
+    )
+    .sort((a, b) => a.at - b.at);
+}
+
 interface CircleBounds {
   x: number;
   y: number;
@@ -141,7 +170,7 @@ function circleBounds(points: readonly GesturePoint[]): CircleBounds | null {
   const top = Math.min(...ys);
   const width = Math.max(...xs) - left;
   const height = Math.max(...ys) - top;
-  if (width < 40 || height < 40 || width > 440 || height > 440) return null;
+  if (width < 40 || height < 40 || width > MAX_LOOP_SPAN || height > MAX_LOOP_SPAN) return null;
   return { x: left + width / 2, y: top + height / 2, width, height };
 }
 
@@ -172,7 +201,7 @@ function isClosedOval(points: readonly GesturePoint[], bounds: CircleBounds): bo
   const radiusY = Math.max(...projected.map((point) => Math.abs(point.y)));
   const major = Math.max(radiusX, radiusY);
   const minor = Math.min(radiusX, radiusY);
-  if (minor < 20 || major > 220 || major / minor > 3) return false;
+  if (minor < 20 || major > MAX_LOOP_SPAN / 2 || major / minor > 3) return false;
   const normalized = projected.map((point) => ({
     x: point.x / radiusX,
     y: point.y / radiusY,
@@ -251,6 +280,11 @@ export class CircleGestureTracker {
       return 'cancel';
     }
     return 'none';
+  }
+
+  /** The loop as traced so far, thinned by halves once it is long, its oldest stretches sparsest. */
+  getLoop(): readonly GesturePoint[] {
+    return [...this.points];
   }
 
   /** A provisional preview center; only `confirm` authorizes a completed loop. */
