@@ -24,6 +24,14 @@ function fixture(html: string, selector: string): void {
   Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => target });
 }
 
+/** Chrome's caret at the pointer: in the `at`th child of the element `selector` finds. */
+function caret(selector: string, offset: number, at = 0): void {
+  Object.defineProperty(document, 'caretPositionFromPoint', {
+    configurable: true,
+    value: () => ({ offsetNode: document.querySelector(selector)?.childNodes[at], offset }),
+  });
+}
+
 beforeEach(() => {
   document.title = 'Synthetic public article';
   document.getSelection()?.removeAllRanges();
@@ -148,8 +156,6 @@ describe('bounded untrusted page extraction', () => {
   });
 
   it.each([
-    '<div id="control">A generic container is not a text target.</div>',
-    '<div><span id="control">Neither is an unscoped inline fragment.</span></div>',
     '<button><span id="control">Submit something</span></button>',
     '<a id="control" href="/action" role="button">Run an action</a>',
     '<details><summary id="control">Open a panel</summary></details>',
@@ -584,6 +590,88 @@ describe('bounded untrusted page extraction', () => {
       value: () => ({ offsetNode: words, offset: 30 }),
     });
     expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe('second line here');
+  });
+
+  it('takes the sentence at the pointer from text set in plain divs and spans, as search results are', () => {
+    fixture(
+      '<div id="result"><div><span>https://shop.example › bundles</span></div><div id="snippet"><span>Explore the camera bundles at the first local store. Free shipping on most orders.</span></div><div><div id="label">What customers love</div><div id="love">Customers praise the fast shipping. Staff are <em>helpful</em> and kind.</div></div></div>',
+      '#snippet span',
+    );
+    caret('#snippet span', 10);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate).toMatchObject({
+      kind: 'text',
+      url: 'https://example.org/article',
+      text: 'Explore the camera bundles at the first local store.',
+    });
+    // A line laid out as a block is its own paragraph, never run into the next.
+    target = document.querySelector('#label') as Element;
+    caret('#label', 4);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'What customers love',
+    );
+    target = document.querySelector('#love') as Element;
+    caret('#love', 4, 2);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Staff are helpful and kind.',
+    );
+    // Between the lines of a result, the pointer is over the result, and the
+    // caret Chrome gives is in the line it lies nearest.
+    target = document.querySelector('#result') as Element;
+    caret('#love', 4);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Customers praise the fast shipping.',
+    );
+  });
+
+  it('reads a chip or card set inline as a box of its own, never run into the next', () => {
+    fixture(
+      '<div id="row"><span id="weather" style="display: inline-block">Weather today in Paris</span><span id="flights" style="display: inline-flex">Sponsored cheap flights to Rome</span><span style="display: inline-grid">Your account settings</span></div>',
+      '#weather',
+    );
+    caret('#weather', 4);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Weather today in Paris',
+    );
+    target = document.querySelector('#row') as Element;
+    caret('#flights', 4);
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Sponsored cheap flights to Rome',
+    );
+  });
+
+  it('still slips off plain text when no caret lies under the pointer, or its lines lie far off', () => {
+    fixture('<div id="here"></div><div id="there">Text somewhere else entirely.</div>', '#here');
+    // No caret, as over an empty box or text with no caret given.
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    target = document.querySelector('#there') as Element;
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    // A caret Chrome put in a different block.
+    target = document.querySelector('#here') as Element;
+    caret('#there', 4);
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+    // Over the empty end of a box holding text, Chrome still gives a caret in its
+    // nearest line, which lies well away from the pointer.
+    target = document.querySelector('#there') as Element;
+    expect(extractCandidate(document, { x: 80, y: 60 })?.candidate.text).toBe(
+      'Text somewhere else entirely.',
+    );
+    expect(extractCandidate(document, { x: 80, y: 400 })).toBeNull();
+    // The page itself is never the passage.
+    target = document.body;
+    expect(extractCandidate(document, { x: 80, y: 60 })).toBeNull();
+  });
+
+  it('takes plain text beside any of its lines, however many boxes an inline-heavy sentence draws', () => {
+    fixture('<div id="text">Every word of this sentence sits in a box of its own.</div>', '#text');
+    caret('#text', 4);
+    const boxes = Array.from({ length: 150 }, (_, index) => new DOMRect(600, index * 5, 10, 4));
+    vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([
+      ...boxes,
+      new DOMRect(60, 390, 50, 20),
+    ] as unknown as DOMRectList);
+    expect(extractCandidate(document, { x: 80, y: 400 })?.candidate.text).toBe(
+      'Every word of this sentence sits in a box of its own.',
+    );
   });
 
   it('resolves safe links and refuses executable or credential-bearing destinations', () => {
