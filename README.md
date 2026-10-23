@@ -4,6 +4,15 @@ A Chrome extension for Hackyard Yard 5. Hold Ctrl and circle a passage to captur
 
 **Status: working development build, with automated browser tests and a separate live Obsidian integration check.** See [current evidence](docs/STATUS.md). Broad website coverage and an installed Chrome-to-Obsidian rehearsal are still unverified. Gaze, measured once on a person, is shelved.
 
+## Try it in two minutes
+
+1. Download [`zombie-brain.zip`](https://github.com/Cognitioau/hack5/releases/latest/download/zombie-brain.zip) and unzip it.
+2. Open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked** and pick the unzipped folder.
+3. Pin Zombie Brain, click it, choose **Turn on everywhere** and allow Chrome's prompt.
+4. On any page, hold **Ctrl** and circle a passage, or press **Shift+Z** for the whole page. With no vault, grabs are kept on this device; open **Graveyard** from the toolbar popup to see and search them.
+
+To bury them in Obsidian as well, install and enable the [Local REST API plugin](https://github.com/coddingtonbear/obsidian-local-rest-api), switch on its HTTP server, and paste its API key into the extension's **Settings**. Grabs kept so far follow. The steps below build from source.
+
 ## Run it
 
 Use Node **24.22.0** and npm **11.19.1**. From this repository:

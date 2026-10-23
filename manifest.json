@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Zombie Brain",
   "description": "Deliberately capture a thought, bury it in Obsidian, and recall it locally.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minimum_chrome_version": "120",
   "permissions": ["activeTab", "scripting", "storage", "alarms"],
   "optional_host_permissions": ["<all_urls>"],
