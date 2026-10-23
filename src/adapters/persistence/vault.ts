@@ -385,8 +385,9 @@ function resultFromError(error: unknown): VaultSaveResult {
 /**
  * Why a read got no answer, naming the endpoint. Chrome hides the network error from the page,
  * so a connection it refuses is told apart only from a timeout, a cancel, and a reply that broke
- * off. Over HTTPS the refusal is most often the plugin's self-signed certificate, which Chrome
- * rejects until the Mac trusts it; the plugin's HTTP server needs no certificate.
+ * off. Fetch rejects a refusal with a TypeError and a cancel with its signal's reason. Over HTTPS
+ * the refusal is most often the plugin's self-signed certificate, which Chrome rejects until the
+ * computer trusts it; the plugin's HTTP server needs no certificate.
  */
 function readFailure(
   endpoint: string,
@@ -397,7 +398,7 @@ function readFailure(
 ): string {
   if (timedOut && !answered)
     return `The vault at ${endpoint} did not answer within ${timeoutMs / 1000} seconds. Check Obsidian is open and responding.`;
-  if (answered || timedOut || (error instanceof DOMException && error.name === 'AbortError'))
+  if (answered || !(error instanceof TypeError))
     return 'The vault could not be read. Check its connection, certificate and permission.';
   return endpoint.startsWith('https:')
     ? `Chrome could not connect to ${endpoint}. If Obsidian is open, Chrome is refusing the plugin’s self-signed certificate. Turn on the plugin’s non-encrypted (HTTP) server, then use http://127.0.0.1:27123 with “Use HTTP for this numeric loopback endpoint only” ticked.`

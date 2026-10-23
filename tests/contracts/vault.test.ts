@@ -974,13 +974,15 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     const refused = vi.fn<typeof fetch>(async () => {
       throw new TypeError('Failed to fetch');
     });
-    /** A request that waits until it is aborted, as one to a vault that never answers. */
+    /**
+     * A request that waits until it is aborted, as one to a vault that never answers. Like
+     * fetch, it rejects with the signal's reason: an AbortError unless the abort gave another.
+     */
     const hanging = vi.fn<typeof fetch>(
       (_input, init) =>
         new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () =>
-            reject(new DOMException('The operation was aborted.', 'AbortError')),
-          );
+          const signal = init?.signal;
+          signal?.addEventListener('abort', () => reject(signal.reason));
         }),
     );
     const generic =
@@ -998,7 +1000,7 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
       });
       // The status line beside Save shows at most 300 characters of it, from the longest endpoint.
       const longest = await createVaultClient(
-        { ...vault.config(), endpoint: 'https://[::1]:65535', allowInsecureLoopback: false },
+        { ...vault.config(), endpoint: 'https://127.0.0.1:65535', allowInsecureLoopback: false },
         { fetch: refused },
       ).probe();
       expect(longest.message.length).toBeLessThanOrEqual(300);
@@ -1049,6 +1051,18 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
       ).probe();
       background.abort();
       expect((await viaBackground).message).toBe(generic);
+      // Nor one the background cancels with a reason of its own: its signal reaches fetch
+      // directly, and fetch rejects with that reason in place of an AbortError.
+      const reasoned = new AbortController();
+      const withReason = createVaultClient(vault.config(), {
+        fetch: (input, init) =>
+          hanging(input, {
+            ...init,
+            signal: AbortSignal.any([reasoned.signal, ...(init?.signal ? [init.signal] : [])]),
+          }),
+      }).probe();
+      reasoned.abort(new Error('Settings changed.'));
+      expect((await withReason).message).toBe(generic);
     });
 
     it('keeps the general words for a connection that breaks after the vault answered', async () => {
