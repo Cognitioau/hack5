@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { type AddressInfo, connect, createServer, type Socket } from 'node:net';
 import { expect, test, type Page } from '@playwright/test';
 import type { AppResponse } from '../../src/core/contracts/index';
@@ -589,7 +590,11 @@ test('the graveyard’s export notice is a success, and goes after its time', as
     const toast = graveyard.locator('#message');
     const download = graveyard.waitForEvent('download');
     await graveyard.locator('#export').click();
-    expect((await download).suggestedFilename()).toBe('zombie-brain-captures.json');
+    const file = await download;
+    expect(file.suggestedFilename()).toBe('zombie-brain-captures.json');
+    // The format keeps its name from before the product was named Zombie Brain.
+    const exported = JSON.parse(await readFile(await file.path(), 'utf8')) as { format?: unknown };
+    expect(exported.format).toBe('zombie-hand-export');
     await expect(toast).toHaveText(/^Exported original records and attachment bytes\./);
     await expect(toast).toHaveClass(/\bsuccess\b/);
     await expect(toast).toBeHidden({ timeout: 8_000 });
