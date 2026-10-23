@@ -43,6 +43,26 @@ async function scrollTo(page: Page, top: number): Promise<void> {
   await page.evaluate((y) => window.scrollTo({ top: y, behavior: 'instant' }), top);
 }
 
+/**
+ * Sets Zombie Hand's site access as a person does in chrome://extensions, through the call
+ * that page makes. The test copy's loopback grant is a required permission, which
+ * chrome.permissions.remove refuses.
+ */
+async function siteAccessControl(fixture: ExtensionFixture) {
+  const manager = await fixture.context.newPage();
+  await manager.goto(`chrome://extensions/?id=${fixture.id}`);
+  return (hostAccess: 'ON_CLICK' | 'ON_ALL_SITES') =>
+    manager.evaluate(
+      ([extensionId, access]) =>
+        (
+          chrome as unknown as {
+            developerPrivate: { updateExtensionConfiguration(update: object): Promise<void> };
+          }
+        ).developerPrivate.updateExtensionConfiguration({ extensionId, hostAccess: access }),
+      [fixture.id, hostAccess] as const,
+    );
+}
+
 /** The element's whole box lies inside the viewport. */
 async function whollyOnScreen(page: Page, selector: string): Promise<void> {
   const box = await page.locator(selector).boundingBox();
@@ -139,7 +159,9 @@ test('a key the vault refuses stays saved, says why beside Save, and the popup c
     await scrollTo(options, 1e6);
     await save(fixture);
     await expect(options.locator('#vault-state')).toHaveText(paused, { timeout: 30_000 });
-    await expect(options.locator('#message')).toHaveText(refused);
+    await expect(options.locator('#message')).toHaveText(
+      `Settings saved, but the vault test failed: ${refused}`,
+    );
     await expect(options.locator('#message')).toHaveClass(/\berror\b/);
     await whollyOnScreen(options, '#message');
     await expect(options.locator('#vault-status')).toBeInViewport({ ratio: 1 });
@@ -291,7 +313,9 @@ test('a vault test that fails while syncing says so beside Save and in the popup
     await expect
       .poll(() => options.evaluate(() => (window as unknown as { sent: string[] }).sent))
       .toEqual(['SAVE_SETTINGS', 'GET_STATE', 'PROBE_VAULT', 'GET_STATE']);
-    await expect(options.locator('#message')).toHaveText(unreachable);
+    await expect(options.locator('#message')).toHaveText(
+      `Settings saved, but the vault test failed: ${unreachable}`,
+    );
     await expect(options.locator('#message')).toHaveClass(/\berror\b/);
     await expect(options.locator('#vault-state')).toHaveText(
       `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable}`,
@@ -418,20 +442,7 @@ test('with Chrome’s access to the vault turned off the status says so, and Sav
     // loopback grant is a required permission, which chrome.permissions.remove refuses,
     // so the test makes the same call that page makes. Losing access also pauses the hand
     // everywhere, so no grab can be made while it is off; the vault answers again.
-    const manager = await fixture.context.newPage();
-    await manager.goto(`chrome://extensions/?id=${fixture.id}`);
-    const siteAccess = (hostAccess: 'ON_CLICK' | 'ON_ALL_SITES') =>
-      manager.evaluate(
-        ([extensionId, access]) =>
-          (
-            chrome as unknown as {
-              developerPrivate: {
-                updateExtensionConfiguration(update: object): Promise<void>;
-              };
-            }
-          ).developerPrivate.updateExtensionConfiguration({ extensionId, hostAccess: access }),
-        [fixture.id, hostAccess] as const,
-      );
+    const siteAccess = await siteAccessControl(fixture);
     const endpointAccess = () =>
       options.evaluate(
         (pattern) => chrome.permissions.contains({ origins: [pattern] }),
@@ -705,5 +716,104 @@ test('the status re-reads every three seconds until the waiting count has held f
   } finally {
     await fixture.close();
     if (vaultOpen) await vault.close();
+  }
+});
+
+test('the status follows Chrome’s site access while the page stays open, with no reload or return to it', async () => {
+  test.setTimeout(90_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    const options = fixture.options;
+    await fillVault(fixture, vault);
+    await save(fixture);
+    // Nothing waits to sync, so the page has no re-read of its own running.
+    await expect(options.locator('#vault-state')).toHaveText(connected(vault), {
+      timeout: 30_000,
+    });
+    const siteAccess = await siteAccessControl(fixture);
+    await options.evaluate(() => {
+      const page = window as unknown as { shown: number };
+      page.shown = 0;
+      document.addEventListener('visibilitychange', () => {
+        page.shown += 1;
+      });
+    });
+    await siteAccess('ON_CLICK');
+    await expect(options.locator('#vault-state')).toHaveText(
+      `The key is saved, but grabs can’t sync: Chrome’s access to ${vault.origin} is off. Press Save settings to grant it.`,
+    );
+    await siteAccess('ON_ALL_SITES');
+    await expect(options.locator('#vault-state')).toHaveText(connected(vault));
+    expect(await options.evaluate(() => (window as unknown as { shown: number }).shown)).toBe(0);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+/** Tabs through the page and names each focus stop any part of the toast covers. */
+async function focusUnderToast(page: Page): Promise<{ stops: number; covered: string[] }> {
+  await page.evaluate(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    (document.activeElement as HTMLElement | null)?.blur();
+  });
+  const covered: string[] = [];
+  let stops = 0;
+  for (let tab = 0; tab < 80; tab += 1) {
+    await page.keyboard.press('Tab');
+    // The page moves focus clear of the toast in the frame after it lands.
+    await page.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+    );
+    const stop = await page.evaluate(() => {
+      const focused = document.activeElement;
+      const toast = document.getElementById('message');
+      if (!focused || focused === document.body || !toast) return null;
+      if (toast.hidden) throw new Error('The toast went while focus moved');
+      const a = focused.getBoundingClientRect();
+      const t = toast.getBoundingClientRect();
+      const across = Math.min(a.right, t.right) - Math.max(a.left, t.left);
+      const down = Math.min(a.bottom, t.bottom) - Math.max(a.top, t.top);
+      return { name: focused.id || focused.tagName, covered: across > 0 && down > 0 };
+    });
+    if (!stop) continue;
+    stops += 1;
+    if (stop.covered) covered.push(stop.name);
+  }
+  return { stops, covered };
+}
+
+test('at phone width a standing error never covers the control focus reaches, and the next action takes it away', async () => {
+  test.setTimeout(120_000);
+  const fixture = await launchExtension('full');
+  try {
+    const options = fixture.options;
+    await options.setViewportSize({ width: 390, height: 844 });
+    await options.reload();
+    await expect(options.locator('#key-state')).not.toHaveText('Checking local settings…');
+    await options.locator('#endpoint').fill('https://example.com');
+    await save(fixture);
+    const toast = options.locator('#message');
+    await expect(toast).toHaveClass(/\berror\b/);
+    const settings = await focusUnderToast(options);
+    expect(settings.stops).toBeGreaterThan(15);
+    expect(settings.covered).toEqual([]);
+
+    // The graveyard, with no vault to recover from.
+    const graveyard = await fixture.context.newPage();
+    await graveyard.setViewportSize({ width: 390, height: 844 });
+    await graveyard.goto(`chrome-extension://${fixture.id}/graveyard.html`);
+    const standing = graveyard.locator('#message');
+    await graveyard.locator('#import').click();
+    await expect(standing).toHaveClass(/\berror\b/);
+    const graves = await focusUnderToast(graveyard);
+    expect(graves.stops).toBeGreaterThan(5);
+    expect(graves.covered).toEqual([]);
+    // Refresh succeeds with no notice of its own, and the error is gone with it.
+    await graveyard.locator('#refresh').click();
+    await expect(standing).toBeHidden();
+  } finally {
+    await fixture.close();
   }
 });

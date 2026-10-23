@@ -219,9 +219,16 @@ element<HTMLFormElement>('settings-form').addEventListener('submit', (event) => 
     // A changed vault or key, or one never tested, leaves sync paused, and a failed test
     // stands until a test passes: one press tests, connects and sends what waited.
     if (status?.state === 'paused' || status?.error || accessWasOff)
-      await testVault(
-        'Settings saved. Testing create-only writes, version conflicts and attachment bytes…',
-      );
+      try {
+        await testVault(
+          'Settings saved. Testing create-only writes, version conflicts and attachment bytes…',
+        );
+      } catch (error) {
+        // The settings did save; only the test after them failed.
+        throw new Error(
+          `Settings saved, but the vault test failed: ${error instanceof Error ? error.message : 'it could not complete.'}`,
+        );
+      }
     else {
       revealVault();
       notice('Settings saved.', 'success');
@@ -242,6 +249,15 @@ document.addEventListener('visibilitychange', () => {
     void refreshVault();
   }
 });
+// Site access can change in chrome://extensions while this page stays in view, and Save
+// decides from what the page shows, so the status follows it.
+for (const changed of [chrome.permissions.onAdded, chrome.permissions.onRemoved])
+  changed.addListener(() => {
+    if (!testing) {
+      followQueue();
+      void refreshVault();
+    }
+  });
 element<HTMLButtonElement>('forget').addEventListener(
   'click',
   () =>
