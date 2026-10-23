@@ -615,6 +615,43 @@ button {
   display: none;
 }
 
+/* An optional step takes no number: a dashed ring marks it instead. */
+.steps li.step-optional {
+  counter-increment: none;
+}
+
+.steps li.step-optional::before {
+  content: '';
+  left: 6px;
+  top: 2px;
+  width: 13px;
+  height: 13px;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(108, 255, 47, 0.75);
+  border-radius: 50%;
+  text-shadow: none;
+}
+
+.steps li.step-optional::after {
+  top: 24px;
+}
+
+.steps li.step-optional h3 {
+  color: var(--fog-dim);
+}
+
+.steps .tag {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid var(--fog-faint);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--fog-dim);
+  vertical-align: 1px;
+}
+
 .steps h3 {
   margin: 0 0 7px;
   font-family: var(--mono);
