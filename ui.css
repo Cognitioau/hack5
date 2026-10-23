@@ -222,7 +222,7 @@ label {
   font-size: 12px;
   color: #d9dfd9;
 }
-input:not([type="checkbox"]):not([type="radio"]),
+input:not([type="checkbox"], [type="radio"]),
 textarea {
   width: 100%;
   background: #111719;

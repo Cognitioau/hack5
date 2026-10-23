@@ -20,19 +20,13 @@ let keyStored = false;
 /** The Local REST API plugin's own ports. Changing the connection moves one to the other. */
 const pluginPorts = { http: '27123', https: '27124' } as const;
 const protocol = (): 'http' | 'https' => (input('protocol-https').checked ? 'https' : 'http');
-const origin = (endpoint: string): string | undefined => {
-  try {
-    return new URL(endpoint).origin;
-  } catch {
-    return undefined;
-  }
-};
 /** The endpoint the form describes. The saved text stays when it names the same server. */
 function formEndpoint(): string {
   const port = input('port').value.trim();
   const described = `${protocol()}://${host}:${/^\d{1,5}$/.test(port) ? Number(port) : port}`;
-  const same = origin(described);
-  return same !== undefined && same === origin(settings.endpoint) ? settings.endpoint : described;
+  // The old free-text field may have saved a trailing slash; keep that, so the key stays. Any
+  // other spelling is rewritten, since the vault client refuses it.
+  return settings.endpoint === `${described}/` ? settings.endpoint : described;
 }
 function renderEndpoint(): void {
   const endpoint = formEndpoint();
@@ -177,7 +171,7 @@ async function load(): Promise<State> {
   settings = state.settings ?? structuredClone(defaultSettings);
   activation = state.activation ?? 'manual';
   renderActivation();
-  const saved = origin(settings.endpoint)
+  const saved = URL.canParse(settings.endpoint)
     ? new URL(settings.endpoint)
     : new URL(defaultSettings.endpoint);
   host = ['127.0.0.1', '[::1]'].includes(saved.hostname) ? saved.hostname : '127.0.0.1';

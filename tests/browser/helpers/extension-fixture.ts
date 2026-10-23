@@ -206,6 +206,10 @@ export async function openPopup(fixture: ExtensionFixture, page: Page): Promise<
   await expect
     .poll(() => popup.evaluate<string>('document.getElementById("mode").textContent'))
     .not.toBe('Checking…');
+  // The popup fills in from the extension's state after it opens; read it only once it has.
+  await expect
+    .poll(() => popup.evaluate<string>('document.getElementById("vault")?.textContent ?? ""'))
+    .not.toBe('Checking your vault…');
   return popup;
 }
 

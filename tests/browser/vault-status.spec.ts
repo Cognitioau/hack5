@@ -139,10 +139,35 @@ test('the vault form asks only for HTTP or HTTPS and a port, and keeps the key u
     await options.reload();
     await expect(preview).toHaveText(`${vault.origin}/`);
     await save(fixture);
+    // The notice shows only after Save re-reads the settings, so the key line is fresh after it.
+    await expect(options.locator('#message')).toHaveText('Settings saved.');
     await expect(options.locator('#key-state')).toHaveText(
       'A vault key is stored. Leave the field blank to keep it.',
     );
-    await expect(options.locator('#message')).toHaveText('Settings saved.');
+    expect(
+      await fixture.worker.evaluate(async () => {
+        const { settings } = (await chrome.storage.local.get('settings')) as {
+          settings: { endpoint: string };
+        };
+        return settings.endpoint;
+      }),
+    ).toBe(`${vault.origin}/`);
+
+    // A spelling the vault refuses, such as a port with a leading zero, is shown as the address
+    // the form will save instead, with the note that saving it forgets the key.
+    await fixture.worker.evaluate(
+      async (endpoint) => {
+        const { settings } = (await chrome.storage.local.get('settings')) as {
+          settings: Record<string, unknown>;
+        };
+        await chrome.storage.local.set({ settings: { ...settings, endpoint } });
+      },
+      vault.origin.replace(/:(\d+)$/, ':0$1'),
+    );
+    await options.reload();
+    await expect(options.locator('#port')).toHaveValue(port);
+    await expect(preview).toHaveText(vault.origin);
+    await expect(change).toBeVisible();
   } finally {
     await fixture.close();
     await vault.close();
@@ -663,6 +688,15 @@ test('the graveyard’s export notice is a success, and goes after its time', as
   try {
     const graveyard = await fixture.context.newPage();
     await graveyard.goto(`chrome-extension://${fixture.id}/graveyard.html`);
+    // The search box sits bare inside its pill: the settings form's field style never reaches it.
+    expect(
+      await graveyard
+        .locator('#query')
+        .evaluate((field) => [
+          getComputedStyle(field).borderTopStyle,
+          getComputedStyle(field).margin,
+        ]),
+    ).toEqual(['none', '0px']);
     const toast = graveyard.locator('#message');
     const download = graveyard.waitForEvent('download');
     await graveyard.locator('#export').click();
