@@ -9,7 +9,7 @@ import {
   state,
   wake,
 } from './helpers/extension-fixture';
-import { startVaultFixture } from './helpers/vault-fixture';
+import { captureNote, startVaultFixture } from './helpers/vault-fixture';
 
 test('modifier lasso ignores ordinary browsing and captures the highlighted passage with its source', async () => {
   test.setTimeout(120_000);
@@ -77,9 +77,7 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
       passageUrl: `${article.url()}#:~:text=A%20young%20dog%20runs,a%20bright%20tennis%20ball.`,
     });
     expect(await article.locator('#dog').textContent()).toBe(capture?.candidate.text);
-    expect(vault.files.get(`Zombie Brain/captures/${capture?.id}.md`)?.toString()).toContain(
-      article.url(),
-    );
+    expect(captureNote(vault, capture?.id)).toContain(article.url());
     await article.waitForTimeout(1_800);
     await screenshotArtifact(article, 'modifier-saved');
     await drawCircle(article, center, null);

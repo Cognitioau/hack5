@@ -318,6 +318,39 @@ describe('durable capture coordinator', () => {
 });
 
 describe('vault recovery reconciles only observed and unchanged evidence', () => {
+  it('quarantines a missing note once, whichever of its two names it was saved under', async () => {
+    for (const name of ['id', 'readable'] as const) {
+      const context = setup();
+      const saved = await cachedCapture(context);
+      const paths = {
+        id: saved.vault?.notePath ?? '',
+        readable: `Zombie Hand/captures/A passage (${saved.id.slice(0, 8)}).md`,
+      };
+      const record =
+        name === 'id'
+          ? saved
+          : await context.store.update(
+              saved.id,
+              (current) => ({
+                ...current,
+                vault: current.vault && { ...current.vault, notePath: paths.readable },
+              }),
+              false,
+            );
+      // The vault cannot tell which name the note had, so it reports the absence under both.
+      const observation = unavailable(record);
+      vi.spyOn(context.vault, 'importCaptures').mockResolvedValue({
+        records: [],
+        skipped: 1,
+        unavailable: [
+          { ...observation, notePath: paths.readable },
+          { ...observation, notePath: paths.id },
+        ],
+      });
+      expect(await context.coordinator.importVault()).toMatchObject({ quarantined: 1 });
+      expect((await context.store.get(record.id))?.persistence).toBe('conflict');
+    }
+  });
   it('quarantines confirmed missing captures without deleting evidence or creating a remote job', async () => {
     const context = setup();
     const record = await cachedCapture(context, {

@@ -236,6 +236,16 @@ Evidence:
 
 **Next:** reload the extension in Sam's Chrome, paste the key and press Save once, and confirm the status line reaches connected. Then set the extension's site access to "On click" in chrome://extensions, see the status say Chrome's access is off, press Save settings, accept Chrome's prompt, and confirm it reaches connected again and that a grab made while the vault was away then reaches the vault.
 
+## Notes named after what was grabbed (23 October)
+
+Sam's Obsidian listed every capture by its id, so the file list and graph were rows of hex. A new note is now named after what was grabbed, then the first eight characters of its id, which keep names unique: a passage by its opening words, an image by its alt text, a video moment by its title and time, and anything else by its page title, cut near 60 characters at a word, and before 150 bytes so the file name stays inside a file system's 255. The name leaves out what Obsidian refuses or what breaks a `[[link]]`, and controls and invisible formatting that could hide or reorder it. A colon or bar becomes a dash. Recovery works the name out again from the saved metadata, so the rule must not change. A note saved under its id keeps that name. Archiving or retrying it writes no second note. Recovery looks under both names and, when neither is there, reports both, so the capture is quarantined whichever name it was saved under. The note's contents, metadata and attachment names are unchanged.
+
+The wiki kit now reads a capture's id from its `capture_id` frontmatter, and logs and cites captures by file name. The installer never overwrites a file, so a vault that already has the kit keeps the old `AGENTS.md` and `ingest` skill until those files are removed and the kit installed again.
+
+The graph's other hex dots are the extension's own files: metadata JSON, and the probe files each vault test leaves in `_health`. Obsidian hides them from the graph and search when `Zombie Brain/metadata/` and `Zombie Brain/_health/` are added under Settings → Files and links → Excluded files. Links between ideas come from the wiki that `/ingest` builds; capture notes link only to their attachments.
+
+Residual: a capture whose save was left uncertain under the old name, and retried after this change, gets a second note under its new name.
+
 ## Revision and reproducibility
 
 The current runtime revision is development version **0.2.0**, following baseline `1e3b9abfad7081061fb3c27a9ea088fefa2d384a`. Universal activation and the new gesture/UI landed in `e25b22638c5b658a14234fe6ad00580e7e14b523`, whose [GitHub CI run](https://github.com/Cognitioau/hack5/actions/runs/39327214833) passed all checks. The current follow-up adds universally activated image crops and tab/window race guards; each archive's BUILD_INFO.json records its exact source commit. See the repository Actions page for that matching run.

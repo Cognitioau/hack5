@@ -9,7 +9,7 @@ import {
   state,
   wake,
 } from './helpers/extension-fixture';
-import { startVaultFixture } from './helpers/vault-fixture';
+import { captureNote, startVaultFixture } from './helpers/vault-fixture';
 
 /** A trusted mouse drag across part of a passage; returns the selected words. */
 async function dragSelect(page: Page, selector: string): Promise<string> {
@@ -503,10 +503,12 @@ test('a whole-page grab keeps the article and who wrote it, not the page around 
     expect(page?.candidate).not.toHaveProperty('truncated');
     // Reading the article never changes the page the person is reading.
     expect(await essay.evaluate(() => document.querySelector('main')?.outerHTML)).toBe(before);
-    await expect
-      .poll(() => vault.files.get(`Zombie Brain/captures/${page?.id}.md`)?.toString() ?? '')
-      .toContain('"whole_page": true');
-    const note = vault.files.get(`Zombie Brain/captures/${page?.id}.md`)?.toString() ?? '';
+    await expect.poll(() => captureNote(vault, page?.id) ?? '').toContain('"whole_page": true');
+    const note = captureNote(vault, page?.id) ?? '';
+    // Obsidian lists the note by what was grabbed, not by its id.
+    expect(
+      [...vault.files.keys()].filter((path) => path.startsWith('Zombie Brain/captures/')),
+    ).toEqual([`Zombie Brain/captures/Keeping a field journal (${page?.id.slice(0, 8)}).md`]);
     expect(note).toContain('"author": "Ada Example"');
     expect(note).toContain('By Ada Example · Synthetic Essays · 2024\\-03\\-05');
   } finally {

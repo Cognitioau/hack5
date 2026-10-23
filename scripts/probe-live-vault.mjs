@@ -104,7 +104,10 @@ const unreliable = createVaultClient(settings, {
     if (
       !dropped &&
       init?.method === 'PUT' &&
-      String(input).includes(`/captures/${uncertain.id}.md`)
+      // A note is named after what was grabbed and ends with the start of its id.
+      decodeURIComponent(new URL(String(input)).pathname).endsWith(
+        ` (${uncertain.id.slice(0, 8)}).md`,
+      )
     ) {
       dropped = true;
       throw new TypeError('Synthetic dropped response after real write');
