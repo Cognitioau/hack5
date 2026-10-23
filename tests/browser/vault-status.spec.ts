@@ -567,6 +567,24 @@ test('at phone width the toast going at the page end moves nothing on the page',
   }
 });
 
+test('the graveyard’s export notice is a success, and goes after its time', async () => {
+  test.setTimeout(60_000);
+  const fixture = await launchExtension('full');
+  try {
+    const graveyard = await fixture.context.newPage();
+    await graveyard.goto(`chrome-extension://${fixture.id}/graveyard.html`);
+    const toast = graveyard.locator('#message');
+    const download = graveyard.waitForEvent('download');
+    await graveyard.locator('#export').click();
+    expect((await download).suggestedFilename()).toBe('zombie-hand-captures.json');
+    await expect(toast).toHaveText(/^Exported original records and attachment bytes\./);
+    await expect(toast).toHaveClass(/\bsuccess\b/);
+    await expect(toast).toBeHidden({ timeout: 8_000 });
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('the status re-reads every three seconds until the waiting count has held for a minute, and again on return, Save or Test', async () => {
   test.setTimeout(180_000);
   const vault = await startVaultFixture();
