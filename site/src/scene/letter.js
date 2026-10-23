@@ -80,5 +80,34 @@ export function createLetter({ fontFamily }) {
   seal.position.set(0, 0.0015, 0.0115);
   seal.castShadow = true;
   letter.add(seal);
+
+  // Crumpling, 0 to 1: the sheet is gathered toward its middle, its edges fold up toward whatever
+  // is closing on it, and it breaks into creases.
+  const flat = Float32Array.from(pos.array);
+  const crease = Array.from({ length: pos.count * 3 }, (_, i) => {
+    const h = Math.sin(i * 12.9898 + 4.1) * 43758.5453;
+    return (h - Math.floor(h)) * 2 - 1;
+  });
+  let crumpled = 0;
+  letter.userData.crumple = (k) => {
+    if (k === crumpled) return;
+    crumpled = k;
+    const squeeze = 1 - 0.45 * k;
+    for (let i = 0; i < pos.count; i++) {
+      const x = flat[i * 3];
+      const z = flat[i * 3 + 2];
+      const r2 = (x / (width / 2)) ** 2 + (z / (depth / 2)) ** 2;
+      pos.setXYZ(
+        i,
+        x * squeeze + crease[i * 3] * 0.01 * k,
+        flat[i * 3 + 1] + k * (0.016 * r2 + crease[i * 3 + 1] * 0.016),
+        z * squeeze + crease[i * 3 + 2] * 0.01 * k,
+      );
+    }
+    pos.needsUpdate = true;
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+    seal.position.set(0, 0.0015 + 0.006 * k, 0.0115 * squeeze);
+  };
   return letter;
 }
