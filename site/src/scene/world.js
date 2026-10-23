@@ -284,7 +284,7 @@ function engravingTexture(fontFamily) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   for (const l of lines) {
-    ctx.font = `${l.italic ? 'italic ' : ''}600 ${l.size}px ${fontFamily}`;
+    ctx.font = `${l.italic ? 'italic ' : ''}${l.size}px ${fontFamily}`;
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${l.spacing}px`;
     // A lit lower lip and a dark cut sell the engraving under raking moonlight.
     ctx.fillStyle = 'rgba(235, 235, 240, 0.35)';

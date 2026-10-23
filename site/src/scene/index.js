@@ -58,8 +58,8 @@ async function loadTextures() {
 
 async function loadFont(family) {
   try {
-    await document.fonts.load(`600 48px ${family}`);
-    await document.fonts.load(`italic 600 32px ${family}`);
+    await document.fonts.load(`48px ${family}`);
+    await document.fonts.load(`italic 32px ${family}`);
   } catch {
     // The canvas falls back to the serif stack below.
   }
@@ -86,7 +86,7 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
 
   const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 400);
 
-  const [textures, fontFamily] = await Promise.all([loadTextures(), loadFont('Cinzel')]);
+  const [textures, fontFamily] = await Promise.all([loadTextures(), loadFont('"IM Fell English"')]);
   const world = createWorld(scene, textures, { lowQuality: quality.low, fontFamily });
   const sky = createSky(scene, FOG);
   const rainScene = new THREE.Scene();

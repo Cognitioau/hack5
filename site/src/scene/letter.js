@@ -28,7 +28,7 @@ function envelopeTexture(fontFamily) {
   ctx.lineTo(506, 8);
   ctx.stroke();
   ctx.fillStyle = 'rgba(40, 34, 30, 0.82)';
-  ctx.font = `italic 600 30px ${fontFamily}`;
+  ctx.font = `italic 34px ${fontFamily}`;
   ctx.textAlign = 'center';
   ctx.fillText('for later', 256, 268);
   ctx.strokeStyle = 'rgba(40, 34, 30, 0.6)';
