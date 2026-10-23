@@ -7,6 +7,7 @@ import {
   type CaptureCandidate,
   type CaptureRecord,
   type VaultRepository,
+  type VaultStatus,
 } from '../core/contracts';
 import { createCaptureStore } from '../adapters/persistence/indexed-db';
 import { createVaultClient } from '../adapters/persistence/vault';
@@ -61,15 +62,19 @@ function serializeConfiguration<T>(write: () => Promise<T>): Promise<T> {
   return operation;
 }
 
+/** Set while a changed destination or key waits for a passing vault test. Absent means not paused. */
+const syncPaused = async () => (await chrome.storage.local.get('syncPaused')).syncPaused === true;
+/** Whether Chrome lets the extension reach the endpoint. Without it nothing syncs. */
+const endpointAccess = (endpoint: string) =>
+  chrome.permissions.contains({ origins: [originPattern(endpoint)] });
+
 async function vault(ignorePause = false): Promise<VaultRepository | undefined> {
   if (changingSettings || committingProbe) return undefined;
   const controller = networkController;
-  if (!ignorePause && (await chrome.storage.local.get('syncPaused')).syncPaused === true)
-    return undefined;
+  if (!ignorePause && (await syncPaused())) return undefined;
   const config = await readVaultConfig();
   if (!config) return undefined;
-  if (!(await chrome.permissions.contains({ origins: [originPattern(config.endpoint)] })))
-    return undefined;
+  if (!(await endpointAccess(config.endpoint))) return undefined;
   if (controller.signal.aborted) return undefined;
   const identity = JSON.stringify(config);
   if (vaultCache?.identity !== identity) {
@@ -83,6 +88,25 @@ async function vault(ignorePause = false): Promise<VaultRepository | undefined> 
     vaultCache = { identity, client };
   }
   return vaultCache.client;
+}
+/** Why the last vault test failed. Session storage: trusted contexts only, cleared on restart. */
+const VAULT_TEST_ERROR = 'vaultTestError';
+/**
+ * The vault connection as the pages show it, from the checks that gate sync in vault():
+ * outside a settings change, it says syncing only when a drain would reach the vault. Never the key.
+ */
+async function vaultStatus(rememberKey: boolean): Promise<VaultStatus> {
+  const config = await readVaultConfig();
+  if (!config) return { state: 'none', remembered: false };
+  // Whatever the last test said, nothing syncs without access; saving settings asks for it again.
+  if (!(await endpointAccess(config.endpoint)))
+    return { state: 'paused', remembered: rememberKey, access: false };
+  const error: unknown = (await chrome.storage.session.get(VAULT_TEST_ERROR))[VAULT_TEST_ERROR];
+  return {
+    state: (await syncPaused()) ? 'paused' : 'syncing',
+    remembered: rememberKey,
+    ...(typeof error === 'string' && error ? { error: error.slice(0, 300) } : {}),
+  };
 }
 function changed(record: CaptureRecord) {
   const update = { v: 1, type: 'CAPTURE_UPDATE', capture: publicCapture(record) };
@@ -432,14 +456,16 @@ async function contentRequest(
 async function trustedRequest(raw: unknown): Promise<AppResponse> {
   const message = trustedMessageSchema.parse(raw);
   switch (message.type) {
-    case 'GET_STATE':
+    case 'GET_STATE': {
+      const settings = await readSettings();
       return {
         ok: true,
         activation: handActivation.getMode(),
-        settings: await readSettings(),
-        hasKey: !!(await readVaultConfig()),
+        settings,
+        vaultStatus: await vaultStatus(settings.rememberKey),
         captures: (await store.list()).map(publicCapture),
       };
+    }
     case 'BEGIN_ACTIVATION':
       activationRequest = {
         id: crypto.randomUUID(),
@@ -496,8 +522,11 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
             previous.endpoint !== message.settings.endpoint ||
             previous.folder !== message.settings.folder ||
             message.apiKey
-          )
+          ) {
             await chrome.storage.local.set({ syncPaused: true });
+            // A failed test of the old destination or key says nothing about the new one.
+            await chrome.storage.session.remove(VAULT_TEST_ERROR);
+          }
           await writeSettings(message.settings, message.apiKey);
         });
         if (!message.settings.features.semantic) await embedder.dispose();
@@ -538,7 +567,14 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
       if (!client)
         throw new Error('Enter a vault key and grant access to the loopback endpoint first.');
       const probe = await client.probe();
-      if (!probe.ok) return { ok: false, error: probe.message };
+      if (!probe.ok) {
+        await serializeConfiguration(async () => {
+          // A test of settings since replaced must not name its failure against the new ones.
+          if (!controller.signal.aborted && !changingSettings)
+            await chrome.storage.session.set({ [VAULT_TEST_ERROR]: probe.message });
+        });
+        return { ok: false, error: probe.message };
+      }
       await serializeConfiguration(async () => {
         if (controller.signal.aborted || changingSettings)
           throw new Error(
@@ -546,6 +582,7 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
           );
         committingProbe = true;
         try {
+          await chrome.storage.session.remove(VAULT_TEST_ERROR);
           await chrome.storage.local.set({ syncPaused: false });
           if (controller.signal.aborted || changingSettings) {
             await chrome.storage.local.set({ syncPaused: true });

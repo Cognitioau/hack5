@@ -203,6 +203,7 @@ element<HTMLButtonElement>('export').addEventListener('click', () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notice(
       'Exported original records and attachment bytes. Unsupported future records are preserved without alteration.',
+      'success',
     );
   });
 });

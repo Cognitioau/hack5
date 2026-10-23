@@ -37,18 +37,29 @@ function render(state: State): void {
     (capture) => capture.lifecycle === 'active' && capture.persistence !== 'saved-vault',
   ).length;
   const vault = element('vault');
-  if (state.hasKey) {
+  const connection = state.vaultStatus?.state ?? 'none';
+  const waiting = `${kept} capture${kept === 1 ? '' : 's'} waiting to sync`;
+  if (connection === 'syncing' && !state.vaultStatus?.error) {
     vault.textContent = kept
-      ? `Vault connected. ${kept} capture${kept === 1 ? '' : 's'} waiting to sync.`
+      ? `Vault connected. ${waiting}.`
       : 'Vault connected. Grabs are buried in Obsidian.';
     return;
   }
+  const onDevice = kept
+    ? `; ${kept} capture${kept === 1 ? ' is' : 's are'} kept on this device`
+    : '';
   const link = document.createElement('a');
   link.href = 'options.html';
   link.target = '_blank';
-  link.textContent = 'Connect vault';
+  // A held key syncs nothing until the vault test passes, and a failed test may mean the
+  // vault is not taking grabs, so either way the link leads to that test.
+  link.textContent = connection === 'none' ? 'Connect vault' : 'Test vault';
   vault.replaceChildren(
-    `No vault yet${kept ? `; ${kept} capture${kept === 1 ? ' is' : 's are'} kept on this device` : ''}. `,
+    connection === 'syncing'
+      ? `The last vault test failed${kept ? `; ${waiting}` : ''}. `
+      : connection === 'paused'
+        ? `Vault key saved, but not syncing yet${onDevice}. `
+        : `No vault yet${onDevice}. `,
     link,
   );
 }
