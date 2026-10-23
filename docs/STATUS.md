@@ -158,6 +158,12 @@ Direct PDF/media file downloading, full transcript companions/cache, OCR, cloud 
 
 **Errors on every page:** Sam sees the extension's error list fill as he browses. Not yet diagnosed; the entries' text is needed. One guess was ruled out in Playwright's Chromium 156, not in Sam's Chrome 154: Zod's check for `new Function` runs in the content script's world without throwing or a Content Security Policy report.
 
+## The vault form asks for a connection and a port (23 October)
+
+Sam set the port to 27123 but left `https://` in the free-text endpoint, ticked "Use HTTP for this numeric loopback endpoint only", and the test failed: the box allowed HTTP but did not switch to it, and the error blamed the certificate. Obsidian runs on this computer, so Settings now asks only for the connection, HTTP or HTTPS, and the port, and shows the address it builds on `127.0.0.1`. A new install starts on HTTP, port 27123, because Chrome refuses the plugin's self-signed certificate until the operating system trusts it. Switching the connection moves the plugin's own port (27123 for HTTP, 27124 for HTTPS) and leaves a typed one alone. A different connection or port forgets the saved key, as a changed endpoint always has, and Settings says so before Save. A saved endpoint naming the same server as the form, such as one with a trailing slash from the old field, is kept as written, so saving an unchanged form keeps the key. Saved settings keep their shape: the form writes the endpoint and the HTTP flag as before. An HTTPS failure now says the port may be the plugin's HTTP server, as well as the certificate.
+
+Tests: a browser test drives the form (defaults, the port following the connection, a typed port staying, connecting over HTTP, the key note, the trailing-slash endpoint keeping the key), and five deliberate breakages each turned it red. A contract test sends HTTPS to a real plain-HTTP server, Sam's case, and checks the message.
+
 ## Named Zombie Brain (23 October)
 
 The product is now Zombie Brain, after its site, zombiebrain.si: the name Chrome shows, the toolbar title, every page's title and message, the hand's accessible label, the vault kit's text, the README and these docs. The hand keeps its name as the gesture ("Wake the hand"). New installs save to a "Zombie Brain" folder; an install whose settings were already saved keeps the folder it saved, "Zombie Hand" included, until it is changed in Settings. Downloads are named `zombie-brain-captures.json`, `zombie-brain-gaze-diagnostics-<time>.json` and `zombie-brain-<version>-<profile>.zip`.

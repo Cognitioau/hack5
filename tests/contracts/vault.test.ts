@@ -996,7 +996,7 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
       expect(outcome).toEqual({
         ok: false,
         message:
-          'Chrome could not connect to https://127.0.0.1:27124. If Obsidian is open, Chrome is refusing the plugin’s self-signed certificate. Turn on the plugin’s non-encrypted (HTTP) server, then use http://127.0.0.1:27123 with “Use HTTP for this numeric loopback endpoint only” ticked.',
+          'Chrome could not connect to https://127.0.0.1:27124. If Obsidian is open, either this computer does not trust the plugin’s certificate or this port is the plugin’s HTTP server. Choose HTTP in Settings and turn on the plugin’s non-encrypted (HTTP) server.',
       });
       // The status line beside Save shows at most 300 characters of it, from the longest endpoint.
       const longest = await createVaultClient(
@@ -1004,6 +1004,20 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
         { fetch: refused },
       ).probe();
       expect(longest.message.length).toBeLessThanOrEqual(300);
+    });
+
+    it('names HTTPS sent to the plugin’s HTTP server, the mix-up a person makes, and the way out', async () => {
+      // The emulator speaks plain HTTP, as the plugin does at 27123, so the TLS handshake fails for real.
+      const https = vault.endpoint.replace(/^http:/, 'https:');
+      const outcome = await createVaultClient({
+        ...vault.config(),
+        endpoint: https,
+        allowInsecureLoopback: false,
+      }).probe();
+      expect(outcome).toEqual({
+        ok: false,
+        message: `Chrome could not connect to ${https}. If Obsidian is open, either this computer does not trust the plugin’s certificate or this port is the plugin’s HTTP server. Choose HTTP in Settings and turn on the plugin’s non-encrypted (HTTP) server.`,
+      });
     });
 
     it('names a plain HTTP endpoint nothing answers at, and the server to turn on', async () => {
@@ -1016,7 +1030,7 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
       }).probe();
       expect(outcome).toEqual({
         ok: false,
-        message: `Chrome could not connect to ${gone.endpoint}. Check Obsidian is open and the Local REST API plugin’s non-encrypted (HTTP) server is on at this port.`,
+        message: `Chrome could not connect to ${gone.endpoint}. Check Obsidian is open, the Local REST API plugin’s non-encrypted (HTTP) server is on, and the port is the one its HTTP address shows.`,
       });
     });
 

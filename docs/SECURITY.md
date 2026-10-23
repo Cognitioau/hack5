@@ -41,7 +41,7 @@ Reject URL userinfo, loopback/private IP literals, local hostnames and ambiguous
 
 A browser extension cannot reliably inspect every hostname's DNS resolution. Exact origin grants, no credentials, browser network protections and blocked redirects are the controls here; do not claim complete DNS-level isolation. The media client is not a general fetch proxy. [Chrome cross-origin requests](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
 
-Use HTTPS for the local plugin with a trusted certificate. HTTP is an explicit loopback-only option; never add a global certificate-validation bypass. Feature disabling stops future requests but cannot recall content already transmitted.
+This proof of concept starts on the plugin's HTTP server, because Chrome refuses the plugin's self-signed certificate until the operating system trusts it. HTTP is loopback-only: Settings fixes the address to this computer and asks only for the connection and port, and the vault client refuses HTTP to anything but a numeric loopback address. HTTPS with a trusted certificate remains the choice for a key that should not cross even loopback in clear; never add a global certificate-validation bypass. Feature disabling stops future requests but cannot recall content already transmitted.
 
 ## Vault integrity
 

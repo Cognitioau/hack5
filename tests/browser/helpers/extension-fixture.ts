@@ -85,9 +85,9 @@ export async function configureVault(
   vault: VaultFixture,
   semantic = true,
 ): Promise<void> {
-  await fixture.options.locator('#endpoint').fill(vault.origin);
+  await fixture.options.locator('#protocol-http').check();
+  await fixture.options.locator('#port').fill(new URL(vault.origin).port);
   await fixture.options.locator('#api-key').fill(vault.key);
-  await fixture.options.locator('#allow-http').check();
   await fixture.options.locator('#remember-key').check();
   await fixture.options.locator('#feature-semantic').setChecked(semantic);
   await fixture.options.locator('#feature-haunting').uncheck();
