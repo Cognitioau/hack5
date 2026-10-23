@@ -173,13 +173,16 @@ function quoteEvidence(value: string): string {
   return `${fence}text\n${value}\n${fence}`;
 }
 
-// Left out of a note's file name: controls and invisible formatting, which can hide or reorder
-// what a name shows, then the characters Obsidian refuses in names or that break [[links]].
+// Left out of a note's file name: controls, unpaired surrogates (which no URL can carry) and the
+// invisible format characters, tag characters included, which can hide text or reorder a name.
+// Explicit ranges, not \p{Cf}, so the name never moves with Chrome's Unicode version.
 const invisibleInName =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
-  /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g;
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ud800-\udfff\ufeff\ufff9-\ufffb\u{110bd}\u{110cd}\u{13430}-\u{1343f}\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}\u{e0000}-\u{e007f}]/gu;
 const separatorInName = /[|:]/g;
-const unsafeInName = /[\\/*?"<>#^[\]]/g;
+// Characters Obsidian refuses in a name or that break a [[link]], and the code marks that the wiki
+// kit's hook refuses in a page that cites the name.
+const unsafeInName = /[\\/*?"<>#^[\]`~]/g;
 const nameLength = 60;
 // File systems cap a name at 255 bytes; 60 four-byte characters, the id and `.md` would pass it.
 const nameBytes = 150;
@@ -191,6 +194,8 @@ function nameText(value: string): string {
     .replace(invisibleInName, '')
     .replace(separatorInName, ' - ')
     .replace(unsafeInName, ' ')
+    // Two percent signs open an Obsidian comment.
+    .replace(/%{2,}/g, '%')
     .replace(/\s+/g, ' ')
     // A leading dot hides a file, and a trailing dot or space is dropped on some systems.
     .replace(/^[\s.]+|[\s.]+$/g, '');

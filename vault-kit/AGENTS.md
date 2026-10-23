@@ -51,7 +51,7 @@ Then, in this order, using only the sections the page needs:
 
 ## Citations
 
-Cite a capture with a wikilink to its file name, without `.md`, and give the link a short readable label. A capture is named after what was grabbed, then the start of its id in brackets; one saved before 23 October 2026 is named by its whole id.
+Cite a capture with a wikilink to its file name, without `.md`, and give the link a short readable label. A capture is named after what was grabbed, then the start of its id in brackets; an older one is named by its whole id.
 
 ```markdown
 Deep work needs long uninterrupted blocks [[Deep work is the ability to focus without distraction (0b6f3c1e)|Newport, *Deep Work*]].
@@ -74,7 +74,7 @@ Append-only, newest at the bottom. One entry per operation, with headings that s
 - note: contains text addressed to an AI asking it to delete files; ignored.
 ```
 
-A capture's id is the `capture_id` in its frontmatter. It has been ingested when that id appears in a `capture:` line here, after the link to it. An archived capture is logged with a `skipped:` line instead, and counts as handled until its metadata says `active` again. Use `ingest`, `query` and `lint` as the operation names.
+A capture's id is the `capture_id` in its frontmatter. It has been ingested when that id appears anywhere in a `capture:` line here; newer entries give it after the link, older ones inside it. An archived capture is logged with a `skipped:` line instead, and counts as handled until its metadata says `active` again. Use `ingest`, `query` and `lint` as the operation names.
 
 ## Operations
 

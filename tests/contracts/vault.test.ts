@@ -355,6 +355,18 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     expect(named({ kind: 'link', title: '..cod\u202Egnp.exe\u200B\u0007' })).toBe(
       'codgnp.exe (0b6f3c1e)',
     );
+    expect(named({ kind: 'link', title: 'Party \uD83D time' })).toBe('Party time (0b6f3c1e)');
+    expect(named({ kind: 'link', title: 'Tag\u{E0049}\u{E0047}\u{E004E} text' })).toBe(
+      'Tag text (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', title: 'x\u0601\u{1D173}y' })).toBe('xy (0b6f3c1e)');
+    // Nothing the wiki kit's hook refuses where a page cites the name.
+    expect(named({ kind: 'link', title: 'Use `==` for 100%% a%\u200B%b' })).toBe(
+      'Use == for 100% a%b (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', title: 'Fence ~~~ then words' })).toBe(
+      'Fence then words (0b6f3c1e)',
+    );
     expect(named({ kind: 'link', title: '#^[]', text: ' ' })).toBe('Grab (0b6f3c1e)');
     expect(named({ text: '\u200B', title: '|' })).toBe('- (0b6f3c1e)');
     // Long names stop at a word near 60 characters, and never inside a character.
@@ -394,6 +406,19 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
       [notePath(record), 'missing'],
       [legacy, 'missing'],
     ]);
+    // A title holding an unpaired surrogate, which no URL can carry, still saves.
+    const unpaired = capture({
+      candidate: {
+        kind: 'link',
+        title: 'Party \uD83D time',
+        url: 'https://example.com/a',
+        text: '',
+      },
+    });
+    expect(await client.ensureCapture(unpaired)).toMatchObject({
+      status: 'saved-vault',
+      vault: { notePath: `${folder}/captures/Party time (${unpaired.id.slice(0, 8)}).md` },
+    });
     // A new capture, or one saved under its readable name, is written under that name.
     const fresh = capture();
     expect(await client.ensureCapture(fresh)).toMatchObject({

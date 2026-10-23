@@ -13,6 +13,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { noteName } from '../../src/adapters/persistence/vault';
+import type { CaptureRecord } from '../../src/core/contracts/index';
 
 const repository = resolve(import.meta.dirname, '..', '..');
 const installer = join(repository, 'scripts', 'install-vault-kit.mjs');
@@ -162,6 +164,42 @@ describe('the wiki-only hook', () => {
       '```',
     ])
       expect(write(`${line}\n`).status, line).toBe(0);
+  });
+
+  it('lets a page cite and log any capture by its file name, whatever its page called it', () => {
+    const folder = vault();
+    mkdirSync(join(folder, 'wiki'));
+    const page = join(folder, 'wiki', 'page.md');
+    const printable = Array.from({ length: 95 }, (_, index) => String.fromCharCode(32 + index));
+    const titles = [
+      // Every printable character, in runs short enough to stay whole, and each one tripled.
+      ...Array.from({ length: 5 }, (_, index) =>
+        printable.slice(index * 20, index * 20 + 20).join(''),
+      ),
+      ...printable.map((character) => `a ${character.repeat(3)} b`),
+      'Use `==` for equality',
+      'A `= this.file.name` query and `$= dv.current()`',
+      '100%% juice, a%\u200B%b',
+      '~~~dataviewjs then words',
+      '```mermaid',
+      '<%* tp.file.title %> and <!-- note --> and <img src=x>',
+      '![chart](https://tracker.example/pixel.png) ![[https://tracker.example/x.png]]',
+      'x<y and \\<b>',
+    ];
+    const id = '0b6f3c1e-5a2d-4c3e-9f1a-2b7d8e9c0a11';
+    for (const title of titles) {
+      const name = noteName({
+        id,
+        candidate: { kind: 'link', title, url: 'https://example.com/', text: '' },
+      } as Pick<CaptureRecord, 'id' | 'candidate'>);
+      const content = `A point [[${name}|Its source]].\n\n- capture: [[${name}]] ${id}\n`;
+      const run = ask(folder, {
+        tool_name: 'Write',
+        tool_input: { file_path: page, content },
+        cwd: folder,
+      });
+      expect(run.status, `${title} -> ${name}: ${run.stderr}`).toBe(0);
+    }
   });
 
   it('checks what an edit leaves in the file, not only the text it adds', () => {
