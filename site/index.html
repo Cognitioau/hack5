@@ -149,16 +149,19 @@
               <a href="https://github.com/coddingtonbear/obsidian-local-rest-api" target="_blank" rel="noopener"
                 >Local REST API</a
               >
-              and copy its API key. Trust its HTTPS certificate as its README describes, or, for a local demo, turn on
-              its HTTP listener and the extension's loopback HTTP option.
+              and copy the API key from its settings. For the quickest setup, also turn on its
+              <strong>HTTP server</strong>: it listens on port 27123 and stays on this computer. To keep HTTPS instead,
+              trust the plugin's certificate as its README describes.
             </p>
           </li>
           <li>
             <h3>Connect the grave</h3>
             <p>
-              Open the extension's <strong>Settings</strong>. Enter the plugin's loopback endpoint (for example
-              <code>https://127.0.0.1:27124</code>), a folder for captures and the key, then <strong>Save</strong>.
-              Saving tests the vault and says whether sync is on.
+              Open <strong>Settings</strong> from the extension's toolbar popup. Set the endpoint to
+              <code>http://127.0.0.1:27123</code> and tick <strong>Use HTTP for this numeric loopback endpoint only</strong>,
+              or keep <code>https://127.0.0.1:27124</code> if you trusted the certificate. Add a capture folder and the
+              key, choose <strong>Save settings</strong> and allow Chrome's access prompt. Saving tests the vault and says
+              whether sync is on. The key is forgotten when Chrome closes or the extension reloads, unless you tick <strong>Remember the key</strong>.
             </p>
           </li>
           <li>
