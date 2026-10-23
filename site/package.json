@@ -1,0 +1,23 @@
+{
+  "name": "zombie-brain-site",
+  "version": "0.1.0",
+  "private": true,
+  "description": "zombiebrain.si: the one-page graveyard scene and download for the Zombie Brain Chrome extension.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "postprocessing": "6.39.5",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "vite": "8.3.5"
+  }
+}
