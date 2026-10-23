@@ -127,7 +127,7 @@ const revealVault = () => element('vault-status').scrollIntoView({ block: 'neare
 function renderActivation(): void {
   element('activation-state').textContent =
     activation === 'universal'
-      ? 'On across your browser. Hold Shift or Ctrl and circle to capture.'
+      ? 'On across your browser. Hold Ctrl and circle to capture.'
       : activation === 'paused'
         ? 'Paused everywhere. Your saved captures are retained.'
         : 'Not enabled across tabs yet. Enable once to keep the hand with you.';
@@ -333,10 +333,7 @@ element('global-enable').addEventListener('click', () => {
       requestId: request.activationRequest,
     });
     await load();
-    notice(
-      'Zombie Brain is on across your browser. Hold Shift or Ctrl and circle a passage.',
-      'success',
-    );
+    notice('Zombie Brain is on across your browser. Hold Ctrl and circle a passage.', 'success');
   }).then(renderActivation);
 });
 element('global-pause').addEventListener('click', () => {

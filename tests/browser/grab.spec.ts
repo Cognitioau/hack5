@@ -452,6 +452,57 @@ test('one click grabs a selection or the whole page, and a chip follows a settle
   }
 });
 
+test('Shift+Z grabs the whole page over a selection, and types a Z in a field', async () => {
+  test.setTimeout(90_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    await configureVault(fixture, vault, false);
+    const article = await fixture.context.newPage();
+    await article.goto(`${vault.origin}/article`);
+    await wake(fixture, article);
+
+    const field = article.locator('#private-field');
+    await field.focus();
+    await article.keyboard.press('Shift+KeyZ');
+    await expect(field).toHaveValue(/Z/);
+    await article.waitForTimeout(1_000);
+    expect(await state(fixture)).toHaveLength(0);
+    await field.evaluate((node) => (node as HTMLElement).blur());
+
+    // A web component's field reaches the page as its host element.
+    await article.evaluate(() => {
+      const host = document.createElement('search-box');
+      host.attachShadow({ mode: 'open' }).append(document.createElement('input'));
+      document.querySelector('main')?.append(host);
+    });
+    const inner = article.locator('search-box input');
+    await inner.focus();
+    await article.keyboard.press('Shift+KeyZ');
+    await expect(inner).toHaveValue('Z');
+    await article.waitForTimeout(1_000);
+    expect(await state(fixture)).toHaveLength(0);
+    await inner.evaluate((node) => (node as HTMLElement).blur());
+
+    const selected = await dragSelect(article, '#dog');
+    expect(selected.length).toBeGreaterThan(10);
+    await article.keyboard.press('Shift+KeyZ');
+    await expect.poll(async () => (await state(fixture))[0]?.persistence).toBe('saved-vault');
+    const captures = await state(fixture);
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.candidate).toMatchObject({
+      kind: 'link',
+      url: `${vault.origin}/article`,
+      wholePage: true,
+    });
+    expect(captures[0]?.candidate.text).toContain('A young dog runs through the park');
+    expect(captures[0]?.candidate.text).not.toContain('A form field must never be captured');
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
 test('a whole-page grab keeps the article and who wrote it, not the page around it', async () => {
   test.setTimeout(90_000);
   const vault = await startVaultFixture();

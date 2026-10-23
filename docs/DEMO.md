@@ -6,7 +6,7 @@ This is a recording script, not evidence that the live rehearsal has passed. Use
 
 | Time | Action | Evidence to show |
 | --- | --- | --- |
-| 0–12 s | Enable globally, switch to a public page, select a passage and click the hand chip; then hold Shift and circle another | The hand bursting through the page, grabbing the copy and burying it on the acknowledged save |
+| 0–12 s | Enable globally, switch to a public page, select a passage and click the hand chip; then hold Ctrl and circle another | The hand bursting through the page, grabbing the copy and burying it on the acknowledged save |
 | 12–22 s | Show the new note in Obsidian | Real source text, URL and retained note |
 | 22–34 s | Capture a fully visible image | Actual local attachment or clearly labelled crop; open it offline |
 | 34–49 s | Capture a YouTube moment with loaded native cues, or explicitly show manual transcript import | Partial/provenance label and actual cue time |
@@ -22,7 +22,7 @@ These came through a headless rehearsal of the build on real pages ([STATUS](STA
 
 | Scene | Pick | Why, and what to avoid |
 | --- | --- | --- |
-| Lasso, then spit back | Wikipedia's [Octopus](https://en.wikipedia.org/wiki/Octopus): circle the camouflage passage with Shift held, then shake with Shift still held | Archived 560 ms after the shake began; Rebury restores it. The passage keeps citation marks such as `[53]`. `/ingest` skips archived captures, so the `/ask` scene needs this paragraph captured again off camera (below). |
+| Lasso, then spit back | Wikipedia's [Octopus](https://en.wikipedia.org/wiki/Octopus): circle the camouflage passage with Ctrl held, then shake with Ctrl still held | Archived 560 ms after the shake began (rehearsed with Shift on 21 October, before Ctrl replaced it); Rebury restores it. The passage keeps citation marks such as `[53]`. `/ingest` skips archived captures, so the `/ask` scene needs this paragraph captured again off camera (below). |
 | Image | Simon Willison's [Things we learned about LLMs in 2024](https://simonwillison.net/2024/Dec/31/llms-in-2024/), the Chatbot Arena table | A clean crop (351 ms in one run); after granting `https://static.simonwillison.net` in Settings, the original 2266×1422 file. Avoid Guardian articles: a support banner can land in the crop. |
 | YouTube moment | [vfbNzpd6cIw](https://www.youtube.com/watch?v=vfbNzpd6cIw) at 1:00 | Its cue at 0:54 ("So let's start at the beginning -- rules.") matches TED.com's transcript. Backup: [dQw4w9WgXcQ](https://www.youtube.com/watch?v=dQw4w9WgXcQ) at 0:45, where an ad may play first. Headless, YouTube refused the panel for 20 of 32 videos, and on 22 October twice for this one: check it signed in. |
 | Transcript import | [iG9CE55wbtY](https://www.youtube.com/watch?v=iG9CE55wbtY), whose panel YouTube refused, with an SRT made from the talk's public transcript | Imported 427 cues and saved the moment with `t=60s`. The imported timings come from the transcript, not YouTube, so expect a few seconds' skew. |
@@ -45,6 +45,6 @@ In the edit, show the typed line, cut to the answer's first paragraph, then to t
 
 ## Draft submission description
 
-Zombie Brain turns deliberate browsing gestures into Obsidian captures. Select text and click the hand, click it to keep the whole page, or hold Shift and circle a passage. It keeps text, images or visible crops, and YouTube moments with timestamped captions. A bundled local model finds related notes without an AI API key, and a vault kit lets Claude Code compile the captures into a wiki you can question, every claim cited. Saves are recoverable.
+Zombie Brain turns deliberate browsing gestures into Obsidian captures. Select text and click the hand, click it to keep the whole page, or hold Ctrl and circle a passage. It keeps text, images or visible crops, and YouTube moments with timestamped captions. A bundled local model finds related notes without an AI API key, and a vault kit lets Claude Code compile the captures into a wiki you can question, every claim cited. Saves are recoverable.
 
 This draft is under 500 characters. Recheck it against the final demonstrated behavior before submission. Do not mention gaze, and do not claim broad transcript coverage until its checks pass.

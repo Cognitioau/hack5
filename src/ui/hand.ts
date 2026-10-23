@@ -455,7 +455,7 @@ export class HandView {
   private updateGrabLabel(): void {
     const label = this.selectionAvailable ? 'Grab the selected text' : 'Grab this page';
     this.grabButton.setAttribute('aria-label', label);
-    this.grabButton.title = `${label}. Shift/Ctrl + circle grabs a sentence, image or video.`;
+    this.grabButton.title = `${label}. Ctrl + circle grabs a sentence, image or video; Shift+Z grabs the page.`;
   }
 
   private updateUndo(): void {

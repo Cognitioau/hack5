@@ -29,7 +29,7 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
     await drawCircle(article, center, null);
     expect(await state(fixture)).toHaveLength(0);
 
-    await drawCircle(article, center, 'Shift', 0.55);
+    await drawCircle(article, center, 'Control', 0.55);
     await article.waitForTimeout(100);
     expect(await state(fixture)).toHaveLength(0);
 
@@ -39,14 +39,14 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
     await article.locator('#private-field').evaluate((node) => (node as HTMLElement).blur());
 
     await article.mouse.down();
-    await drawCircle(article, center, 'Shift');
+    await drawCircle(article, center, 'Control');
     await article.mouse.up();
     await article.evaluate(() => document.getSelection()?.removeAllRanges());
     expect(await state(fixture)).toHaveLength(0);
 
     // Page scripts cannot forge the deliberate keyboard/pointer input.
     await article.evaluate(({ x, y }) => {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true }));
       for (let step = 0; step <= 64; step++) {
         const angle = (step / 64) * Math.PI * 2;
         document.dispatchEvent(
@@ -54,12 +54,17 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
             pointerType: 'mouse',
             clientX: x + Math.cos(angle) * 52,
             clientY: y + Math.sin(angle) * 52,
-            shiftKey: true,
+            ctrlKey: true,
           }),
         );
       }
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }));
+      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control' }));
     }, center);
+    expect(await state(fixture)).toHaveLength(0);
+
+    // Shift is left to the page: a full loop with it held takes nothing.
+    await drawCircle(article, center, 'Shift');
+    await article.waitForTimeout(300);
     expect(await state(fixture)).toHaveLength(0);
 
     await drawCircle(article, center, 'Control');
@@ -127,7 +132,7 @@ test('the lasso takes a sentence from text set in plain divs and spans, as searc
       { x: address.x + address.width + 300, y: address.y + address.height / 2 },
       { x: address.x + address.width + 25, y: address.y + address.height / 2 },
     ]) {
-      await drawCircle(page, away, 'Shift');
+      await drawCircle(page, away, 'Control');
       for (let waited = 0; waited < 2_500; waited += 250) {
         expect(await state(fixture)).toHaveLength(0);
         await page.waitForTimeout(250);
@@ -135,10 +140,10 @@ test('the lasso takes a sentence from text set in plain divs and spans, as searc
     }
     // In the gap between two lines of the snippet, off both lines' words.
     expect(second.top - first.bottom).toBeGreaterThan(2);
-    await drawCircle(page, { x: first.x + 40, y: (first.bottom + second.top) / 2 }, 'Shift');
+    await drawCircle(page, { x: first.x + 40, y: (first.bottom + second.top) / 2 }, 'Control');
     await expect.poll(async () => (await state(fixture))[0]?.persistence).toBe('saved-vault');
     await page.waitForTimeout(2_500);
-    await drawCircle(page, { x: most.x + most.width / 2, y: most.y + most.height / 2 }, 'Shift');
+    await drawCircle(page, { x: most.x + most.width / 2, y: most.y + most.height / 2 }, 'Control');
     await expect
       .poll(async () => (await state(fixture)).map((capture) => capture.persistence))
       .toEqual(['saved-vault', 'saved-vault']);

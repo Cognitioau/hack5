@@ -60,7 +60,7 @@ function activate(): () => void {
   };
   let point: GesturePoint = { x: innerWidth / 2, y: innerHeight / 2, at: performance.now() };
   let pointerKnown = false;
-  let modifier: 'Shift' | 'Control' | null = null;
+  let modifier: 'Control' | null = null;
   let consumedHold = false;
   let circle: CircleGestureTracker | null = null;
   /** What the loop drawn so far would take, when that was last read, and how long reading took. */
@@ -112,7 +112,7 @@ function activate(): () => void {
   };
 
   const idle = (
-    detail = 'Select text and click the hand, or click it with nothing selected to grab the page. Hold Shift or Ctrl and circle what you want; release early to cancel.',
+    detail = 'Select text and click the hand, or click it with nothing selected (or press Shift+Z) to grab the page. Hold Ctrl and circle what you want; release early to cancel.',
   ): void => {
     if (disposed) return;
     phase = 'idle';
@@ -355,7 +355,7 @@ function activate(): () => void {
     view.setState(
       'saving',
       'Taking hold…',
-      'Preparing a durable local capture. Keep the modifier held and shake, or press Escape to cancel.',
+      'Preparing a durable local capture. Hold Ctrl and shake, or press Escape to cancel.',
     );
     const response = await request({
       v: 1,
@@ -566,6 +566,12 @@ function activate(): () => void {
     await arm(candidate, true);
   };
 
+  /** Shift+Z: the whole page, whatever is selected. */
+  const capturePage = async (): Promise<void> => {
+    if (!(await beginManualGrab())) return;
+    await grabPage();
+  };
+
   const captureSelection = async (): Promise<void> => {
     if (!(await beginManualGrab())) return;
     const selected = extractSelection(document);
@@ -664,6 +670,13 @@ function activate(): () => void {
   });
   view.host.dataset.zombieHandOwner = owner;
 
+  /** Typing in a field, including one in an open shadow root, whose events reach the page as its host. */
+  const typing = (event: Event): boolean => {
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    return isEditable(event.target instanceof Element ? event.target : null) || isEditable(focused);
+  };
+
   // A modifier hold owns exactly one lasso. Its release never cancels a
   // completed circle that is already crossing the asynchronous message boundary.
   const endInput = (invalidatePending = false): void => {
@@ -706,7 +719,7 @@ function activate(): () => void {
     gestureTimer = setTimeout(() => {
       if (phase !== 'aiming') return;
       consumedHold = true;
-      idle('Circle expired. Release the key, then hold Shift or Ctrl to try again.');
+      idle('Circle expired. Release Ctrl, then hold it to try again.');
     }, 4_500);
   };
 
@@ -720,15 +733,13 @@ function activate(): () => void {
     pointerKnown = true;
     view.move(point.x, point.y);
     if (!modifier) return;
-    const singleModifier =
-      modifier === 'Shift' ? event.shiftKey && !event.ctrlKey : event.ctrlKey && !event.shiftKey;
     if (
-      !singleModifier ||
+      !event.ctrlKey ||
+      event.shiftKey ||
       event.altKey ||
       event.metaKey ||
       event.buttons !== 0 ||
-      isEditable(event.target instanceof Element ? event.target : null) ||
-      isEditable(document.activeElement)
+      typing(event)
     ) {
       endInput();
       return;
@@ -900,7 +911,7 @@ function activate(): () => void {
         // Changing settings invalidates background capabilities, including the
         // token for an already armed target. Durable work stays in the journal.
         idle(
-          'Settings changed. Hold Shift or Ctrl and circle a new target; pending captures remain in the graveyard.',
+          'Settings changed. Hold Ctrl and circle a new target; pending captures remain in the graveyard.',
         );
         void refreshFeatures();
         sendResponse({ ok: true });
@@ -1006,7 +1017,7 @@ function activate(): () => void {
   document.addEventListener(
     'focusin',
     (event) => {
-      if (isEditable(event.target instanceof Element ? event.target : null)) invalidateTarget();
+      if (typing(event)) invalidateTarget();
     },
     { signal: listeners.signal },
   );
@@ -1033,9 +1044,7 @@ function activate(): () => void {
         void release();
         return;
       }
-      const editable =
-        isEditable(event.target instanceof Element ? event.target : null) ||
-        isEditable(document.activeElement);
+      const editable = typing(event);
       if (
         event.altKey &&
         event.shiftKey &&
@@ -1048,16 +1057,28 @@ function activate(): () => void {
         if (!event.repeat) void captureAccessible();
         return;
       }
+      if (
+        event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.isComposing &&
+        (event.key === 'Z' || event.key === 'z') &&
+        !editable
+      ) {
+        event.preventDefault();
+        if (!event.repeat) void capturePage();
+        return;
+      }
       if (event.repeat) return;
-      const singleModifier =
-        (event.key === 'Shift' && event.shiftKey && !event.ctrlKey) ||
-        (event.key === 'Control' && event.ctrlKey && !event.shiftKey);
+      // Shift alone is left to the page: it selects, and it starts Shift+Z.
+      const singleModifier = event.key === 'Control' && event.ctrlKey && !event.shiftKey;
       if (!singleModifier || event.altKey || event.metaKey || editable) {
         endInput();
         return;
       }
       if (modifier) return;
-      modifier = event.key as 'Shift' | 'Control';
+      modifier = 'Control';
       beginCircle();
     },
     { signal: listeners.signal },

@@ -184,7 +184,7 @@ async function textBox(page: Page, selector: string): Promise<Box> {
  * A loop round a box, as a hand draws one: an oval through its corners, a
  * little outside them, and never so flat that it is no loop at all.
  */
-async function loopRound(page: Page, box: Box, modifier: 'Shift' | 'Control' = 'Shift') {
+async function loopRound(page: Page, box: Box, modifier: 'Shift' | 'Control' = 'Control') {
   const center = { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
   const across = ((box.right - box.left) / 2) * Math.SQRT2 + 10;
   const down = Math.max(((box.bottom - box.top) / 2) * Math.SQRT2 + 10, across / 2.5);
@@ -338,9 +338,9 @@ test('a lasso takes what its loop goes round: steps by their starts, a heading w
 
     // A small circle on one sentence of a paragraph, its rim across the lines
     // above and below: that sentence alone, long or short.
-    await drawCircle(page, await aimAt(page, '#dense', dense[4] ?? ''), 'Shift');
+    await drawCircle(page, await aimAt(page, '#dense', dense[4] ?? ''), 'Control');
     expect((await saved(fixture, page, 4))?.candidate.text).toBe(dense[4]);
-    await drawCircle(page, await aimAt(page, '#terse', terse[16] ?? ''), 'Shift');
+    await drawCircle(page, await aimAt(page, '#terse', terse[16] ?? ''), 'Control');
     expect((await saved(fixture, page, 5))?.candidate.text).toBe(terse[16]);
 
     // Words already highlighted under the loop's centre are taken as they
@@ -389,7 +389,7 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
     // An oval over the left of the steps, its rim cutting into the first
     // words of the top and bottom lines: still every step.
     const list = await textBox(page, '#steps li');
-    await drawCircle(page, { x: list.left + 80, y: (list.top + list.bottom) / 2 }, 'Shift', 1, {
+    await drawCircle(page, { x: list.left + 80, y: (list.top + list.bottom) / 2 }, 'Control', 1, {
       x: 100,
       y: (list.bottom - list.top) / 2 + 20,
     });
@@ -423,7 +423,7 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
     const centre = { x: (pair.left + pair.right) / 2, y: (pair.top + pair.bottom) / 2 };
     expect(under.left).toBeGreaterThan(centre.x - 100);
     expect(under.right).toBeLessThan(centre.x + 100);
-    await drawCircle(page, centre, 'Shift', 1, { x: 120, y: under.bottom + 8 - centre.y });
+    await drawCircle(page, centre, 'Control', 1, { x: 120, y: under.bottom + 8 - centre.y });
     expect((await saved(fixture, page, 4))?.candidate.text).toBe('Menu Bar Button\n\nHot Corner');
 
     // Three lines tall, centred on the first word of a sentence that starts
@@ -444,7 +444,7 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
       }
       throw new Error('No sentence starts mid-line');
     }, boxes);
-    await drawCircle(page, aim, 'Shift', 1, { x: 130, y: 46 });
+    await drawCircle(page, aim, 'Control', 1, { x: 130, y: 46 });
     expect((await saved(fixture, page, 5))?.candidate.text).toBe(boxes[aim.index]);
 
     // A small circle on a link takes the link.
@@ -452,7 +452,7 @@ test('a lasso keeps to the lines it holds: corners cut, a short list, a line it 
     await drawCircle(
       page,
       { x: (link.left + link.right) / 2, y: (link.top + link.bottom) / 2 },
-      'Shift',
+      'Control',
     );
     expect((await saved(fixture, page, 6))?.candidate).toMatchObject({
       kind: 'link',
@@ -515,7 +515,7 @@ test('a lasso lights every line it takes and takes what it goes round across blo
     await drawCircle(
       page,
       { x: (middle.left + middle.right) / 2, y: middle.bottom - 50 },
-      'Shift',
+      'Control',
       1,
       { x: 200, y: 115 },
     );
@@ -532,7 +532,7 @@ test('a lasso lights every line it takes and takes what it goes round across blo
       return above && below ? (above.bottom + below.top) / 2 : 0;
     });
     expect(gap).toBeGreaterThan(pair.top);
-    await drawCircle(page, { x: (pair.left + pair.right) / 2, y: gap }, 'Shift', 1, {
+    await drawCircle(page, { x: (pair.left + pair.right) / 2, y: gap }, 'Control', 1, {
       x: 250,
       y: 100,
     });
@@ -548,7 +548,7 @@ test('a lasso lights every line it takes and takes what it goes round across blo
     await drawCircle(
       page,
       { x: stacked.left + 330, y: (stacked.top + stacked.bottom) / 2 },
-      'Shift',
+      'Control',
       1,
       { x: 230, y: 150 },
     );
@@ -562,7 +562,7 @@ test('a lasso lights every line it takes and takes what it goes round across blo
       return box ? (box.top + box.bottom) / 2 : 0;
     });
     expect(body).toBeGreaterThan(leading.top);
-    await drawCircle(page, { x: leading.left + 360, y: body }, 'Shift', 1, { x: 300, y: 160 });
+    await drawCircle(page, { x: leading.left + 360, y: body }, 'Control', 1, { x: 300, y: 160 });
     expect((await saved(fixture, page, 5))?.candidate.text).toBe(`${lead}\n\n${fits.join(' ')}`);
 
     // Round a trail of links and a list: the items, never the navigation, an
@@ -604,7 +604,7 @@ test('a lasso lights every line it takes and takes what it goes round across blo
     await drawCircle(
       page,
       { x: (block.left + block.right) / 2, y: (block.top + block.bottom) / 2 },
-      'Shift',
+      'Control',
       1,
       { x: (block.right - block.left) / 2 + 60, y: (block.bottom - block.top) / 2 + 24 },
     );
