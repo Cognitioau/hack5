@@ -324,7 +324,7 @@ export function mountGazeLab(environment?: CameraEnvironment): void {
     );
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `zombie-hand-gaze-diagnostics-${report.createdAt.replace(/[:.]/g, '-')}.json`;
+    anchor.download = `zombie-brain-gaze-diagnostics-${report.createdAt.replace(/[:.]/g, '-')}.json`;
     anchor.hidden = true;
     document.body.append(anchor);
     anchor.click();

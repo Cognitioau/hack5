@@ -1,6 +1,6 @@
-// Installs the graveyard wiki kit into a Zombie Hand vault folder.
+// Installs the graveyard wiki kit into a Zombie Brain vault folder.
 //
-//   node scripts/install-vault-kit.mjs "<vault>/Zombie Hand"
+//   node scripts/install-vault-kit.mjs "<vault>/Zombie Brain"
 //
 // Copies vault-kit/ into the folder: AGENTS.md, CLAUDE.md, and claude/ as .claude/ (the settings
 // and hook that confine the agent to wiki/, and the /ingest, /ask and /lint skills). Create-only:
@@ -14,7 +14,7 @@ const kit = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'vault-kit');
 const CONFINEMENT = ['.claude/settings.json', '.claude/hooks/wiki-only.mjs'];
 const [target, ...extra] = process.argv.slice(2);
 if (!target || extra.length) {
-  console.error('Usage: node scripts/install-vault-kit.mjs "<vault>/Zombie Hand"');
+  console.error('Usage: node scripts/install-vault-kit.mjs "<vault>/Zombie Brain"');
   process.exit(2);
 }
 const folder = resolve(target);
@@ -26,7 +26,7 @@ if (!stats?.isDirectory()) {
 const entries = await readdir(folder);
 if (entries.some((name) => !name.startsWith('.')) && !entries.includes('captures')) {
   console.error(
-    `${folder} has files but no captures/ folder, so it doesn't look like the Zombie Hand folder. Nothing was copied.`,
+    `${folder} has files but no captures/ folder, so it doesn't look like the Zombie Brain folder. Nothing was copied.`,
   );
   process.exit(2);
 }

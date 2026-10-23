@@ -1011,13 +1011,13 @@ describe('one-click grabs (mocked browser boundary)', () => {
   it('passes a refusal back to the toolbar, but counts a capture kept on the device as taken', async () => {
     send.mockImplementation(async (message: ContentMessage) =>
       message.type === 'ARM'
-        ? { ok: false, error: 'Zombie Hand is paused everywhere' }
+        ? { ok: false, error: 'Zombie Brain is paused everywhere' }
         : handleMessage(message),
     );
     selectPassage();
     expect(await toolbarGrab('selection')).toEqual({
       ok: false,
-      error: 'Zombie Hand is paused everywhere',
+      error: 'Zombie Brain is paused everywhere',
     });
     expect(messages('CAPTURE')).toHaveLength(0);
     send.mockImplementation(async (message: ContentMessage) =>

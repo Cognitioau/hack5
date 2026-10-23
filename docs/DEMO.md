@@ -32,7 +32,7 @@ These came through a headless rehearsal of the build on real pages ([STATUS](STA
 
 An agent rehearsed this on a copy of the kit with the demo's own captures plus three passages, through `claude -p`. After one `/ingest`, the question above answered directly in 105 s and 113 s ($0.63 and $0.45). Both times it filed the answer page by itself, because the answer drew on three captures, and cited a capture on every claim: 21 and 19 citations, none unresolved. The `/ingest` took about 8 minutes and $2.60 and wrote only inside `wiki/`. Not yet run: the interactive trust prompt, Obsidian's rendering of the page, and captures in the signed-in recording browser.
 
-1. Install the kit into the test vault's capture folder: `node scripts/install-vault-kit.mjs "<test vault>/Zombie Hand"`. The folder must already hold `captures/` or be empty.
+1. Install the kit into the test vault's capture folder: `node scripts/install-vault-kit.mjs "<test vault>/Zombie Brain"`. The folder must already hold `captures/` or be empty.
 2. Off camera, capture three passages by selecting each and clicking the hand chip. Say in the video that they were captured beforehand.
    - [Octopus](https://en.wikipedia.org/wiki/Octopus), "Camouflage and colour change", first paragraph: from "Octopuses use camouflage to hunt and to avoid predators." to "…nearly matching the energy used at rest."
    - [Cuttlefish](https://en.wikipedia.org/wiki/Cuttlefish), "Chromatic cells": the sentence beginning "Cuttlefish change color and pattern (including the polarization of the reflected light waves)…".
@@ -45,6 +45,6 @@ In the edit, show the typed line, cut to the answer's first paragraph, then to t
 
 ## Draft submission description
 
-Zombie Hand turns deliberate browsing gestures into Obsidian captures. Select text and click the hand, click it to keep the whole page, or hold Shift and circle a passage. It keeps text, images or visible crops, and YouTube moments with timestamped captions. A bundled local model finds related notes without an AI API key, and a vault kit lets Claude Code compile the captures into a wiki you can question, every claim cited. Saves are recoverable.
+Zombie Brain turns deliberate browsing gestures into Obsidian captures. Select text and click the hand, click it to keep the whole page, or hold Shift and circle a passage. It keeps text, images or visible crops, and YouTube moments with timestamped captions. A bundled local model finds related notes without an AI API key, and a vault kit lets Claude Code compile the captures into a wiki you can question, every claim cited. Saves are recoverable.
 
 This draft is under 500 characters. Recheck it against the final demonstrated behavior before submission. Do not mention gaze, and do not claim broad transcript coverage until its checks pass.

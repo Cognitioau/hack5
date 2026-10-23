@@ -504,9 +504,9 @@ test('a whole-page grab keeps the article and who wrote it, not the page around 
     // Reading the article never changes the page the person is reading.
     expect(await essay.evaluate(() => document.querySelector('main')?.outerHTML)).toBe(before);
     await expect
-      .poll(() => vault.files.get(`Zombie Hand/captures/${page?.id}.md`)?.toString() ?? '')
+      .poll(() => vault.files.get(`Zombie Brain/captures/${page?.id}.md`)?.toString() ?? '')
       .toContain('"whole_page": true');
-    const note = vault.files.get(`Zombie Hand/captures/${page?.id}.md`)?.toString() ?? '';
+    const note = vault.files.get(`Zombie Brain/captures/${page?.id}.md`)?.toString() ?? '';
     expect(note).toContain('"author": "Ada Example"');
     expect(note).toContain('By Ada Example · Synthetic Essays · 2024\\-03\\-05');
   } finally {

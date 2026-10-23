@@ -258,7 +258,7 @@ export const settingsSchema = z
 export type Settings = z.infer<typeof settingsSchema>;
 export const defaultSettings: Settings = {
   endpoint: 'https://127.0.0.1:27124',
-  folder: 'Zombie Hand',
+  folder: 'Zombie Brain',
   allowInsecureLoopback: false,
   rememberKey: false,
   features: { images: true, youtube: true, haunting: true, semantic: true, gaze: false },

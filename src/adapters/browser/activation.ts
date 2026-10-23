@@ -204,7 +204,7 @@ export function createHandActivation(options: ActivationOptions): HandActivation
     if (epoch !== intent) return;
     if (!permissionAfter) {
       await pause();
-      throw new Error('Browser access changed before Zombie Hand could be enabled.');
+      throw new Error('Browser access changed before Zombie Brain could be enabled.');
     }
     if (epoch !== intent) return;
     mode = 'universal';

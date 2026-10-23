@@ -151,6 +151,29 @@ async function verifyArtifactNames(directory) {
   }
 }
 await verifyArtifactNames(destination);
+// The product is Zombie Brain. Names that saved data is found by, such as zombie-hand-v1, keep
+// their hyphens; no text a person reads may say Zombie Hand, split by markup or not.
+assert(manifest.name === 'Zombie Brain', 'Chrome must show the extension as Zombie Brain');
+async function textFiles(directory) {
+  const found = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) found.push(...(await textFiles(path)));
+    else if (/\.(?:html|js|css|json|md|txt)$/.test(entry.name) || entry.name === 'LICENSE')
+      found.push(path);
+  }
+  return found;
+}
+const shipped = await textFiles(destination);
+assert(shipped.length > 10, 'Too few text files found to check the product name');
+const named = [];
+for (const file of shipped) {
+  let text = await readFile(file, 'utf8');
+  if (file.endsWith('.html')) text = text.replace(/<[^>]*>/g, ' ');
+  if (/zombie\s+hand/i.test(text.replaceAll('&nbsp;', ' ')))
+    named.push(file.slice(destination.length + 1));
+}
+assert(!named.length, `The old product name, Zombie Hand, is in ${named.join(', ')}`);
 if (core) {
   for (const file of ['gaze.html', 'gaze.js', 'gaze-runtime', 'models/mediapipe-face-landmarker']) {
     assert(

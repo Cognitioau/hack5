@@ -108,7 +108,9 @@ test('full extension captures with trusted input, preserves crops and captions, 
     await captureAt(article, '#dog', 'circle');
     const dog = await saved(fixture, (capture) => capture.candidate.text.includes('young dog'));
     expect(dog.candidate.kind).toBe('text');
-    expect(vault.files.get(`Zombie Hand/captures/${dog.id}.md`)?.toString()).toContain('young dog');
+    expect(vault.files.get(`Zombie Brain/captures/${dog.id}.md`)?.toString()).toContain(
+      'young dog',
+    );
     await screenshotArtifact(article, 'full-text-capture');
 
     const credentialRead = await fixture.worker.evaluate(async (id) => {
@@ -172,7 +174,7 @@ test('full extension captures with trusted input, preserves crops and captions, 
     await captureAt(article, '#fern');
     const image = await saved(fixture, (capture) => capture.candidate.kind === 'image');
     expect(image.preservation).toBe('screenshot');
-    const attachment = vault.files.get(`Zombie Hand/attachments/${image.id}.png`);
+    const attachment = vault.files.get(`Zombie Brain/attachments/${image.id}.png`);
     expect(attachment).toBeDefined();
     const pixels = await article.evaluate(
       async (values) => {
@@ -245,7 +247,7 @@ test('full extension captures with trusted input, preserves crops and captions, 
     });
     expect(video.candidate.video?.transcript.cues).toHaveLength(3);
     expect(video.candidate.url).toBe('https://www.youtube.com/watch?v=abcdefghijk&t=45s');
-    const videoNote = vault.files.get(`Zombie Hand/captures/${video.id}.md`)?.toString() ?? '';
+    const videoNote = vault.files.get(`Zombie Brain/captures/${video.id}.md`)?.toString() ?? '';
     expect(videoNote).toContain('camouflage');
     expect(videoNote).toContain('t=45s');
     await screenshotArtifact(youtube, 'full-youtube-fixture');
@@ -353,10 +355,10 @@ test('full extension captures with trusted input, preserves crops and captions, 
     );
     expect(archived.lifecycle).toBe('archived');
     expect(
-      JSON.parse(vault.files.get(`Zombie Hand/metadata/${dog.id}.json`)?.toString() ?? '{}')
+      JSON.parse(vault.files.get(`Zombie Brain/metadata/${dog.id}.json`)?.toString() ?? '{}')
         .lifecycle.status,
     ).toBe('archived');
-    expect(vault.files.has(`Zombie Hand/captures/${dog.id}.md`)).toBe(true);
+    expect(vault.files.has(`Zombie Brain/captures/${dog.id}.md`)).toBe(true);
     await screenshotArtifact(graveyard, 'full-graveyard');
     await fixture.restart();
     expect((await state(fixture)).find((capture) => capture.id === dog.id)?.lifecycle).toBe(
