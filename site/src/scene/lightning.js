@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mulberry32 } from './noise.js';
 
 // A strike is a few uneven pulses. The bolt is a jagged ribbon far behind the graveyard.
 const PULSES = [
@@ -48,6 +49,8 @@ function boltGeometry(rand) {
 }
 
 export function createLightning(scene) {
+  // Seeded, so a frozen ?t= frame always shows the same sky.
+  const random = mulberry32(4242);
   const light = new THREE.DirectionalLight(0xdfe6ff, 0);
   light.position.set(6, 12, -14);
   scene.add(light);
@@ -66,14 +69,14 @@ export function createLightning(scene) {
   scene.add(bolt);
 
   let strikeAt = -Infinity;
-  let nextAmbient = 5 + Math.random() * 6;
+  let nextAmbient = 5 + random() * 6;
   let boltX = 0;
 
   function strike(time) {
     strikeAt = time;
-    boltX = (Math.random() - 0.5) * 120;
+    boltX = (random() - 0.5) * 120;
     bolt.geometry.dispose();
-    bolt.geometry = boltGeometry(Math.random);
+    bolt.geometry = boltGeometry(random);
     bolt.position.set(boltX, 0, -150);
   }
 
@@ -95,7 +98,7 @@ export function createLightning(scene) {
     update(time) {
       if (time >= nextAmbient) {
         strike(time);
-        nextAmbient = time + 7 + Math.random() * 9;
+        nextAmbient = time + 7 + random() * 9;
       }
       const flash = flashAt(time);
       light.intensity = flash * 9;

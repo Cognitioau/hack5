@@ -14,7 +14,7 @@
       ]
     },
     {
-      "source": "/textures/(.*)",
+      "source": "/(textures|models)/(.*)",
       "headers": [
         {
           "key": "Cache-Control",

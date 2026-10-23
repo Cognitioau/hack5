@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+import { mulberry32 } from './noise.js';
 import { heightAt } from './world.js';
 
 // Streaks fall inside a box in front of the camera; the shader wraps each one back to the top.
 export function createRain(scene, streakScene, { count, splashes }) {
+  const random = mulberry32(911);
   const uniforms = {
     uTime: { value: 0 },
     uFlash: { value: 0 },
@@ -17,10 +19,10 @@ export function createRain(scene, streakScene, { count, splashes }) {
   geometry.setAttribute('uv', quad.getAttribute('uv'));
   const seeds = new Float32Array(count * 4);
   for (let i = 0; i < count; i++) {
-    seeds[i * 4] = Math.random();
-    seeds[i * 4 + 1] = Math.random();
-    seeds[i * 4 + 2] = Math.random();
-    seeds[i * 4 + 3] = Math.random();
+    seeds[i * 4] = random();
+    seeds[i * 4 + 1] = random();
+    seeds[i * 4 + 2] = random();
+    seeds[i * 4 + 3] = random();
   }
   geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 4));
   geometry.instanceCount = count;
@@ -77,14 +79,14 @@ export function createRain(scene, streakScene, { count, splashes }) {
   splashGeometry.setAttribute('uv', ring.getAttribute('uv'));
   const spots = new Float32Array(splashes * 4);
   for (let i = 0; i < splashes; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const r = Math.sqrt(Math.random()) * 3.2;
+    const a = random() * Math.PI * 2;
+    const r = Math.sqrt(random()) * 3.2;
     const x = Math.cos(a) * r * 1.1;
     const z = -0.3 + Math.sin(a) * r;
     spots[i * 4] = x;
     spots[i * 4 + 1] = heightAt(x, z) + 0.004;
     spots[i * 4 + 2] = z;
-    spots[i * 4 + 3] = Math.random();
+    spots[i * 4 + 3] = random();
   }
   splashGeometry.setAttribute('aSpot', new THREE.InstancedBufferAttribute(spots, 4));
   splashGeometry.instanceCount = splashes;

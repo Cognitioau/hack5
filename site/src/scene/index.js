@@ -11,6 +11,7 @@ import {
   VignetteEffect,
 } from 'postprocessing';
 import * as THREE from 'three';
+import { loadAssets } from './assets.js';
 import { createDirt } from './dirt.js';
 import { createHand } from './hand.js';
 import { createLetter } from './letter.js';
@@ -18,7 +19,7 @@ import { createLightning } from './lightning.js';
 import { createRain } from './rain.js';
 import { createSky, MOON_DIR } from './sky.js';
 import { CYCLE, createTimeline, HOLE } from './timeline.js';
-import { createWorld, heightAt } from './world.js';
+import { createWorld, GLOW_COLOR, heightAt } from './world.js';
 
 const FOG = new THREE.Color(0.034, 0.042, 0.058);
 
@@ -34,26 +35,8 @@ function pickQuality() {
     multisampling: low ? 0 : 4,
     rain: low ? 3000 : 6500,
     splashes: low ? 500 : 1400,
-    handCell: low ? 0.0032 : 0.0026,
+    handCell: low ? 0.0024 : 0.0015,
   };
-}
-
-async function loadTextures() {
-  const loader = new THREE.TextureLoader();
-  const load = (name, srgb) =>
-    loader.loadAsync(`/textures/${name}.jpg`).then((t) => {
-      if (srgb) t.colorSpace = THREE.SRGBColorSpace;
-      return t;
-    });
-  const [soil, soilN, grass, grassN, stone, stoneN] = await Promise.all([
-    load('forest_ground_04_diff', true),
-    load('forest_ground_04_nor', false),
-    load('forrest_ground_01_diff', true),
-    load('forrest_ground_01_nor', false),
-    load('rock_boulder_dry_diff', true),
-    load('rock_boulder_dry_nor', false),
-  ]);
-  return { soil, soilN, grass, grassN, stone, stoneN };
 }
 
 async function loadFont(family) {
@@ -86,15 +69,26 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
 
   const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 400);
 
-  const [textures, fontFamily] = await Promise.all([loadTextures(), loadFont('"IM Fell English"')]);
+  // The hand is meshed in a worker while the textures and models download.
+  const [textures, fontFamily, hand] = await Promise.all([
+    loadAssets(renderer, { low: quality.low }),
+    loadFont('"IM Fell English"'),
+    createHand({ cell: quality.handCell }),
+  ]);
   const world = createWorld(scene, textures, { lowQuality: quality.low, fontFamily });
-  const sky = createSky(scene, FOG);
   const rainScene = new THREE.Scene();
+  const sky = createSky(scene, FOG, rainScene);
+  // Wet soil, puddles and stone pick up the moonlit sky from a prefiltered copy of it.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  envScene.add(new THREE.Mesh(sky.mesh.geometry, sky.mesh.material));
+  scene.environment = pmrem.fromScene(envScene, 0.02, 0.1, 1000).texture;
+  pmrem.dispose();
   const rain = createRain(scene, rainScene, { count: quality.rain, splashes: quality.splashes });
   const lightning = createLightning(scene);
 
   // Moonlight rims everything from behind; a soft cool key keeps the hand readable from the front.
-  const moon = new THREE.DirectionalLight(0x9db2e2, 2.6);
+  const moon = new THREE.DirectionalLight(0xa9bde8, 3.6);
   moon.position.copy(MOON_DIR).multiplyScalar(12).add(new THREE.Vector3(0, 2.5, 0));
   moon.target.position.set(0, 0, -0.3);
   moon.castShadow = true;
@@ -103,9 +97,23 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
   moon.shadow.bias = -0.0004;
   moon.shadow.normalBias = 0.015;
   scene.add(moon, moon.target);
-  const hemi = new THREE.HemisphereLight(0x33435f, 0x0b0a08, 0.7);
+  const hemi = new THREE.HemisphereLight(0x2c3b56, 0x0a0907, 0.45);
   scene.add(hemi);
-  const key = new THREE.SpotLight(0xa9b9da, 4.5, 10, 0.42, 0.85, 1.4);
+  // A hard cool rim from behind the grave, low enough to edge the hand, the clods and the stone.
+  const rim = new THREE.SpotLight(0xb4c8ff, 6, 8, 0.5, 0.6, 1.2);
+  rim.position.set(-1.2, 1.1, -2.6);
+  rim.target.position.set(HOLE.x, 0.15, HOLE.y);
+  scene.add(rim, rim.target);
+  // The grave's own light: faint at rest, flaring when the hand breaks the surface.
+  const glow = new THREE.PointLight(GLOW_COLOR, 0, 1.4, 2);
+  glow.position.set(HOLE.x + 0.01, heightAt(HOLE.x, HOLE.y) + 0.01, HOLE.y - 0.08);
+  scene.add(glow);
+  // Moonlight rakes across the headstone's face so the carving casts its own shade.
+  const rake = new THREE.SpotLight(0x9fb3dc, 7, 6, 0.38, 0.7, 1.2);
+  rake.position.set(-1.35, 1.75, -0.65);
+  rake.target.position.set(0.05, 0.55, -1.36);
+  scene.add(rake, rake.target);
+  const key = new THREE.SpotLight(0xa9b9da, 2.6, 10, 0.42, 0.85, 1.4);
   key.position.set(1.9, 2.4, 2.6);
   key.target.position.set(HOLE.x, 0.25, HOLE.y);
   key.castShadow = !quality.low;
@@ -113,7 +121,6 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
   key.shadow.bias = -0.0005;
   scene.add(key, key.target);
 
-  const hand = createHand({ cell: quality.handCell });
   const letter = createLetter({ fontFamily });
   const dirt = createDirt(scene, textures);
   const timeline = createTimeline({ scene, hand, letter, dirt, world, lightning });
@@ -137,17 +144,18 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
   rainPass.ignoreBackground = true;
   rainPass.skipShadowMapUpdate = true;
   composer.addPass(rainPass);
+  // The threshold sits above the moon's disc so only the grave's green and the lightning bloom hard.
   const bloom = new BloomEffect({
     mipmapBlur: true,
-    luminanceThreshold: 0.75,
-    luminanceSmoothing: 0.2,
-    intensity: 1.1,
-    radius: 0.75,
+    luminanceThreshold: 0.9,
+    luminanceSmoothing: 0.25,
+    intensity: 1.35,
+    radius: 0.78,
   });
   const vignette = new VignetteEffect({ offset: 0.28, darkness: 0.72 });
   const noise = new NoiseEffect({ blendFunction: BlendFunction.OVERLAY, premultiply: false });
   noise.blendMode.opacity.value = 0.09;
-  const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.AGX });
+  const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
   composer.addPass(new EffectPass(camera, bloom, vignette, toneMapping, noise));
 
   const cameraBase = new THREE.Vector3();
@@ -199,6 +207,7 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
   const focus = new THREE.Vector3().copy(timeline.letterRest);
   const focusGoal = new THREE.Vector3();
   let time = 0;
+  let glowLevel = 0.1;
 
   function step(dt) {
     time += dt;
@@ -212,7 +221,17 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
     rain.uniforms.uTime.value = time;
     rain.uniforms.uFlash.value = flash;
     world.uniforms.uTime.value = time;
-    hemi.intensity = 0.7 + flash * 2.2;
+    // Glow follows the crater: a trembling build-up, a flare while the hand is out, embers after.
+    const crater = world.uniforms.uHole.value.z;
+    const goal = Math.max(
+      0.1 + world.uniforms.uTremble.value * 0.35,
+      crater * (timeline.handVisible() ? 1 : 0.3),
+    );
+    glowLevel += (goal - glowLevel) * (1 - Math.exp(-dt * (goal > glowLevel ? 14 : 2.5)));
+    const flicker = 1 + 0.12 * Math.sin(time * 23.0) * Math.sin(time * 7.3 + 1.1) + 0.06 * Math.sin(time * 51.0);
+    world.uniforms.uGlow.value = glowLevel * flicker;
+    glow.intensity = 0.004 + glowLevel * flicker * 0.06;
+    hemi.intensity = 0.45 + flash * 2.2;
     scene.fog.color.copy(FOG).multiplyScalar(1 + flash * 2.5);
 
     if (timeline.handVisible()) hand.grip.getWorldPosition(focusGoal);
