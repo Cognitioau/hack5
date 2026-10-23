@@ -250,9 +250,9 @@ test('a key not remembered is said to last until Chrome closes, and remembering 
   }
 });
 
-/** The vault test's words when the vault cannot be reached. */
-const unreachable =
-  'The vault could not be read. Check its connection, certificate and permission.';
+/** The vault test's words when nothing answers at the fixture's plain HTTP address. */
+const unreachable = (origin: string) =>
+  `Chrome could not connect to ${origin}. Check Obsidian is open and the Local REST API plugin’s non-encrypted (HTTP) server is on at this port.`;
 /** The orange dot of a warning, as ui.css paints it. */
 const warningDot = 'rgb(255, 197, 140)';
 const dotColour = (page: Page) =>
@@ -282,9 +282,11 @@ test('a vault test that fails while syncing says so beside Save and in the popup
 
     await options.bringToFront();
     await options.locator('#connect').click();
-    await expect(options.locator('#message')).toHaveText(unreachable, { timeout: 30_000 });
+    await expect(options.locator('#message')).toHaveText(unreachable(vault.origin), {
+      timeout: 30_000,
+    });
     await expect(options.locator('#vault-state')).toHaveText(
-      `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable}`,
+      `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable(vault.origin)}`,
     );
     await expect(options.locator('#vault-status')).toHaveAttribute('data-state', 'failing');
     expect(await dotColour(options)).toBe(warningDot);
@@ -314,11 +316,11 @@ test('a vault test that fails while syncing says so beside Save and in the popup
       .poll(() => options.evaluate(() => (window as unknown as { sent: string[] }).sent))
       .toEqual(['SAVE_SETTINGS', 'GET_STATE', 'PROBE_VAULT', 'GET_STATE']);
     await expect(options.locator('#message')).toHaveText(
-      `Settings saved, but the vault test failed: ${unreachable}`,
+      `Settings saved, but the vault test failed: ${unreachable(vault.origin)}`,
     );
     await expect(options.locator('#message')).toHaveClass(/\berror\b/);
     await expect(options.locator('#vault-state')).toHaveText(
-      `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable}`,
+      `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable(vault.origin)}`,
     );
   } finally {
     await fixture.close();
@@ -708,10 +710,12 @@ test('the status re-reads every three seconds until the waiting count has held f
     // And so does the end of a Test, which fails with the vault gone and says so.
     from = await now();
     await options.locator('#connect').click();
-    await expect(options.locator('#message')).toHaveText(unreachable, { timeout: 30_000 });
+    await expect(options.locator('#message')).toHaveText(unreachable(vault.origin), {
+      timeout: 30_000,
+    });
     expect((await readsAfter(from))[0]).toBe(0);
     await expect(options.locator('#vault-state')).toHaveText(
-      `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable} 1 capture waiting to sync.`,
+      `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable(vault.origin)} 1 capture waiting to sync.`,
     );
   } finally {
     await fixture.close();

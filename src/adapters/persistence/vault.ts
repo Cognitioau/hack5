@@ -382,6 +382,28 @@ function resultFromError(error: unknown): VaultSaveResult {
   };
 }
 
+/**
+ * Why a read got no answer, naming the endpoint. Chrome hides the network error from the page,
+ * so a connection it refuses is told apart only from a timeout, a cancel, and a reply that broke
+ * off. Over HTTPS the refusal is most often the plugin's self-signed certificate, which Chrome
+ * rejects until the Mac trusts it; the plugin's HTTP server needs no certificate.
+ */
+function readFailure(
+  endpoint: string,
+  timeoutMs: number,
+  error: unknown,
+  answered: boolean,
+  timedOut: boolean,
+): string {
+  if (timedOut && !answered)
+    return `The vault at ${endpoint} did not answer within ${timeoutMs / 1000} seconds. Check Obsidian is open and responding.`;
+  if (answered || timedOut || (error instanceof DOMException && error.name === 'AbortError'))
+    return 'The vault could not be read. Check its connection, certificate and permission.';
+  return endpoint.startsWith('https:')
+    ? `Chrome could not connect to ${endpoint}. If Obsidian is open, Chrome is refusing the plugin’s self-signed certificate. Turn on the plugin’s non-encrypted (HTTP) server, then use http://127.0.0.1:27123 with “Use HTTP for this numeric loopback endpoint only” ticked.`
+    : `Chrome could not connect to ${endpoint}. Check Obsidian is open and the Local REST API plugin’s non-encrypted (HTTP) server is on at this port.`;
+}
+
 /** Scoped Local REST API client. The caller owns credential storage and permission grants. */
 export function createVaultClient(
   config: VaultConfig,
@@ -422,7 +444,12 @@ export function createVaultClient(
     const abort = new AbortController();
     const cancel = () => abort.abort();
     signal?.addEventListener('abort', cancel, { once: true });
-    const timer = setTimeout(cancel, timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      cancel();
+    }, timeoutMs);
+    let answered = false;
     try {
       const url =
         path === undefined
@@ -442,6 +469,7 @@ export function createVaultClient(
         cache: 'no-store',
         referrerPolicy: 'no-referrer',
       });
+      answered = true;
       if (response.redirected || (response.status >= 300 && response.status < 400)) {
         throw new VaultFailure(
           'failed',
@@ -489,7 +517,7 @@ export function createVaultClient(
         method === 'PUT' ? 'uncertain' : 'failed',
         method === 'PUT'
           ? 'The write was not acknowledged. Its outcome will be reconciled before retrying.'
-          : 'The vault could not be read. Check its connection, certificate and permission.',
+          : readFailure(resolved.endpoint, timeoutMs, error, answered, timedOut),
       );
     } finally {
       clearTimeout(timer);
