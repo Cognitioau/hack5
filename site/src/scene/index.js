@@ -34,7 +34,7 @@ function pickQuality() {
     shadowSize: low ? 1024 : 2048,
     multisampling: low ? 0 : 4,
     rain: low ? 3000 : 6500,
-    splashes: low ? 500 : 1400,
+    splashes: low ? 900 : 2400,
     handCell: low ? 0.0024 : 0.0015,
   };
 }
@@ -84,7 +84,7 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
   envScene.add(new THREE.Mesh(sky.mesh.geometry, sky.mesh.material));
   scene.environment = pmrem.fromScene(envScene, 0.02, 0.1, 1000).texture;
   pmrem.dispose();
-  const rain = createRain(scene, rainScene, { count: quality.rain, splashes: quality.splashes });
+  const rain = createRain(scene, rainScene, { count: quality.rain, splashes: quality.splashes, hole: HOLE });
   const lightning = createLightning(scene);
 
   // Moonlight rims everything from behind; a soft cool key keeps the hand readable from the front.
@@ -123,7 +123,7 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
 
   const letter = createLetter({ fontFamily });
   const dirt = createDirt(scene, textures);
-  const timeline = createTimeline({ scene, hand, letter, dirt, world, lightning });
+  const timeline = createTimeline({ scene, hand, letter, dirt, world, lightning, rain });
 
   const composer = new EffectComposer(renderer, {
     frameBufferType: THREE.HalfFloatType,
@@ -190,6 +190,7 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
     }
     renderer.setSize(w, h, false);
     composer.setSize(w, h, false);
+    rain.uniforms.uViewHeight.value = h * renderer.getPixelRatio();
     // A resize clears the canvas, so a paused scene has to draw its frame again.
     if (paused) composer.render(0);
   }
@@ -230,6 +231,7 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
     glowLevel += (goal - glowLevel) * (1 - Math.exp(-dt * (goal > glowLevel ? 14 : 2.5)));
     const flicker = 1 + 0.12 * Math.sin(time * 23.0) * Math.sin(time * 7.3 + 1.1) + 0.06 * Math.sin(time * 51.0);
     world.uniforms.uGlow.value = glowLevel * flicker;
+    rain.uniforms.uHoleGlow.value.z = glowLevel * flicker;
     glow.intensity = 0.004 + glowLevel * flicker * 0.06;
     hemi.intensity = 0.45 + flash * 2.2;
     scene.fog.color.copy(FOG).multiplyScalar(1 + flash * 2.5);
@@ -240,9 +242,10 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
     dof.target.copy(focus);
 
     pointerSmooth.lerp(pointer, 1 - Math.exp(-dt * 2));
+    const jolt = timeline.impact() * 0.006;
     camera.position.set(
-      cameraBase.x + pointerSmooth.x * 0.09 + Math.sin(time * 0.23) * 0.03,
-      cameraBase.y - pointerSmooth.y * 0.04 + Math.sin(time * 0.31) * 0.012,
+      cameraBase.x + pointerSmooth.x * 0.09 + Math.sin(time * 0.23) * 0.03 + Math.sin(time * 71) * jolt,
+      cameraBase.y - pointerSmooth.y * 0.04 + Math.sin(time * 0.31) * 0.012 - jolt,
       cameraBase.z + Math.sin(time * 0.17) * 0.04,
     );
     camera.lookAt(lookBase);

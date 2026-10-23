@@ -42,8 +42,8 @@ if (!webglAvailable()) {
   try {
     const { startScene } = await import('./scene/index.js');
     const scene = await startScene(canvas, {
-      // Reduced motion opens on the moment the hand has the letter, standing still.
-      startAt: freezeAt ?? (reducedMotion ? 7.6 : 0),
+      // Reduced motion opens on the hand coiled over the letter, standing still.
+      startAt: freezeAt ?? (reducedMotion ? 6.9 : 0),
       paused: freezeAt !== null || reducedMotion,
       openBand,
       onReady: () => {
