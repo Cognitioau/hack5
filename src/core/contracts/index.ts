@@ -256,10 +256,12 @@ export const settingsSchema = z
   })
   .strict();
 export type Settings = z.infer<typeof settingsSchema>;
+// Chrome refuses the plugin's self-signed certificate until the computer trusts it, so a new
+// install starts on the plugin's HTTP server, which only this computer can reach.
 export const defaultSettings: Settings = {
-  endpoint: 'https://127.0.0.1:27124',
+  endpoint: 'http://127.0.0.1:27123',
   folder: 'Zombie Brain',
-  allowInsecureLoopback: false,
+  allowInsecureLoopback: true,
   rememberKey: false,
   features: { images: true, youtube: true, haunting: true, semantic: true, gaze: false },
   excludedOrigins: [],

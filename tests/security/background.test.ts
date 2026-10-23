@@ -1415,7 +1415,8 @@ describe('vault status for trusted pages', () => {
   it('reports paused, with access off, when Chrome cannot reach the endpoint', async () => {
     context.contains.mockImplementation(async () => false);
     expect(await vaultStatus()).toEqual({ state: 'paused', remembered: false, access: false });
-    expect(context.contains).toHaveBeenCalledWith({ origins: ['https://127.0.0.1/*'] });
+    // Access is asked for the default endpoint's origin, the plugin's HTTP server.
+    expect(context.contains).toHaveBeenCalledWith({ origins: ['http://127.0.0.1/*'] });
     context.contains.mockImplementation(async () => true);
     expect(await vaultStatus()).toEqual({ state: 'syncing', remembered: false });
   });

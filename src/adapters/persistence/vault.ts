@@ -401,8 +401,8 @@ function readFailure(
   if (answered || !(error instanceof TypeError))
     return 'The vault could not be read. Check its connection, certificate and permission.';
   return endpoint.startsWith('https:')
-    ? `Chrome could not connect to ${endpoint}. If Obsidian is open, Chrome is refusing the plugin’s self-signed certificate. Turn on the plugin’s non-encrypted (HTTP) server, then use http://127.0.0.1:27123 with “Use HTTP for this numeric loopback endpoint only” ticked.`
-    : `Chrome could not connect to ${endpoint}. Check Obsidian is open and the Local REST API plugin’s non-encrypted (HTTP) server is on at this port.`;
+    ? `Chrome could not connect to ${endpoint}. If Obsidian is open, either this computer does not trust the plugin’s certificate or this port is the plugin’s HTTP server. Choose HTTP in Settings and turn on the plugin’s non-encrypted (HTTP) server.`
+    : `Chrome could not connect to ${endpoint}. Check Obsidian is open, the Local REST API plugin’s non-encrypted (HTTP) server is on, and the port is the one its HTTP address shows.`;
 }
 
 /** Scoped Local REST API client. The caller owns credential storage and permission grants. */

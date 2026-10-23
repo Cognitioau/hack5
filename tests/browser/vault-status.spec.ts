@@ -27,8 +27,8 @@ async function fillVault(
   { key = vault.key, remember = false } = {},
 ): Promise<void> {
   const options = fixture.options;
-  await options.locator('#endpoint').fill(vault.origin);
-  await options.locator('#allow-http').check();
+  await options.locator('#protocol-http').check();
+  await options.locator('#port').fill(new URL(vault.origin).port);
   await options.locator('#api-key').fill(key);
   await options.locator('#remember-key').setChecked(remember);
   // The local model and ghosts play no part here.
@@ -74,6 +74,105 @@ async function whollyOnScreen(page: Page, selector: string): Promise<void> {
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
 }
+
+test('the vault form asks only for HTTP or HTTPS and a port, and keeps the key unless they change', async () => {
+  test.setTimeout(90_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    const options = fixture.options;
+    const port = new URL(vault.origin).port;
+    const preview = options.locator('#endpoint-preview');
+    const change = options.locator('#endpoint-change');
+    await expect(options.locator('#key-state')).not.toHaveText('Checking local settings…');
+
+    // A new install starts on the plugin's HTTP server, the one Chrome can reach.
+    await expect(options.locator('#protocol-http')).toBeChecked();
+    await expect(options.locator('#port')).toHaveValue('27123');
+    await expect(preview).toHaveText('http://127.0.0.1:27123');
+    // The plugin's own port follows the connection, both ways.
+    await options.locator('#protocol-https').check();
+    await expect(options.locator('#port')).toHaveValue('27124');
+    await expect(preview).toHaveText('https://127.0.0.1:27124');
+    await options.locator('#protocol-http').check();
+    await expect(options.locator('#port')).toHaveValue('27123');
+    // A port the person typed stays put.
+    await options.locator('#port').fill('28000');
+    await options.locator('#protocol-https').check();
+    await expect(options.locator('#port')).toHaveValue('28000');
+    await expect(preview).toHaveText('https://127.0.0.1:28000');
+    // No key is held yet, so nothing is lost by a change.
+    await expect(change).toBeHidden();
+
+    // HTTP and the port are all it takes to connect.
+    await options.locator('#protocol-http').check();
+    await options.locator('#port').fill(port);
+    await options.locator('#api-key').fill(vault.key);
+    await options.locator('#remember-key').check();
+    await options.locator('#feature-semantic').uncheck();
+    await options.locator('#feature-haunting').uncheck();
+    await save(fixture);
+    await expect(options.locator('#vault-state')).toHaveText(connected(vault), { timeout: 30_000 });
+    const stored = await fixture.worker.evaluate(
+      async () => (await chrome.storage.local.get('settings')).settings,
+    );
+    expect(stored).toMatchObject({ endpoint: vault.origin, allowInsecureLoopback: true });
+
+    // With a key held, a different connection or port says, before Save, that the key goes.
+    await options.locator('#protocol-https').check();
+    await expect(change).toBeVisible();
+    await options.locator('#protocol-http').check();
+    await expect(change).toBeHidden();
+    await options.locator('#port').fill('28000');
+    await expect(change).toBeVisible();
+    await options.locator('#port').fill(port);
+    await expect(change).toBeHidden();
+
+    // An endpoint saved in another spelling of the same server, as the old free-text field
+    // allowed, is kept as it is, so saving the unchanged form keeps the key.
+    await fixture.worker.evaluate(async (endpoint) => {
+      const { settings } = (await chrome.storage.local.get('settings')) as {
+        settings: Record<string, unknown>;
+      };
+      await chrome.storage.local.set({ settings: { ...settings, endpoint } });
+    }, `${vault.origin}/`);
+    await options.reload();
+    await expect(preview).toHaveText(`${vault.origin}/`);
+    await save(fixture);
+    // The notice shows only after Save re-reads the settings, so the key line is fresh after it.
+    await expect(options.locator('#message')).toHaveText('Settings saved.');
+    await expect(options.locator('#key-state')).toHaveText(
+      'A vault key is stored. Leave the field blank to keep it.',
+    );
+    expect(
+      await fixture.worker.evaluate(async () => {
+        const { settings } = (await chrome.storage.local.get('settings')) as {
+          settings: { endpoint: string };
+        };
+        return settings.endpoint;
+      }),
+    ).toBe(`${vault.origin}/`);
+
+    // A spelling the vault refuses, such as a port with a leading zero, is shown as the address
+    // the form will save instead, with the note that saving it forgets the key.
+    await fixture.worker.evaluate(
+      async (endpoint) => {
+        const { settings } = (await chrome.storage.local.get('settings')) as {
+          settings: Record<string, unknown>;
+        };
+        await chrome.storage.local.set({ settings: { ...settings, endpoint } });
+      },
+      vault.origin.replace(/:(\d+)$/, ':0$1'),
+    );
+    await options.reload();
+    await expect(options.locator('#port')).toHaveValue(port);
+    await expect(preview).toHaveText(vault.origin);
+    await expect(change).toBeVisible();
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
 
 test('pasting a key and pressing Save alone connects the vault and syncs the grab that was waiting', async () => {
   test.setTimeout(90_000);
@@ -179,7 +278,9 @@ test('a key the vault refuses stays saved, says why beside Save, and the popup c
     expect(vault.files.size).toBe(0);
     await options.reload();
     await expect(options.locator('#vault-state')).toHaveText(paused);
-    await expect(options.locator('#endpoint')).toHaveValue(vault.origin);
+    await expect(options.locator('#protocol-http')).toBeChecked();
+    await expect(options.locator('#port')).toHaveValue(new URL(vault.origin).port);
+    await expect(options.locator('#endpoint-preview')).toHaveText(vault.origin);
 
     // The popup says the key is saved but not syncing, and leads to the test.
     const article = await fixture.context.newPage();
@@ -253,7 +354,7 @@ test('a key not remembered is said to last until Chrome closes, and remembering 
 
 /** The vault test's words when nothing answers at the fixture's plain HTTP address. */
 const unreachable = (origin: string) =>
-  `Chrome could not connect to ${origin}. Check Obsidian is open and the Local REST API plugin’s non-encrypted (HTTP) server is on at this port.`;
+  `Chrome could not connect to ${origin}. Check Obsidian is open, the Local REST API plugin’s non-encrypted (HTTP) server is on, and the port is the one its HTTP address shows.`;
 /** The orange dot of a warning, as ui.css paints it. */
 const warningDot = 'rgb(255, 197, 140)';
 const dotColour = (page: Page) =>
@@ -538,15 +639,15 @@ test('at phone width a success goes after its time, info and errors stay until r
     await expect(toast).toBeHidden({ timeout: Math.max(1, resultShown + 7_000 - Date.now()) });
 
     // An error stays, past the fifteen seconds it once had, until the next notice.
-    await options.locator('#endpoint').fill('https://example.com');
+    await options.locator('#port').fill('70000');
     await save(fixture);
     await expect(toast).toHaveText(
-      'Use the numeric loopback API endpoint, such as https://127.0.0.1:27124',
+      'Enter the port the Local REST API plugin shows, such as 27123.',
     );
     await expect(toast).toHaveClass(/\berror\b/);
     await options.waitForTimeout(16_000);
     await expect(toast).toBeVisible();
-    await options.locator('#endpoint').fill(vault.origin);
+    await options.locator('#port').fill(new URL(vault.origin).port);
     await save(fixture);
     await expect(toast).toHaveText('Settings saved.');
     await expect(toast).toHaveClass(/\bsuccess\b/);
@@ -587,6 +688,15 @@ test('the graveyard’s export notice is a success, and goes after its time', as
   try {
     const graveyard = await fixture.context.newPage();
     await graveyard.goto(`chrome-extension://${fixture.id}/graveyard.html`);
+    // The search box sits bare inside its pill: the settings form's field style never reaches it.
+    expect(
+      await graveyard
+        .locator('#query')
+        .evaluate((field) => [
+          getComputedStyle(field).borderTopStyle,
+          getComputedStyle(field).margin,
+        ]),
+    ).toEqual(['none', '0px']);
     const toast = graveyard.locator('#message');
     const download = graveyard.waitForEvent('download');
     await graveyard.locator('#export').click();
@@ -801,7 +911,7 @@ test('at phone width a standing error never covers the control focus reaches, an
     await options.setViewportSize({ width: 390, height: 844 });
     await options.reload();
     await expect(options.locator('#key-state')).not.toHaveText('Checking local settings…');
-    await options.locator('#endpoint').fill('https://example.com');
+    await options.locator('#port').fill('70000');
     await save(fixture);
     const toast = options.locator('#message');
     await expect(toast).toHaveClass(/\berror\b/);

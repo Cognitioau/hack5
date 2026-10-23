@@ -13,6 +13,26 @@ import { busy, element, notice } from '../ui/common';
 type State = Extract<AppResponse, { ok: true }>;
 const input = (id: string) => element<HTMLInputElement>(id);
 let settings: Settings = structuredClone(defaultSettings);
+/** Obsidian runs on this computer, so the form asks only for the connection and the port. */
+let host = '127.0.0.1';
+/** Whether a key is held, which a different connection or port forgets. */
+let keyStored = false;
+/** The Local REST API plugin's own ports. Changing the connection moves one to the other. */
+const pluginPorts = { http: '27123', https: '27124' } as const;
+const protocol = (): 'http' | 'https' => (input('protocol-https').checked ? 'https' : 'http');
+/** The endpoint the form describes. The saved text stays when it names the same server. */
+function formEndpoint(): string {
+  const port = input('port').value.trim();
+  const described = `${protocol()}://${host}:${/^\d{1,5}$/.test(port) ? Number(port) : port}`;
+  // The old free-text field may have saved a trailing slash; keep that, so the key stays. Any
+  // other spelling is rewritten, since the vault client refuses it.
+  return settings.endpoint === `${described}/` ? settings.endpoint : described;
+}
+function renderEndpoint(): void {
+  const endpoint = formEndpoint();
+  element('endpoint-preview').textContent = endpoint;
+  element('endpoint-change').hidden = !keyStored || endpoint === settings.endpoint;
+}
 let activation: State['activation'] = 'manual';
 /** Save, Test and Forget each change the vault connection, so only one runs at a time. */
 const vaultButtons = () => [
@@ -92,6 +112,8 @@ function renderVault(state: State): void {
     status.state === 'none'
       ? 'No vault key stored. Capture can queue locally until you connect.'
       : 'A vault key is stored. Leave the field blank to keep it.';
+  keyStored = status.state !== 'none';
+  renderEndpoint();
 }
 async function refreshVault(): Promise<void> {
   try {
@@ -130,9 +152,9 @@ function formSettings(): Settings {
     });
   return {
     ...settings,
-    endpoint: input('endpoint').value.trim(),
+    endpoint: formEndpoint(),
     folder: input('folder').value.trim(),
-    allowInsecureLoopback: input('allow-http').checked,
+    allowInsecureLoopback: protocol() === 'http',
     rememberKey: input('remember-key').checked,
     excludedOrigins: excluded,
     features: {
@@ -149,10 +171,15 @@ async function load(): Promise<State> {
   settings = state.settings ?? structuredClone(defaultSettings);
   activation = state.activation ?? 'manual';
   renderActivation();
-  input('endpoint').value = settings.endpoint;
+  const saved = URL.canParse(settings.endpoint)
+    ? new URL(settings.endpoint)
+    : new URL(defaultSettings.endpoint);
+  host = ['127.0.0.1', '[::1]'].includes(saved.hostname) ? saved.hostname : '127.0.0.1';
+  const http = saved.protocol === 'http:';
+  input(http ? 'protocol-http' : 'protocol-https').checked = true;
+  input('port').value = saved.port || (http ? '80' : '443');
   input('folder').value = settings.folder;
   input('remember-key').checked = settings.rememberKey;
-  input('allow-http').checked = settings.allowInsecureLoopback;
   for (const feature of ['images', 'youtube', 'semantic', 'haunting'] as const)
     input(`feature-${feature}`).checked = settings.features[feature];
   if (__CORE_ONLY__)
@@ -165,6 +192,9 @@ async function load(): Promise<State> {
   return state;
 }
 async function saveSettings(): Promise<void> {
+  const port = input('port').value.trim();
+  if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535)
+    throw new Error('Enter the port the Local REST API plugin shows, such as 27123.');
   const next = formSettings();
   const url = new URL(next.endpoint);
   if (
@@ -175,7 +205,7 @@ async function saveSettings(): Promise<void> {
     url.hash ||
     (url.pathname !== '/' && url.pathname !== '')
   )
-    throw new Error('Use the numeric loopback API endpoint, such as https://127.0.0.1:27124');
+    throw new Error('Zombie Brain connects only to Obsidian on this computer, at 127.0.0.1.');
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && next.allowInsecureLoopback))
     throw new Error('Use HTTPS, or explicitly enable loopback HTTP.');
   const granted = await chrome.permissions.request({ origins: [originPattern(next.endpoint)] });
@@ -207,6 +237,15 @@ async function testVault(opening: string): Promise<void> {
     revealVault();
   }
 }
+for (const id of ['protocol-http', 'protocol-https'])
+  input(id).addEventListener('change', () => {
+    // A port the person typed stays; the plugin's own port follows the connection.
+    const port = input('port');
+    const other = protocol() === 'https' ? 'http' : 'https';
+    if (port.value.trim() === pluginPorts[other]) port.value = pluginPorts[protocol()];
+    renderEndpoint();
+  });
+input('port').addEventListener('input', renderEndpoint);
 element<HTMLFormElement>('settings-form').addEventListener('submit', (event) => {
   event.preventDefault();
   void busy(vaultButtons(), async () => {
