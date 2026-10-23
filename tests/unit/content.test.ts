@@ -114,12 +114,12 @@ function held(modifier: Modifier): { shiftKey: boolean; ctrlKey: boolean } {
 function move(x: number, y: number, fields: Record<string, unknown> = {}): void {
   dispatch('pointermove', { clientX: x, clientY: y, ...fields });
 }
-function beginCircle(modifier: Modifier = 'Shift', fields: Record<string, unknown> = {}): void {
+function beginCircle(modifier: Modifier = 'Control', fields: Record<string, unknown> = {}): void {
   move(225, 90);
   dispatch('keydown', { key: modifier, ...held(modifier), ...fields });
 }
 async function traceCircle(
-  modifier: Modifier = 'Shift',
+  modifier: Modifier = 'Control',
   first = 1,
   last = 40,
   fields: Record<string, unknown> = {},
@@ -236,13 +236,24 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
   it('does not arm or capture while dwelling, circling, or shaking without a modifier', async () => {
     move(225, 90);
     await vi.advanceTimersByTimeAsync(1_200);
-    await traceCircle('Shift', 1, 40, { shiftKey: false });
+    await traceCircle('Control', 1, 40, { ctrlKey: false });
     await shake();
     expect(messages('ARM')).toHaveLength(0);
     expect(messages('CAPTURE')).toHaveLength(0);
   });
 
-  it.each(['Shift', 'Control'] as const)(
+  it('leaves a lone Shift hold to the page: circling with it takes nothing', async () => {
+    beginCircle('Shift');
+    await traceCircle('Shift');
+    expect(messages('ARM')).toHaveLength(0);
+    expect(messages('CAPTURE')).toHaveLength(0);
+    dispatch('keyup', { key: 'Shift' });
+    beginCircle();
+    await traceCircle();
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it.each(['Control'] as const)(
     'captures one precise sentence with its source only after a full held-%s circle',
     async (modifier) => {
       beginCircle(modifier);
@@ -267,8 +278,8 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
   );
 
   it.each(['key', 'pointer'] as const)('ignores synthetic %s input', async (synthetic) => {
-    beginCircle('Shift', synthetic === 'key' ? { isTrusted: false } : {});
-    await traceCircle('Shift', 1, 40, synthetic === 'pointer' ? { isTrusted: false } : {});
+    beginCircle('Control', synthetic === 'key' ? { isTrusted: false } : {});
+    await traceCircle('Control', 1, 40, synthetic === 'pointer' ? { isTrusted: false } : {});
     expect(messages('ARM')).toHaveLength(0);
     expect(messages('CAPTURE')).toHaveLength(0);
   });
@@ -277,16 +288,16 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     'cancels an incomplete circle on %s and requires a fresh modifier press',
     async (reason) => {
       beginCircle();
-      await traceCircle('Shift', 1, 12);
+      await traceCircle('Control', 1, 12);
       switch (reason) {
         case 'release':
-          dispatch('keyup', { key: 'Shift' });
+          dispatch('keyup', { key: 'Control' });
           break;
         case 'chord':
-          dispatch('keydown', { key: 'Control', shiftKey: true, ctrlKey: true });
+          dispatch('keydown', { key: 'Shift', shiftKey: true, ctrlKey: true });
           break;
         case 'drag':
-          move(160, 155, { shiftKey: true, buttons: 1 });
+          move(160, 155, { ctrlKey: true, buttons: 1 });
           break;
         case 'scroll':
           dispatch('scroll');
@@ -301,12 +312,12 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
           break;
         }
       }
-      await traceCircle('Shift', 13);
-      dispatch('keydown', { key: 'Shift', shiftKey: true, repeat: true });
+      await traceCircle('Control', 13);
+      dispatch('keydown', { key: 'Control', ctrlKey: true, repeat: true });
       await traceCircle();
       expect(messages('ARM')).toHaveLength(0);
       expect(messages('CAPTURE')).toHaveLength(0);
-      dispatch('keyup', { key: 'Shift' });
+      dispatch('keyup', { key: 'Control' });
       beginCircle();
       await traceCircle();
       expect(messages('CAPTURE')).toHaveLength(1);
@@ -317,7 +328,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     const input = document.createElement('textarea');
     document.body.append(input);
     input.focus();
-    beginCircle('Shift', { target: input });
+    beginCircle('Control', { target: input });
     await traceCircle();
     dispatch('keydown', {
       key: 'z',
@@ -335,11 +346,11 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     beginCircle();
     await traceCircle();
     expect(messages('CAPTURE')).toHaveLength(1);
-    dispatch('keydown', { key: 'Shift', shiftKey: true, repeat: true });
+    dispatch('keydown', { key: 'Control', ctrlKey: true, repeat: true });
     await traceCircle();
     expect(messages('ARM')).toHaveLength(1);
     expect(messages('CAPTURE')).toHaveLength(1);
-    dispatch('keyup', { key: 'Shift' });
+    dispatch('keyup', { key: 'Control' });
     beginCircle();
     await traceCircle();
     expect(messages('CAPTURE')).toHaveLength(2);
@@ -351,7 +362,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     await traceCircle();
     expect(messages('ARM')).toHaveLength(0);
     expect(messages('CAPTURE')).toHaveLength(0);
-    dispatch('keyup', { key: 'Shift' });
+    dispatch('keyup', { key: 'Control' });
     beginCircle();
     await traceCircle();
     expect(messages('CAPTURE')).toHaveLength(1);
@@ -363,7 +374,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     await traceCircle();
     expect(messages('ARM')).toHaveLength(1);
     expect(messages('CAPTURE')).toHaveLength(0);
-    dispatch('keyup', { key: 'Shift' });
+    dispatch('keyup', { key: 'Control' });
     deferredArm?.({ ok: true, token: armToken });
     await flush();
     expect(messages('CAPTURE')).toHaveLength(1);
@@ -376,7 +387,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     beginCircle();
     await traceCircle();
     expect(messages('CAPTURE')).toHaveLength(1);
-    dispatch('keyup', { key: 'Shift' });
+    dispatch('keyup', { key: 'Control' });
     await shake();
     expect(messages('CANCEL')).toHaveLength(0);
     deferredCapture?.({ ok: true, capture: record(capturedOperation) });
@@ -391,7 +402,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
       beginCircle();
       await traceCircle();
       if (method === 'Escape') dispatch('keydown', { key: 'Escape' });
-      else await shake('Shift');
+      else await shake('Control');
       deferredArm?.({ ok: true, token: armToken });
       await flush();
       expect(messages('CAPTURE')).toHaveLength(0);
@@ -421,9 +432,9 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     fromBackground({ v: 1, type: 'SETTINGS_CHANGED' });
     await flush();
     beginCircle();
-    await traceCircle('Shift', 1, 25);
+    await traceCircle('Control', 1, 25);
     expect(messages('SEARCH')).toHaveLength(0);
-    await traceCircle('Shift', 26);
+    await traceCircle('Control', 26);
     expect(messages('SEARCH')).toEqual([
       expect.objectContaining({ query: passage, type: 'SEARCH' }),
     ]);
@@ -448,13 +459,13 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     await accessibleCapture();
     const previous = capturedOperation;
     beginCircle();
-    await traceCircle('Shift', 1, 25);
+    await traceCircle('Control', 1, 25);
     fromBackground({
       v: 1,
       type: 'CAPTURE_UPDATE',
       capture: record(previous, 'active', 'queued-local'),
     });
-    await traceCircle('Shift', 26);
+    await traceCircle('Control', 26);
     expect(messages('CAPTURE')).toHaveLength(2);
     expect(capturedOperation).not.toBe(previous);
   });
@@ -471,7 +482,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(messages('CAPTURE')).toHaveLength(1);
     expect(messages('CANCEL')).toEqual([expect.objectContaining({ token: armToken })]);
     expect(shadow?.textContent).toContain('Settings changed.');
-    await shake('Shift');
+    await shake('Control');
     expect(messages('ARCHIVE')).toHaveLength(0);
   });
 
@@ -479,16 +490,16 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     beginCircle();
     await traceCircle();
     delayArchive = true;
-    await shake('Shift');
+    await shake('Control');
     expect(messages('ARCHIVE')).toHaveLength(1);
     fromBackground({ v: 1, type: 'SETTINGS_CHANGED' });
     await flush();
     beginCircle();
-    await traceCircle('Shift', 1, 25);
+    await traceCircle('Control', 1, 25);
     deferredArchive?.({ ok: false, error: 'An old archive request failed.' });
     await flush();
     expect(shadow?.textContent).not.toContain('An old archive request failed.');
-    await traceCircle('Shift', 26);
+    await traceCircle('Control', 26);
     expect(messages('CAPTURE')).toHaveLength(2);
   });
 
@@ -538,7 +549,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     await accessibleCapture();
     await shake();
     beginCircle();
-    await shake('Shift');
+    await shake('Control');
     expect(messages('ARCHIVE')).toHaveLength(0);
     expect(messages('CANCEL')).toHaveLength(0);
   });
@@ -550,7 +561,7 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     await accessibleCapture();
     const pending = capturedOperation;
     beginCircle();
-    await shake('Shift');
+    await shake('Control');
     expect(pending).not.toBe(previous);
     expect(messages('CANCEL')).toEqual([expect.objectContaining({ operationId: pending })]);
     expect(messages('ARCHIVE')).toHaveLength(0);
@@ -643,6 +654,49 @@ describe('one-click grabs (mocked browser boundary)', () => {
     await accessibleCapture();
     expect(messages('ARM')[0]).toMatchObject({ candidate: { kind: 'text', text: passage } });
     expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it('grabs the whole page with Shift+Z even when text is selected', async () => {
+    selectPassage();
+    const preventDefault = vi.fn();
+    dispatch('keydown', { key: 'Z', code: 'KeyZ', shiftKey: true, preventDefault });
+    await flush();
+    expect(preventDefault).toHaveBeenCalled();
+    expect(messages('READ_PAGE')).toHaveLength(1);
+    expect(messages('ARM')).toEqual([
+      expect.objectContaining({
+        candidate: expect.objectContaining({ kind: 'link', wholePage: true }),
+      }),
+    ]);
+    expect(messages('CAPTURE')).toHaveLength(1);
+  });
+
+  it.each([
+    ['repeats while held', { repeat: true }, true],
+    ['is pressed in a text field', { field: true }, false],
+    ['is part of an input method composition', { isComposing: true }, false],
+    ['comes with Ctrl', { ctrlKey: true }, false],
+    ['comes with Command', { metaKey: true }, false],
+  ] as const)('Shift+Z grabs nothing when it %s', async (_, fields, prevented) => {
+    const { field, ...rest } = { field: false, ...fields };
+    const input = document.createElement('textarea');
+    if (field) {
+      document.body.append(input);
+      input.focus();
+    }
+    const preventDefault = vi.fn();
+    dispatch('keydown', {
+      key: 'Z',
+      code: 'KeyZ',
+      shiftKey: true,
+      preventDefault,
+      ...(field ? { target: input } : {}),
+      ...rest,
+    });
+    await flush();
+    expect(preventDefault).toHaveBeenCalledTimes(prevented ? 1 : 0);
+    expect(messages('READ_PAGE')).toHaveLength(0);
+    expect(messages('ARM')).toHaveLength(0);
   });
 
   it('grabs the selection from the hand button when text is selected', async () => {
@@ -880,7 +934,7 @@ describe('one-click grabs (mocked browser boundary)', () => {
       async () => {
         beginCircle();
         await traceCircle();
-        dispatch('keyup', { key: 'Shift' });
+        dispatch('keyup', { key: 'Control' });
       },
     ],
   ] as const)(
@@ -904,7 +958,7 @@ describe('one-click grabs (mocked browser boundary)', () => {
     [
       'a settings change',
       () => fromBackground({ v: 1, type: 'SETTINGS_CHANGED' }),
-      'Settings changed. Hold Shift or Ctrl and circle a new target; pending captures remain in the graveyard.',
+      'Settings changed. Hold Ctrl and circle a new target; pending captures remain in the graveyard.',
     ],
   ] as const)(
     '%s while the page is read drops that grab, and the hand grabs again at once',

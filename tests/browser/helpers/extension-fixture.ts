@@ -253,7 +253,7 @@ export async function captureAt(
     await page.keyboard.press('Alt+Shift+Z');
     return;
   }
-  await drawCircle(page, { x, y }, 'Shift');
+  await drawCircle(page, { x, y }, 'Control');
 }
 
 /** Trusted hardware-style input. Start on the rim, with no dwell or mouse drag. */
