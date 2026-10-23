@@ -64,12 +64,12 @@ function buildGeometry(rig, cell) {
   const made =
     typeof Worker === 'undefined'
       ? Promise.resolve().then(inline)
-      : new Promise((resolve) => {
+      : new Promise((resolve, reject) => {
           let worker;
           try {
             worker = new Worker(new URL('./hand.worker.js', import.meta.url), { type: 'module' });
           } catch {
-            resolve(inline());
+            Promise.resolve().then(inline).then(resolve, reject);
             return;
           }
           worker.onmessage = (event) => {
@@ -79,7 +79,7 @@ function buildGeometry(rig, cell) {
           worker.onerror = (event) => {
             event.preventDefault();
             worker.terminate();
-            resolve(inline());
+            Promise.resolve().then(inline).then(resolve, reject);
           };
           worker.postMessage({ cell, bones });
         });

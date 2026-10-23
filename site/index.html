@@ -70,6 +70,8 @@
       <canvas id="scene"></canvas>
     </div>
 
+    <!-- Every download link points at the newest GitHub release's zombie-brain.zip, so publishing a
+         release updates them without redeploying the site. -->
     <header class="nav">
       <a class="wordmark" href="/" aria-label="Zombie Brain, home">
         <svg class="mark" aria-hidden="true"><use href="#zb-mark" /></svg>
@@ -80,7 +82,7 @@
           Hackyard #5<span class="arrow" aria-hidden="true">↗</span>
         </a>
         <button class="nav-link" type="button" data-open-install>Install</button>
-        <a class="btn btn-acid" data-download href="#" download>
+        <a class="btn btn-acid" href="https://github.com/Cognitioau/hack5/releases/latest/download/zombie-brain.zip" download>
           <span>Download</span>
           <svg class="btn-icon" aria-hidden="true"><use href="#zb-down" /></svg>
         </a>
@@ -103,7 +105,7 @@
         runs locally, with no AI key.
       </p>
       <div class="hero-actions">
-        <a class="btn btn-acid btn-lg" data-download href="#" download>
+        <a class="btn btn-acid btn-lg" href="https://github.com/Cognitioau/hack5/releases/latest/download/zombie-brain.zip" download>
           <span>Download for Chrome</span>
           <svg class="btn-icon" aria-hidden="true"><use href="#zb-down" /></svg>
         </a>
@@ -111,7 +113,7 @@
       </div>
     </main>
 
-    <button class="motion-toggle" type="button" data-motion-toggle>
+    <button class="motion-toggle" type="button" data-motion-toggle hidden>
       <span class="motion-icon" aria-hidden="true"></span>
       <span class="motion-label">Pause</span>
     </button>
@@ -129,7 +131,7 @@
           <li>
             <h3>Dig it up</h3>
             <p>
-              <a data-download href="#" download>Download the zip</a> and unzip it. Chrome loads the folder, not the
+              <a href="https://github.com/Cognitioau/hack5/releases/latest/download/zombie-brain.zip" download>Download the zip</a> and unzip it. Chrome loads the folder, not the
               zip.
             </p>
           </li>

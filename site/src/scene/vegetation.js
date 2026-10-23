@@ -91,7 +91,8 @@ export function createVegetation(scene, plants, uniforms, { lowQuality, rand, he
   }
   const total = variants.reduce((s, v) => s + v.share, 0);
 
-  const count = lowQuality ? 900 : 3200;
+  // Phones are vertex-bound here, not pixel-bound: each plant is 4k-24k vertices.
+  const count = lowQuality ? 360 : 3200;
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const e = new THREE.Euler();
