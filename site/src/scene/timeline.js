@@ -49,6 +49,8 @@ export function createTimeline({ scene, hand, letter, dirt, world, lightning, ra
   let last = -1;
   let attached = false;
   let impact = 0;
+  // The letter is caught on the frame of the slap, but only once the hand stands in that frame's pose.
+  let catchPending = false;
   const fired = new Set();
   const once = (key, t, at, fn) => {
     if (t >= at && !fired.has(key)) {
@@ -78,6 +80,7 @@ export function createTimeline({ scene, hand, letter, dirt, world, lightning, ra
     if (t < last) {
       fired.clear();
       attached = false;
+      catchPending = false;
       placeLetterAtRest();
       dirt.setSink(1);
       dirt.setSink(0);
@@ -100,13 +103,13 @@ export function createTimeline({ scene, hand, letter, dirt, world, lightning, ra
 
     if (t >= 3.2 && t < 4.4) {
       tremble = span(t, 3.2, 4.2);
-      once('hop', t, 3.8, () => dirt.burst(holeWorld, { strength: 0.25, share: 0.15 }));
+      once('hop', t, 3.8, () => dirt.burst(holeWorld, { strength: 0.25, clods: 13 }));
     }
     once('strike', t, 4.32, () => {
       lightning.strike(time);
       lightning.deferAmbient(time + 6);
     });
-    once('burst', t, 4.4, () => dirt.burst(holeWorld, { strength: 1, share: 0.75 }));
+    once('burst', t, 4.4, () => dirt.burst(holeWorld, { strength: 1, clods: 67 }));
 
     if (t >= 4.4) holeAmount = easeOut(span(t, 4.4, 4.55));
     if (t >= 4.4 && t < 9.2) {
@@ -143,12 +146,9 @@ export function createTimeline({ scene, hand, letter, dirt, world, lightning, ra
       s.twitch = mix(s.twitch, 0.08, slap);
       once('slap', t, 7.16, () => {
         letter.getWorldPosition(letterWorld);
-        dirt.burst(letterWorld, { strength: 0.3, share: 0.2 });
+        dirt.burst(letterWorld, { strength: 0.3, clods: 18 });
         rain.splat(letterWorld, time);
-        hand.mesh.updateMatrixWorld(true);
-        hand.grip.attach(letter);
-        letterHeld.copy(letter.position);
-        attached = true;
+        catchPending = true;
       });
       // The blow presses it into the mud for a moment.
       const press = Math.sin(Math.PI * span(t, 7.16, 7.34));
@@ -167,10 +167,10 @@ export function createTimeline({ scene, hand, letter, dirt, world, lightning, ra
       s.rise = mix(s.rise, -0.36, pull);
       leanAngle = mix(leanAngle, 0.06, pull);
       s.pitch = mix(s.pitch, 0.3, pull);
-      once('pull', t, 8.0, () => dirt.burst(holeWorld, { strength: 0.45, share: 0.25 }));
+      once('pull', t, 8.0, () => dirt.burst(holeWorld, { strength: 0.45, clods: 22 }));
       if (attached) {
         letter.userData.crumple(easeInOut(span(t, 7.28, 7.75)));
-        letter.position.copy(letterHeld).multiplyScalar(1 - 0.3 * gather);
+        letter.position.copy(letterHeld).multiplyScalar(1 - 0.5 * gather);
       }
     }
     // Gone once the fist is under the ground.
@@ -216,6 +216,13 @@ export function createTimeline({ scene, hand, letter, dirt, world, lightning, ra
     world.uniforms.uHole.value.set(HOLE.x, HOLE.y, holeAmount, 0);
     world.uniforms.uTremble.value = tremble;
     hand.apply(time);
+    if (catchPending) {
+      catchPending = false;
+      pivot.updateMatrixWorld(true);
+      hand.grip.attach(letter);
+      letterHeld.copy(letter.position);
+      attached = true;
+    }
   }
 
   return {

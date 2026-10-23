@@ -92,16 +92,16 @@ export function createLetter({ fontFamily }) {
   letter.userData.crumple = (k) => {
     if (k === crumpled) return;
     crumpled = k;
-    const squeeze = 1 - 0.45 * k;
+    const squeeze = 1 - 0.58 * k;
     for (let i = 0; i < pos.count; i++) {
       const x = flat[i * 3];
       const z = flat[i * 3 + 2];
       const r2 = (x / (width / 2)) ** 2 + (z / (depth / 2)) ** 2;
       pos.setXYZ(
         i,
-        x * squeeze + crease[i * 3] * 0.01 * k,
+        x * squeeze + crease[i * 3] * 0.007 * k,
         flat[i * 3 + 1] + k * (0.016 * r2 + crease[i * 3 + 1] * 0.016),
-        z * squeeze + crease[i * 3 + 2] * 0.01 * k,
+        z * squeeze + crease[i * 3 + 2] * 0.007 * k,
       );
     }
     pos.needsUpdate = true;
