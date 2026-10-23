@@ -969,6 +969,118 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     }
   });
 
+  describe('when a read gets no answer, says why and names the endpoint', () => {
+    /** Chrome's rejection when it will not connect, as for a certificate it does not trust. */
+    const refused = vi.fn<typeof fetch>(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    /**
+     * A request that waits until it is aborted, as one to a vault that never answers. Like
+     * fetch, it rejects with the signal's reason: an AbortError unless the abort gave another.
+     */
+    const hanging = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+    const generic =
+      'The vault could not be read. Check its connection, certificate and permission.';
+
+    it('names an HTTPS endpoint Chrome will not connect to, the certificate, and the HTTP way round it', async () => {
+      const outcome = await createVaultClient(
+        { ...vault.config(), endpoint: 'https://127.0.0.1:27124', allowInsecureLoopback: false },
+        { fetch: refused },
+      ).probe();
+      expect(outcome).toEqual({
+        ok: false,
+        message:
+          'Chrome could not connect to https://127.0.0.1:27124. If Obsidian is open, Chrome is refusing the plugin’s self-signed certificate. Turn on the plugin’s non-encrypted (HTTP) server, then use http://127.0.0.1:27123 with “Use HTTP for this numeric loopback endpoint only” ticked.',
+      });
+      // The status line beside Save shows at most 300 characters of it, from the longest endpoint.
+      const longest = await createVaultClient(
+        { ...vault.config(), endpoint: 'https://127.0.0.1:65535', allowInsecureLoopback: false },
+        { fetch: refused },
+      ).probe();
+      expect(longest.message.length).toBeLessThanOrEqual(300);
+    });
+
+    it('names a plain HTTP endpoint nothing answers at, and the server to turn on', async () => {
+      const gone = new VaultEmulator();
+      await gone.start();
+      await gone.stop();
+      const outcome = await createVaultClient({
+        ...vault.config(),
+        endpoint: gone.endpoint,
+      }).probe();
+      expect(outcome).toEqual({
+        ok: false,
+        message: `Chrome could not connect to ${gone.endpoint}. Check Obsidian is open and the Local REST API plugin’s non-encrypted (HTTP) server is on at this port.`,
+      });
+    });
+
+    it('says a vault that never answers did not answer in time', async () => {
+      const outcome = await createVaultClient(vault.config(), {
+        fetch: hanging,
+        timeoutMs: 50,
+      }).probe();
+      expect(outcome.message).toBe(
+        `The vault at ${vault.endpoint} did not answer within 0.05 seconds. Check Obsidian is open and responding.`,
+      );
+    });
+
+    it('never blames the connection for a read the caller, or a settings change, cancelled', async () => {
+      const controller = new AbortController();
+      const cancelled = createVaultClient(vault.config(), { fetch: hanging }).probe(
+        controller.signal,
+      );
+      controller.abort();
+      expect((await cancelled).message).toBe(generic);
+      // The background cancels with its own controller, which the caller's signal does not show.
+      const background = new AbortController();
+      const viaBackground = createVaultClient(
+        { ...vault.config(), endpoint: 'https://127.0.0.1:27124', allowInsecureLoopback: false },
+        {
+          fetch: (input, init) =>
+            hanging(input, {
+              ...init,
+              signal: AbortSignal.any([background.signal, ...(init?.signal ? [init.signal] : [])]),
+            }),
+        },
+      ).probe();
+      background.abort();
+      expect((await viaBackground).message).toBe(generic);
+      // Nor one the background cancels with a reason of its own: its signal reaches fetch
+      // directly, and fetch rejects with that reason in place of an AbortError.
+      const reasoned = new AbortController();
+      const withReason = createVaultClient(vault.config(), {
+        fetch: (input, init) =>
+          hanging(input, {
+            ...init,
+            signal: AbortSignal.any([reasoned.signal, ...(init?.signal ? [init.signal] : [])]),
+          }),
+      }).probe();
+      reasoned.abort(new Error('Settings changed.'));
+      expect((await withReason).message).toBe(generic);
+    });
+
+    it('keeps the general words for a connection that breaks after the vault answered', async () => {
+      const broken = vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start: (stream) => stream.error(new TypeError('network error')),
+            }),
+            { status: 200 },
+          ),
+      );
+      expect((await createVaultClient(vault.config(), { fetch: broken }).probe()).message).toBe(
+        generic,
+      );
+    });
+  });
+
   it.each([
     { endpoint: 'https://example.com:443' },
     { endpoint: 'https://localhost:27124' },
