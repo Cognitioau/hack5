@@ -1,3 +1,4 @@
+import { type AddressInfo, connect, createServer, type Socket } from 'node:net';
 import { expect, test, type Page } from '@playwright/test';
 import type { AppResponse } from '../../src/core/contracts/index';
 import {
@@ -12,7 +13,7 @@ import { startVaultFixture, type VaultFixture } from './helpers/vault-fixture';
 
 const notConnected =
   'Not connected. Paste the API key from Obsidian → Settings → Local REST API, then save.';
-const connected = (vault: VaultFixture) =>
+const connected = (vault: { origin: string }) =>
   `Connected to ${vault.origin}. Grabs save to the “Zombie Hand” folder.`;
 const notRemembered =
   'This key is kept only until Chrome closes or the extension reloads. Tick “Remember the key on this browser profile” and save to keep it.';
@@ -272,27 +273,151 @@ test('a vault test that fails while syncing says so beside Save and in the popup
       await popup.evaluate<string>('document.querySelector("#vault a").getAttribute("href")'),
     ).toBe('options.html');
     await popup.close();
+
+    // While the failure stands, Save tests the vault again rather than only saving. The
+    // failure's notice is still up, so the page's messages show the test was run.
+    await options.bringToFront();
+    await options.evaluate(() => {
+      const page = window as unknown as { sent: string[] };
+      page.sent = [];
+      const runtime = chrome.runtime as unknown as { sendMessage(message: unknown): unknown };
+      const send = runtime.sendMessage.bind(runtime);
+      runtime.sendMessage = (message) => {
+        page.sent.push(String((message as { type?: unknown })?.type));
+        return send(message);
+      };
+    });
+    await save(fixture);
+    await expect
+      .poll(() => options.evaluate(() => (window as unknown as { sent: string[] }).sent))
+      .toEqual(['SAVE_SETTINGS', 'GET_STATE', 'PROBE_VAULT', 'GET_STATE']);
+    await expect(options.locator('#message')).toHaveText(unreachable);
+    await expect(options.locator('#message')).toHaveClass(/\berror\b/);
+    await expect(options.locator('#vault-state')).toHaveText(
+      `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable}`,
+    );
   } finally {
     await fixture.close();
     if (vaultOpen) await vault.close();
   }
 });
 
-test('with Chrome’s access to the vault turned off the status says so, and Save turns it back on', async () => {
-  test.setTimeout(90_000);
+/**
+ * A loopback relay in front of the vault fixture. It can stop answering, as a vault that
+ * has gone away does, and answer again; the fixture itself closes only once.
+ */
+async function relayTo(vault: VaultFixture) {
+  const port = Number(new URL(vault.origin).port);
+  let answering = true;
+  const sockets = new Set<Socket>();
+  const server = createServer((client) => {
+    if (!answering) {
+      client.destroy();
+      return;
+    }
+    const upstream = connect(port, '127.0.0.1');
+    for (const socket of [client, upstream]) {
+      sockets.add(socket);
+      socket.on('error', () => undefined);
+      socket.on('close', () => {
+        client.destroy();
+        upstream.destroy();
+        sockets.delete(socket);
+      });
+    }
+    client.pipe(upstream).pipe(client);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    answer(on: boolean) {
+      answering = on;
+      if (!on) for (const socket of sockets) socket.destroy();
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+test('with Chrome’s access to the vault turned off the status says so, and Save turns it back on and sends what waited', async () => {
+  test.setTimeout(120_000);
   const vault = await startVaultFixture();
+  const relay = await relayTo(vault);
+  // The extension reaches the vault through the relay.
+  const via = { ...vault, origin: relay.origin };
   const fixture = await launchExtension('full');
   try {
     const options = fixture.options;
-    await fillVault(fixture, vault);
+    await fillVault(fixture, via);
     await save(fixture);
-    await expect(options.locator('#vault-state')).toHaveText(connected(vault), {
+    await expect(options.locator('#vault-state')).toHaveText(connected(via), {
       timeout: 30_000,
+    });
+
+    // Two grabs made while the vault does not answer wait on this device. The engine parks
+    // a grab after six failed attempts, and only a passing test sends a parked grab, so the
+    // second is parked here as the engine would park it.
+    relay.answer(false);
+    const article = await fixture.context.newPage();
+    await article.goto(`${vault.origin}/article`);
+    await wake(fixture, article);
+    /** Each grab has had its first try and waits: failed, or uncertain for a write cut off. */
+    const waitingGrabs = async () =>
+      (await state(fixture)).filter((c) => ['failed', 'uncertain'].includes(c.persistence)).length;
+    await captureAt(article, '#dog');
+    await expect.poll(waitingGrabs).toBe(1);
+    // The hand on that page now waits for the first grab's receipt, so the second is made
+    // in another tab, at its own address.
+    const second = await fixture.context.newPage();
+    await second.goto(`${vault.origin}/article?tab=2`);
+    await wake(fixture, second);
+    await captureAt(second, '#database');
+    await expect.poll(waitingGrabs).toBe(2);
+    const parked = (await state(fixture)).find((c) =>
+      JSON.stringify(c.candidate).includes('Database transactions'),
+    );
+    if (!parked) throw new Error('The second grab is missing');
+    /** Parks the grab's job as the engine does after six failed attempts, and reads it back. */
+    const park = (id: string) =>
+      fixture.worker.evaluate(async (captureId) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const open = indexedDB.open('zombie-hand-v1', 1);
+          open.onsuccess = () => resolve(open.result);
+          open.onerror = () => reject(open.error);
+        });
+        try {
+          const store = () => db.transaction('operations', 'readwrite').objectStore('operations');
+          await new Promise<void>((resolve, reject) => {
+            const put = store().put({
+              captureId,
+              attempts: 6,
+              nextAttemptAt: Number.MAX_SAFE_INTEGER,
+            });
+            put.onsuccess = () => resolve();
+            put.onerror = () => reject(put.error);
+          });
+          return await new Promise<unknown>((resolve, reject) => {
+            const get = store().get(captureId);
+            get.onsuccess = () => resolve(get.result);
+            get.onerror = () => reject(get.error);
+          });
+        } finally {
+          db.close();
+        }
+      }, id);
+    expect(await park(parked.id)).toEqual({
+      captureId: parked.id,
+      attempts: 6,
+      nextAttemptAt: Number.MAX_SAFE_INTEGER,
     });
 
     // A person turns site access to "On click" in chrome://extensions. The test copy's
     // loopback grant is a required permission, which chrome.permissions.remove refuses,
-    // so the test makes the same call that page makes.
+    // so the test makes the same call that page makes. Losing access also pauses the hand
+    // everywhere, so no grab can be made while it is off; the vault answers again.
     const manager = await fixture.context.newPage();
     await manager.goto(`chrome://extensions/?id=${fixture.id}`);
     const siteAccess = (hostAccess: 'ON_CLICK' | 'ON_ALL_SITES') =>
@@ -314,22 +439,22 @@ test('with Chrome’s access to the vault turned off the status says so, and Sav
       );
     await siteAccess('ON_CLICK');
     expect(await endpointAccess()).toBe(false);
+    relay.answer(true);
 
     await options.bringToFront();
     await options.reload();
     await expect(options.locator('#vault-state')).toHaveText(
-      `The key is saved, but grabs can’t sync: Chrome’s access to ${vault.origin} is off. Press Save settings to grant it.`,
+      `The key is saved, but grabs can’t sync: Chrome’s access to ${via.origin} is off. Press Save settings to grant it.`,
     );
-    const state = await options.evaluate(
+    const reply = await options.evaluate(
       () => chrome.runtime.sendMessage({ v: 1, type: 'GET_STATE' }) as Promise<AppResponse>,
     );
-    if (!state.ok) throw new Error(state.error);
-    expect(state.vaultStatus).toEqual({ state: 'paused', remembered: false, access: false });
-
-    const article = await fixture.context.newPage();
-    await article.goto(`${vault.origin}/article`);
+    if (!reply.ok) throw new Error(reply.error);
+    expect(reply.vaultStatus).toEqual({ state: 'paused', remembered: false, access: false });
     const popup = await openPopup(fixture, article);
-    expect(await popupLine(popup)).toBe('Vault key saved, but not syncing yet. Test vault');
+    expect(await popupLine(popup)).toBe(
+      'Vault key saved, but not syncing yet; 2 captures are kept on this device. Test vault',
+    );
     await popup.close();
 
     // Chrome's prompt cannot be answered headless, so the page's request is answered
@@ -347,19 +472,28 @@ test('with Chrome’s access to the vault turned off the status says so, and Sav
       };
     });
     await save(fixture);
-    await expect(options.locator('#vault-state')).toHaveText(connected(vault));
-    await expect(options.locator('#message')).toHaveText('Settings saved.');
+    // Save tests the vault, and the passing test sends both grabs, the parked one too.
+    await expect
+      .poll(async () => (await state(fixture)).map((c) => c.persistence), { timeout: 20_000 })
+      .toEqual(['saved-vault', 'saved-vault']);
+    for (const capture of await state(fixture))
+      expect(vault.files.has(`Zombie Hand/captures/${capture.id}.md`)).toBe(true);
+    await expect(options.locator('#vault-state')).toHaveText(connected(via), {
+      timeout: 15_000,
+    });
+    await expect(options.locator('#message')).toContainText('binary roundtrip verified');
     expect(await endpointAccess()).toBe(true);
   } finally {
     await fixture.close();
+    await relay.close();
     await vault.close();
   }
 });
 
-test('at phone width the toast goes after its time and the page end scrolls clear of it', async () => {
+test('at phone width a success goes after its time, info and errors stay until replaced, and the page end scrolls clear of the toast', async () => {
   test.setTimeout(120_000);
-  // Slow writes keep the first notice up long enough to be replaced well into its time.
-  const vault = await startVaultFixture({ writeDelayMs: 700 });
+  // Slow writes keep the vault test, and its info notice, going past a success's six seconds.
+  const vault = await startVaultFixture({ writeDelayMs: 3_500 });
   const fixture = await launchExtension('full');
   try {
     const options = fixture.options;
@@ -368,10 +502,13 @@ test('at phone width the toast goes after its time and the page end scrolls clea
     await fillVault(fixture, vault);
     await save(fixture);
     await expect(toast).toContainText('Settings saved. Testing');
-    const firstShown = Date.now();
+
+    // Info stays while the test runs, until the result replaces it.
+    await options.waitForTimeout(6_500);
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText('Settings saved. Testing');
     await expect(toast).toContainText('binary roundtrip verified', { timeout: 30_000 });
     const resultShown = Date.now();
-    expect(resultShown - firstShown).toBeGreaterThan(2_000);
 
     // The longest notice this page shows, at its narrowest: the page end clears it.
     await scrollTo(options, 1e6);
@@ -381,30 +518,57 @@ test('at phone width the toast goes after its time and the page end scrolls clea
     expect(footer.y + footer.height).toBeLessThanOrEqual(shown.y);
     await whollyOnScreen(options, '#message');
 
-    // A new notice restarts the clock: the result outlives six seconds from the first.
-    await options.waitForTimeout(Math.max(0, firstShown + 6_500 - Date.now()));
+    // A success goes six seconds after it shows.
+    await options.waitForTimeout(Math.max(0, resultShown + 5_000 - Date.now()));
     await expect(toast).toBeVisible();
     await expect(toast).toBeHidden({ timeout: Math.max(1, resultShown + 7_000 - Date.now()) });
 
-    // An error stays for 15 seconds.
+    // An error stays, past the fifteen seconds it once had, until the next notice.
     await options.locator('#endpoint').fill('https://example.com');
     await save(fixture);
     await expect(toast).toHaveText(
       'Use the numeric loopback API endpoint, such as https://127.0.0.1:27124',
     );
     await expect(toast).toHaveClass(/\berror\b/);
-    const errorShown = Date.now();
-    await options.waitForTimeout(8_000);
+    await options.waitForTimeout(16_000);
     await expect(toast).toBeVisible();
-    await expect(toast).toBeHidden({ timeout: Math.max(1, errorShown + 16_000 - Date.now()) });
+    await options.locator('#endpoint').fill(vault.origin);
+    await save(fixture);
+    await expect(toast).toHaveText('Settings saved.');
+    await expect(toast).toHaveClass(/\bsuccess\b/);
   } finally {
     await fixture.close();
     await vault.close();
   }
 });
 
-test('the status stops re-reading once the waiting count holds still, and reads again on return or Save', async () => {
-  test.setTimeout(150_000);
+test('at phone width the toast going at the page end moves nothing on the page', async () => {
+  test.setTimeout(90_000);
+  const vault = await startVaultFixture();
+  const fixture = await launchExtension('full');
+  try {
+    const options = fixture.options;
+    const toast = options.locator('#message');
+    await options.setViewportSize({ width: 390, height: 844 });
+    await fillVault(fixture, vault);
+    await save(fixture);
+    await expect(toast).toContainText('binary roundtrip verified', { timeout: 30_000 });
+    await expect(options.locator('#vault-state')).toHaveText(connected(vault));
+
+    await scrollTo(options, 1e6);
+    const button = options.locator('#prepare-model');
+    const before = await button.boundingBox();
+    expect(before).not.toBeNull();
+    await expect(toast).toBeHidden({ timeout: 10_000 });
+    expect(await button.boundingBox()).toEqual(before);
+  } finally {
+    await fixture.close();
+    await vault.close();
+  }
+});
+
+test('the status re-reads every three seconds until the waiting count has held for a minute, and again on return, Save or Test', async () => {
+  test.setTimeout(180_000);
   const vault = await startVaultFixture();
   const fixture = await launchExtension('full');
   let vaultOpen = true;
@@ -424,57 +588,99 @@ test('the status stops re-reading once the waiting count holds still, and reads 
     await captureAt(article, '#dog');
     await expect.poll(async () => (await state(fixture)).length).toBe(1);
 
+    // The page's clock is Playwright's, stopped and moved on by hand a second at a time.
+    // Every read is still a real message to the background, answered before the next second.
     await options.bringToFront();
+    await options.clock.install();
+    await options.clock.pauseAt(Date.now() + 1_000);
     await options.reload();
     await expect(options.locator('#vault-state')).toHaveText(
       `${connected(vault)} 1 capture waiting to sync.`,
     );
-    // Count the page's reads of the background state from here on.
+    const loaded = await options.evaluate(() => performance.now());
+    // Note, by the page's clock, each read of the background state from here on.
     await options.evaluate(() => {
-      const page = window as unknown as { reads: number };
-      page.reads = 0;
-      const runtime = chrome.runtime as unknown as { sendMessage(message: unknown): unknown };
+      const page = window as unknown as { reads: number[]; answered: number };
+      page.reads = [];
+      page.answered = 0;
+      const runtime = chrome.runtime as unknown as {
+        sendMessage(message: unknown): Promise<unknown>;
+      };
       const send = runtime.sendMessage.bind(runtime);
       runtime.sendMessage = (message) => {
-        if ((message as { type?: string })?.type === 'GET_STATE') page.reads += 1;
-        return send(message);
+        if ((message as { type?: string })?.type !== 'GET_STATE') return send(message);
+        page.reads.push(performance.now());
+        const reply = send(message);
+        const answered = () => {
+          page.answered += 1;
+        };
+        reply.then(answered, answered);
+        return reply;
       };
     });
-    const reads = () => options.evaluate(() => (window as unknown as { reads: number }).reads);
-    /** Waits out three refresh periods and returns the reads, which must have stopped. */
-    async function settledReads(): Promise<number> {
-      await options.waitForTimeout(13_000);
-      const settled = await reads();
-      await options.waitForTimeout(9_000);
-      expect(await reads()).toBe(settled);
-      return settled;
+    /** Waits until every read the page has made is answered. */
+    const answered = () =>
+      expect
+        .poll(() =>
+          options.evaluate(() => {
+            const page = window as unknown as { reads: number[]; answered: number };
+            return page.answered === page.reads.length;
+          }),
+        )
+        .toBe(true);
+    /** Moves the page's clock on by whole seconds, each read answered before the next second. */
+    async function advance(seconds: number): Promise<void> {
+      for (let second = 0; second < seconds; second += 1) {
+        await answered();
+        await options.clock.runFor(1_000);
+      }
+      await answered();
     }
-    const first = await settledReads();
-    expect(first).toBeGreaterThan(0);
-    expect(first).toBeLessThanOrEqual(3);
+    /**
+     * Runs the clock 80 seconds and returns the reads since `from`, in milliseconds after
+     * it. They come three seconds apart and end a minute after it.
+     */
+    async function readsAfter(from: number): Promise<number[]> {
+      await advance(80);
+      const times = (await options.evaluate(() => (window as unknown as { reads: number[] }).reads))
+        .filter((time) => time >= from)
+        .map((time) => time - from);
+      const distinct = [...new Set(times)];
+      expect(distinct.length).toBeGreaterThan(1);
+      for (const [index, time] of distinct.entries()) {
+        if (index === 0) continue;
+        expect(time - (distinct[index - 1] ?? 0)).toBeGreaterThanOrEqual(3_000);
+        expect(time - (distinct[index - 1] ?? 0)).toBeLessThan(4_000);
+      }
+      expect(distinct.at(-1)).toBeGreaterThanOrEqual(57_000);
+      expect(distinct.at(-1)).toBeLessThanOrEqual(64_000);
+      return times;
+    }
+    const now = () => options.evaluate(() => performance.now());
 
-    // Coming back to the tab reads it again, and the reads stop again.
+    // A grab that cannot sync: the reads go on for a minute after the page opened, then stop.
+    const opened = await readsAfter(loaded);
+    expect(opened[0]).toBeLessThanOrEqual(4_000);
+
+    // Coming back to the tab reads it at once, and for a minute again.
+    let from = await now();
     await options.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-    const back = await settledReads();
-    expect(back - first).toBeGreaterThanOrEqual(2);
-    expect(back - first).toBeLessThanOrEqual(4);
+    expect((await readsAfter(from))[0]).toBe(0);
 
     // So does a Save.
+    from = await now();
     await save(fixture);
     await expect(options.locator('#message')).toHaveText('Settings saved.');
-    const saved = await settledReads();
-    expect(saved - back).toBeGreaterThanOrEqual(2);
-    expect(saved - back).toBeLessThanOrEqual(5);
+    expect((await readsAfter(from))[0]).toBe(0);
     await expect(options.locator('#vault-state')).toHaveText(
       `${connected(vault)} 1 capture waiting to sync.`,
     );
 
-    // And so does a Test, which fails with the vault gone and says so.
+    // And so does the end of a Test, which fails with the vault gone and says so.
+    from = await now();
     await options.locator('#connect').click();
     await expect(options.locator('#message')).toHaveText(unreachable, { timeout: 30_000 });
-    const tested = await settledReads();
-    expect(tested - saved).toBeGreaterThanOrEqual(4);
-    expect(tested - saved).toBeLessThanOrEqual(6);
+    expect((await readsAfter(from))[0]).toBe(0);
     await expect(options.locator('#vault-state')).toHaveText(
       `Sync is on for ${vault.origin}, but the last vault test failed: ${unreachable} 1 capture waiting to sync.`,
     );

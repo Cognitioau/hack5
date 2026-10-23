@@ -331,9 +331,10 @@ input[type="checkbox"] {
   background: #202b1c;
   color: var(--lime);
 }
-/* While a toast shows, the page's end scrolls clear of it: room for its height
-   (measured by notice()) and twice its offset from the window's edge. */
-main:has(> .notice:not([hidden])) {
+/* Once a toast has shown, the page's end scrolls clear of it: room for its height
+   (measured by notice()) and twice its offset from the window's edge. The room stays
+   when the toast goes, so its going moves nothing on the page. */
+main:has(> .notice[data-room]) {
   padding-bottom: calc(var(--notice-room, 0px) + 48px);
 }
 .vault-status {
@@ -561,7 +562,7 @@ footer {
     bottom: 16px;
     width: calc(100vw - 32px);
   }
-  main:has(> .notice:not([hidden])) {
+  main:has(> .notice[data-room]) {
     padding-bottom: calc(var(--notice-room, 0px) + 32px);
   }
   .compact .actions,

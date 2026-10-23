@@ -1,4 +1,9 @@
-import { defaultSettings, type AppResponse, type Settings } from '../core/contracts';
+import {
+  defaultSettings,
+  type AppResponse,
+  type Settings,
+  type VaultStatus,
+} from '../core/contracts';
 import { command } from '../adapters/browser/client';
 import { universalPageOrigins } from '../adapters/browser/activation';
 import { originPattern } from '../adapters/browser/settings';
@@ -15,17 +20,21 @@ const vaultButtons = () => [
 ];
 let testing = false;
 let vaultRefresh: ReturnType<typeof setTimeout> | undefined;
-/** The waiting count at the last read, and how many reads in a row since have found it unchanged. */
+/** The vault status the page last showed. Save reads it to know whether access was off. */
+let shownStatus: VaultStatus | undefined;
+/** How long the status follows a waiting count that has stopped moving. */
+const followMs = 60_000;
+/** The waiting count at the last read, and when, by the page's clock, it last changed. */
 let lastWaiting: number | undefined;
-let unchangedReads = 0;
-/** A Save, a Test or coming back to the tab follows the queue afresh. */
+let waitingSince = 0;
+/** A Save, the end of a Test or coming back to the tab follows the queue afresh. */
 function followQueue(): void {
   lastWaiting = undefined;
-  unchangedReads = 0;
 }
 /** The vault connection beside Save, as the background reports it. Plain text only. */
 function renderVault(state: State): void {
   const status = state.vaultStatus ?? { state: 'none', remembered: false };
+  shownStatus = status;
   const saved = state.settings ?? settings;
   // Captures still to reach the vault, counted as the popup counts them.
   const waiting = (state.captures ?? []).filter(
@@ -45,11 +54,18 @@ function renderVault(state: State): void {
       ? `Sync is on for ${saved.endpoint}, but the last vault test failed: ${status.error}${queue}`
       : `Connected to ${saved.endpoint}. Grabs save to the “${saved.folder}” folder.${queue}`;
     // The background drains the queue after a passing test; follow the count down while
-    // the page is in view. Each read lists every capture, so three reads in a row that find
-    // the count unchanged (a grab that cannot sync) stop it until a Save, a Test or a return.
-    unchangedReads = waiting === lastWaiting ? unchangedReads + 1 : 0;
-    lastWaiting = waiting;
-    if (waiting && unchangedReads < 3 && document.visibilityState === 'visible')
+    // the page is in view. Each read lists every capture, so a count that has not moved for
+    // a minute (a grab that cannot sync) stops it until a Save, a Test or a return; a slow
+    // send that moves the count keeps it going.
+    if (waiting !== lastWaiting) {
+      lastWaiting = waiting;
+      waitingSince = performance.now();
+    }
+    if (
+      waiting &&
+      performance.now() - waitingSince < followMs &&
+      document.visibilityState === 'visible'
+    )
       vaultRefresh = setTimeout(() => void refreshVault(), 3000);
   } else if (status.state === 'paused') {
     box.dataset.state = 'paused';
@@ -194,11 +210,15 @@ async function testVault(opening: string): Promise<void> {
 element<HTMLFormElement>('settings-form').addEventListener('submit', (event) => {
   event.preventDefault();
   void busy(vaultButtons(), async () => {
+    // Save brings back access that was off, but what waited meanwhile is sent only after a
+    // passing test.
+    const accessWasOff = shownStatus?.access === false;
     await saveSettings();
     followQueue();
-    const state = await load();
-    // A changed vault or key, or one never tested, leaves sync paused: one press connects.
-    if (state.vaultStatus?.state === 'paused')
+    const status = (await load()).vaultStatus;
+    // A changed vault or key, or one never tested, leaves sync paused, and a failed test
+    // stands until a test passes: one press tests, connects and sends what waited.
+    if (status?.state === 'paused' || status?.error || accessWasOff)
       await testVault(
         'Settings saved. Testing create-only writes, version conflicts and attachment bytes…',
       );

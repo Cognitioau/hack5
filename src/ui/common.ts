@@ -3,8 +3,11 @@ export function element<T extends HTMLElement>(id: string): T {
   if (!found) throw new Error(`Missing UI element ${id}`);
   return found as T;
 }
-/** How long a notice stays: long enough to read, and longer for an error to act on. */
-const noticeMs = { success: 6_000, info: 6_000, error: 15_000 } as const;
+/**
+ * A success goes after six seconds. Info says what is still under way and an error what
+ * to act on, so they stay until the next notice replaces them.
+ */
+const successMs = 6_000;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let noticeRoom: ResizeObserver | undefined;
 export function notice(message: string, kind: 'success' | 'error' | 'info' = 'info') {
@@ -13,17 +16,22 @@ export function notice(message: string, kind: 'success' | 'error' | 'info' = 'in
   box.className = `notice ${kind}`;
   box.hidden = false;
   // The toast floats over the page's end, so the page makes room below it for the
-  // toast's height (ui.css) and its end can always scroll clear.
-  const room = () =>
-    document.documentElement.style.setProperty('--notice-room', `${box.offsetHeight}px`);
+  // toast's height (ui.css) and its end can always scroll clear. The room outlasts the
+  // toast, so its going moves nothing; the next notice measures it again.
+  box.dataset.room = '';
+  const room = () => {
+    if (!box.hidden)
+      document.documentElement.style.setProperty('--notice-room', `${box.offsetHeight}px`);
+  };
   room();
   noticeRoom ??= new ResizeObserver(room);
   noticeRoom.observe(box);
-  // A new notice replaces the last and restarts the clock.
+  // A new notice replaces the last, and its kind decides whether it goes by itself.
   clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => {
-    box.hidden = true;
-  }, noticeMs[kind]);
+  if (kind === 'success')
+    noticeTimer = setTimeout(() => {
+      box.hidden = true;
+    }, successMs);
 }
 /** Runs an operation with its button, or every button that would race it, disabled. */
 export async function busy(
