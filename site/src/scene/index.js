@@ -253,20 +253,35 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
 
   let previous = 0;
   // If the machine can't hold ~30 fps, render fewer pixels rather than stutter. The bar sits just
-  // under 30 so a screen capped at 30 Hz (battery saver) is not mistaken for a slow GPU.
+  // under 30 so a screen capped at 30 Hz (battery saver) is not mistaken for a slow GPU. When the
+  // slowdown passes (a busy tab, a screen recorder), the resolution climbs back; a step up that
+  // proves too slow becomes the ceiling, so it never see-saws.
+  let ceiling = renderer.getPixelRatio();
+  let raised = false;
   let slowFrames = 0;
+  let fastFrames = 0;
   let sampled = 0;
   function adapt(rawDt) {
     sampled++;
     if (rawDt > 1 / 28) slowFrames++;
+    else if (rawDt < 1 / 50) fastFrames++;
     if (sampled < 90) return;
     const pixelRatio = renderer.getPixelRatio();
     if (slowFrames > 45 && pixelRatio > 0.8) {
+      if (raised) ceiling = pixelRatio * 0.8;
       renderer.setPixelRatio(Math.max(0.75, pixelRatio * 0.8));
+      raised = false;
       resize();
+    } else if (fastFrames > 85 && pixelRatio < ceiling - 1e-3) {
+      renderer.setPixelRatio(Math.min(ceiling, pixelRatio / 0.8));
+      raised = true;
+      resize();
+    } else {
+      raised = false;
     }
     sampled = 0;
     slowFrames = 0;
+    fastFrames = 0;
   }
   function frame(now) {
     const rawDt = (now - previous) / 1000;

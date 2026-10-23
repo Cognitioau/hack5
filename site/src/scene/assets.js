@@ -21,16 +21,26 @@ const TREES = ['dead_tree_trunk', 'dead_tree_trunk_02'];
 export async function loadAssets(renderer, { low }) {
   const anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), low ? 4 : 16);
   const textureLoader = new THREE.TextureLoader();
-  const texture = ([name, srgb, fixedRes]) =>
-    textureLoader.loadAsync(`/textures/${name}_${fixedRes ?? (low ? '1k' : '2k')}.webp`).then((t) => {
-      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.anisotropy = anisotropy;
-      return t;
-    });
+  const texture = ([name, srgb, fixedRes]) => {
+    const url = `/textures/${name}_${fixedRes ?? (low ? '1k' : '2k')}.webp`;
+    return textureLoader.loadAsync(url).then(
+      (t) => {
+        t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.anisotropy = anisotropy;
+        return t;
+      },
+      // The loader rejects with a bare DOM Event, which says nothing about which file failed.
+      () => {
+        throw new Error(`Could not load ${url}`);
+      },
+    );
+  };
 
   const keys = Object.keys(TEXTURES);
   const texturesLoaded = Promise.all(keys.map((k) => texture(TEXTURES[k])));
+  // Awaited below; until then, a failure must not surface as an unhandled rejection.
+  texturesLoaded.catch(() => {});
   // The loader and decoder ship as their own chunk, fetched alongside the textures.
   const [{ GLTFLoader }, { MeshoptDecoder }] = await Promise.all([
     import('three/addons/loaders/GLTFLoader.js'),

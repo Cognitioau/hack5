@@ -1,7 +1,4 @@
 import './style.css';
-import { DOWNLOAD_URL } from './config.js';
-
-for (const link of document.querySelectorAll('[data-download]')) link.href = DOWNLOAD_URL;
 
 const dialog = document.querySelector('dialog.install');
 for (const button of document.querySelectorAll('[data-open-install]')) {

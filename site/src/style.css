@@ -516,7 +516,9 @@ button {
   -webkit-backdrop-filter: blur(4px);
 }
 
+/* Fills the sheet, so a click on its empty lower half is not mistaken for a backdrop click. */
 .install-inner {
+  min-height: 100%;
   padding: max(30px, env(safe-area-inset-top)) clamp(22px, 4vw, 40px) 40px;
 }
 
