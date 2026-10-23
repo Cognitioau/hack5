@@ -800,6 +800,45 @@ test('at phone width a standing error never covers the control focus reaches, an
     expect(settings.stops).toBeGreaterThan(15);
     expect(settings.covered).toEqual([]);
 
+    // A mouse press in a text field the toast covers leaves the page where it is, so the
+    // release lands where the press did.
+    const field = options.locator('#excluded');
+    await field.evaluate((box) => {
+      const toast = document.getElementById('message')?.getBoundingClientRect();
+      if (!toast) throw new Error('No toast');
+      window.scrollBy({
+        top: box.getBoundingClientRect().bottom - toast.top - 20,
+        behavior: 'instant',
+      });
+    });
+    const press = await field.evaluate((box) => {
+      const toast = document.getElementById('message')?.getBoundingClientRect();
+      const area = box.getBoundingClientRect();
+      if (!toast || area.bottom <= toast.top) throw new Error('The field is not under the toast');
+      return { x: area.left + area.width / 2, y: toast.top + 10, scrolled: scrollY };
+    });
+    await options.mouse.move(press.x, press.y);
+    await options.mouse.down();
+    await options.waitForTimeout(150);
+    expect(await options.evaluate(() => scrollY)).toBe(press.scrolled);
+    await options.mouse.up();
+    await expect(field).toBeFocused();
+
+    // A text box taller than the space above the toast keeps its top in view.
+    await field.evaluate((box) => {
+      box.style.height = '800px';
+      (document.activeElement as HTMLElement | null)?.blur();
+    });
+    await options.locator('#feature-haunting').focus();
+    await options.keyboard.press('Tab');
+    await expect(field).toBeFocused();
+    await options.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+    );
+    expect(await field.evaluate((box) => box.getBoundingClientRect().top)).toBeGreaterThanOrEqual(
+      0,
+    );
+
     // The graveyard, with no vault to recover from.
     const graveyard = await fixture.context.newPage();
     await graveyard.setViewportSize({ width: 390, height: 844 });

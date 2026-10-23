@@ -11,27 +11,32 @@ const successMs = 6_000;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let noticeRoom: ResizeObserver | undefined;
 let focusClearing = false;
+/** Whether the last press was a pointer's rather than a key's. */
+let pointerFocus = false;
 /**
  * Keyboard focus that lands under the toast moves up clear of it. Chrome scrolls a control
- * into view only when it is outside the window, not when the toast covers it. Mouse focus
- * is left alone, so a click never moves out from under the pointer.
+ * into view only when it is outside the window, not when the toast covers it. Focus from a
+ * pointer press is left alone, text fields included (Chrome counts their mouse focus as
+ * visible), so a click or a drag never moves out from under the pointer.
  */
 function clearFocus(event: FocusEvent): void {
   const target = event.target;
-  if (!(target instanceof Element)) return;
+  if (pointerFocus || !(target instanceof Element)) return;
   requestAnimationFrame(() => {
     const box = document.getElementById('message');
     if (!box || box.hidden || !target.matches(':focus-visible')) return;
     const toast = box.getBoundingClientRect();
     const focused = target.getBoundingClientRect();
-    const under = focused.bottom - toast.top;
+    // Never past the control's own top, so a tall one keeps its start in view.
+    const lift = Math.min(focused.bottom - toast.top + 16, focused.top - 16);
     if (
-      under > 0 &&
+      lift > 0 &&
+      focused.bottom > toast.top &&
       focused.top < toast.bottom &&
       focused.left < toast.right &&
       focused.right > toast.left
     )
-      window.scrollBy({ top: under + 16, behavior: 'instant' });
+      window.scrollBy({ top: lift, behavior: 'instant' });
   });
 }
 export function notice(message: string, kind: 'success' | 'error' | 'info' = 'info') {
@@ -52,6 +57,20 @@ export function notice(message: string, kind: 'success' | 'error' | 'info' = 'in
   noticeRoom.observe(box);
   if (!focusClearing) {
     focusClearing = true;
+    document.addEventListener(
+      'pointerdown',
+      () => {
+        pointerFocus = true;
+      },
+      true,
+    );
+    document.addEventListener(
+      'keydown',
+      () => {
+        pointerFocus = false;
+      },
+      true,
+    );
     document.addEventListener('focusin', clearFocus);
   }
   // A new notice replaces the last, and its kind decides whether it goes by itself.
