@@ -3,7 +3,9 @@ import { fbm2, mulberry32 } from './noise.js';
 import { heightAt } from './world.js';
 
 // Clods thrown up when the hand breaks the surface. Plain ballistics, then they rest and sink.
-export function createDirt(scene, textures, count = 90) {
+// The pool has to hold every burst in one cycle, because gentle bursts only take idle clods and
+// nothing is freed until the grave settles.
+export function createDirt(scene, textures, count = 120) {
   const random = mulberry32(5150);
   // A rounded, lumpy chunk: smooth noise over the sphere, slightly flattened, never spiky.
   const geometry = new THREE.IcosahedronGeometry(1, 3);
@@ -56,8 +58,7 @@ export function createDirt(scene, textures, count = 90) {
   const q = new THREE.Quaternion();
   const s = new THREE.Vector3();
 
-  function burst(center, { strength = 1, share = 1 } = {}) {
-    const n = Math.floor(count * share);
+  function burst(center, { strength = 1, clods: n = count } = {}) {
     let used = 0;
     for (const c of clods) {
       if (used >= n) break;
