@@ -382,7 +382,11 @@ function buildAnatomy(bones, cell) {
     const placed = pts.map((p) => toSurface(p, rise - radius));
     for (let i = 0; i < placed.length - 1; i++) {
       const taper = 1 - 0.35 * Math.abs(i / (placed.length - 1) - 0.5) * 2;
-      put(owner, group, k, capsule(placed[i], placed[i + 1], radius * taper, radius * taper));
+      // A vein that crosses the wrist belongs to the forearm below it and to the hand above it;
+      // owned whole by the arm, the back of the hand would stay behind when the wrist bends.
+      const mid = (placed[i][1] + placed[i + 1][1]) * 0.5;
+      const segOwner = owner === ARM || owner === HAND ? (mid < 0 ? ARM : HAND) : owner;
+      put(segOwner, group, k, capsule(placed[i], placed[i + 1], radius * taper, radius * taper));
     }
   };
 
@@ -674,44 +678,44 @@ export function generateHandGeometry({ cell, bones }) {
       sum += weight;
     }
     for (let w = 0; w < 4; w++) skinWeight[v * 4 + w] /= sum;
-    // Across the wrist, nearest-primitive weights would fold the skin into a fin when the hand
-    // bends back; spread the arm/hand share smoothly over a few centimetres instead.
-    if (y > -0.04 && y < 0.04) {
-      let shared = 0;
-      for (let w = 0; w < 4; w++) {
-        const bw = skinIndex[v * 4 + w];
-        if (bw === ARM || bw === HAND) shared += skinWeight[v * 4 + w];
-      }
-      if (shared > 0) {
-        const toHand = smoothstep(-0.026, 0.026, y);
-        // Make sure both bones have a slot: replace the weakest non-arm/hand slot if needed.
-        let armSlot = -1;
-        let handSlot = -1;
+    // The arm/hand share of each vertex follows its height, bending smoothly across the wrist and
+    // rigidly beyond it, so no skin on the hand follows the forearm (or the reverse) and folds into a
+    // fin when the wrist bends.
+    let shared = 0;
+    let armSlot = -1;
+    let handSlot = -1;
+    for (let w = 0; w < 4; w++) {
+      const bw = skinIndex[v * 4 + w];
+      if (bw === ARM) armSlot = w;
+      else if (bw === HAND) handSlot = w;
+      else continue;
+      shared += skinWeight[v * 4 + w];
+    }
+    if (shared > 0) {
+      const toHand = smoothstep(-0.026, 0.026, y);
+      const weakestOther = () => {
+        let best = -1;
         for (let w = 0; w < 4; w++) {
-          if (skinIndex[v * 4 + w] === ARM) armSlot = w;
-          if (skinIndex[v * 4 + w] === HAND) handSlot = w;
+          if (w === armSlot || w === handSlot) continue;
+          if (best < 0 || skinWeight[v * 4 + w] < skinWeight[v * 4 + best]) best = w;
         }
-        for (let w = 3; w >= 0 && (armSlot < 0 || handSlot < 0); w--) {
-          const bw = skinIndex[v * 4 + w];
-          if (bw === ARM || bw === HAND || w === armSlot || w === handSlot) continue;
-          if (skinWeight[v * 4 + w] > 0.02) continue;
-          if (armSlot < 0) armSlot = w;
-          else handSlot = w;
-          skinIndex[v * 4 + w] = armSlot === w ? ARM : HAND;
-          skinWeight[v * 4 + w] = 0;
-        }
-        if (armSlot >= 0 && handSlot >= 0) {
-          for (let w = 0; w < 4; w++) {
-            const bw = skinIndex[v * 4 + w];
-            if ((bw === ARM || bw === HAND) && w !== armSlot && w !== handSlot) skinWeight[v * 4 + w] = 0;
-          }
-          skinWeight[v * 4 + armSlot] = shared * (1 - toHand);
-          skinWeight[v * 4 + handSlot] = shared * toHand;
-          let total = 0;
-          for (let w = 0; w < 4; w++) total += skinWeight[v * 4 + w];
-          for (let w = 0; w < 4; w++) skinWeight[v * 4 + w] /= total;
-        }
+        return best;
+      };
+      if (toHand < 1 && armSlot < 0) {
+        armSlot = toHand === 0 && handSlot >= 0 ? handSlot : weakestOther();
+        if (armSlot === handSlot) handSlot = -1;
+        skinIndex[v * 4 + armSlot] = ARM;
       }
+      if (toHand > 0 && handSlot < 0) {
+        handSlot = toHand === 1 && armSlot >= 0 ? armSlot : weakestOther();
+        if (handSlot === armSlot) armSlot = -1;
+        skinIndex[v * 4 + handSlot] = HAND;
+      }
+      if (armSlot >= 0) skinWeight[v * 4 + armSlot] = shared * (1 - toHand);
+      if (handSlot >= 0) skinWeight[v * 4 + handSlot] = shared * toHand;
+      let total = 0;
+      for (let w = 0; w < 4; w++) total += skinWeight[v * 4 + w];
+      for (let w = 0; w < 4; w++) skinWeight[v * 4 + w] /= total;
     }
   }
 
