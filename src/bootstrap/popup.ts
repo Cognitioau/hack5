@@ -37,18 +37,25 @@ function render(state: State): void {
     (capture) => capture.lifecycle === 'active' && capture.persistence !== 'saved-vault',
   ).length;
   const vault = element('vault');
-  if (state.hasKey) {
+  const connection = state.vaultStatus?.state ?? 'none';
+  if (connection === 'syncing') {
     vault.textContent = kept
       ? `Vault connected. ${kept} capture${kept === 1 ? '' : 's'} waiting to sync.`
       : 'Vault connected. Grabs are buried in Obsidian.';
     return;
   }
+  const onDevice = kept
+    ? `; ${kept} capture${kept === 1 ? ' is' : 's are'} kept on this device`
+    : '';
   const link = document.createElement('a');
   link.href = 'options.html';
   link.target = '_blank';
-  link.textContent = 'Connect vault';
+  // A held key syncs nothing until the vault test passes, so the link leads to that test.
+  link.textContent = connection === 'paused' ? 'Test vault' : 'Connect vault';
   vault.replaceChildren(
-    `No vault yet${kept ? `; ${kept} capture${kept === 1 ? ' is' : 's are'} kept on this device` : ''}. `,
+    connection === 'paused'
+      ? `Vault key saved, but not syncing yet${onDevice}. `
+      : `No vault yet${onDevice}. `,
     link,
   );
 }

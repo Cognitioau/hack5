@@ -5,9 +5,71 @@ import { originPattern } from '../adapters/browser/settings';
 import { publicMediaUrl } from '../core/domain/security';
 import { busy, element, notice } from '../ui/common';
 
+type State = Extract<AppResponse, { ok: true }>;
 const input = (id: string) => element<HTMLInputElement>(id);
 let settings: Settings = structuredClone(defaultSettings);
-let activation: Extract<AppResponse, { ok: true }>['activation'] = 'manual';
+let activation: State['activation'] = 'manual';
+/** Save, Test and Forget each change the vault connection, so only one runs at a time. */
+const vaultButtons = () => [
+  ...element('settings-form').querySelectorAll<HTMLButtonElement>('.actions button'),
+];
+let testing = false;
+let vaultRefresh: ReturnType<typeof setTimeout> | undefined;
+/** The vault connection beside Save, as the background reports it. Plain text only. */
+function renderVault(state: State): void {
+  const status = state.vaultStatus ?? { state: 'none', remembered: false };
+  const saved = state.settings ?? settings;
+  // Captures still to reach the vault, counted as the popup counts them.
+  const waiting = (state.captures ?? []).filter(
+    (capture) => capture.lifecycle === 'active' && capture.persistence !== 'saved-vault',
+  ).length;
+  const box = element('vault-status');
+  const line = element('vault-state');
+  clearTimeout(vaultRefresh);
+  if (testing) {
+    box.dataset.state = 'testing';
+    line.textContent = 'Testing the vault…';
+  } else if (status.state === 'syncing') {
+    box.dataset.state = 'syncing';
+    line.textContent = `Connected to ${saved.endpoint}. Grabs save to the “${saved.folder}” folder.${
+      waiting ? ` ${waiting} capture${waiting === 1 ? '' : 's'} waiting to sync.` : ''
+    }`;
+    // The background drains the queue after a passing test; follow the count down
+    // while the page is in view (coming back into view reads it again).
+    if (waiting && document.visibilityState === 'visible')
+      vaultRefresh = setTimeout(() => void refreshVault(), 3000);
+  } else if (status.state === 'paused') {
+    box.dataset.state = 'paused';
+    line.textContent = `The key is saved, but grabs are not syncing yet.${
+      status.error
+        ? ` The last vault test failed: ${status.error}`
+        : ' Test the vault to start syncing.'
+    }`;
+  } else {
+    box.dataset.state = 'none';
+    line.textContent =
+      'Not connected. Paste the API key from Obsidian → Settings → Local REST API, then save.';
+  }
+  element('vault-remember').hidden = status.state === 'none' || status.remembered;
+  // The key itself never comes back to the page; the field only says one is held.
+  input('api-key').placeholder =
+    status.state === 'none'
+      ? 'Paste the key from your local plugin'
+      : 'Key saved. Paste a new key to replace it.';
+  element('key-state').textContent =
+    status.state === 'none'
+      ? 'No vault key stored. Capture can queue locally until you connect.'
+      : 'A vault key is stored. Leave the field blank to keep it.';
+}
+async function refreshVault(): Promise<void> {
+  try {
+    renderVault(await command({ v: 1, type: 'GET_STATE' }));
+  } catch {
+    /* The next load, test or visit reads it again. */
+  }
+}
+/** After Save or Test, scroll the least distance that shows the whole status beside them. */
+const revealVault = () => element('vault-status').scrollIntoView({ block: 'nearest' });
 function renderActivation(): void {
   element('activation-state').textContent =
     activation === 'universal'
@@ -50,7 +112,7 @@ function formSettings(): Settings {
     },
   };
 }
-async function load() {
+async function load(): Promise<State> {
   const state = await command({ v: 1, type: 'GET_STATE' });
   settings = state.settings ?? structuredClone(defaultSettings);
   activation = state.activation ?? 'manual';
@@ -67,11 +129,10 @@ async function load() {
       input(`feature-${feature}`).checked = false;
     }
   element<HTMLTextAreaElement>('excluded').value = settings.excludedOrigins.join('\n');
-  element('key-state').textContent = state.hasKey
-    ? 'A vault key is stored. Leave the field blank to keep it.'
-    : 'No vault key stored. Capture can queue locally until you connect.';
+  renderVault(state);
+  return state;
 }
-async function save() {
+async function saveSettings(): Promise<void> {
   const next = formSettings();
   const url = new URL(next.endpoint);
   if (
@@ -88,37 +149,62 @@ async function save() {
   const granted = await chrome.permissions.request({ origins: [originPattern(next.endpoint)] });
   if (!granted) throw new Error('Vault endpoint permission was not granted.');
   const key = input('api-key').value.trim();
-  const response = await command({
+  await command({
     v: 1,
     type: 'SAVE_SETTINGS',
     settings: next,
     ...(key ? { apiKey: key } : {}),
   });
   input('api-key').value = '';
-  notice(response.message ?? 'Settings saved', 'success');
-  await load();
+}
+/** Runs the vault test. Sync stays paused, with the reason shown, unless it passes. */
+async function testVault(opening: string): Promise<void> {
+  testing = true;
+  clearTimeout(vaultRefresh);
+  element('vault-status').dataset.state = 'testing';
+  element('vault-state').textContent = 'Testing the vault…';
+  revealVault();
+  notice(opening);
+  try {
+    const response = await command({ v: 1, type: 'PROBE_VAULT' });
+    notice(response.message ?? 'Vault connected', 'success');
+  } finally {
+    testing = false;
+    await refreshVault();
+    revealVault();
+  }
 }
 element<HTMLFormElement>('settings-form').addEventListener('submit', (event) => {
   event.preventDefault();
-  const button =
-    element<HTMLFormElement>('settings-form').querySelector<HTMLButtonElement>(
-      'button[type=submit]',
-    );
-  if (button) void busy(button, save);
+  void busy(vaultButtons(), async () => {
+    await saveSettings();
+    const state = await load();
+    // A changed vault or key, or one never tested, leaves sync paused: one press connects.
+    if (state.vaultStatus?.state === 'paused')
+      await testVault(
+        'Settings saved. Testing create-only writes, version conflicts and attachment bytes…',
+      );
+    else {
+      revealVault();
+      notice('Settings saved.', 'success');
+    }
+  });
 });
 element<HTMLButtonElement>('connect').addEventListener('click', () => {
-  const button = element<HTMLButtonElement>('connect');
-  void busy(button, async () => {
-    await save();
-    notice('Testing create-only writes, version conflicts and attachment bytes…');
-    const response = await command({ v: 1, type: 'PROBE_VAULT' });
-    notice(response.message ?? 'Vault connected', 'success');
+  void busy(vaultButtons(), async () => {
+    await saveSettings();
+    await load();
+    await testVault('Testing create-only writes, version conflicts and attachment bytes…');
   });
+});
+document.addEventListener('visibilitychange', () => {
+  // Grabs made in other tabs change what is waiting to sync.
+  if (document.visibilityState === 'visible' && !testing) void refreshVault();
 });
 element<HTMLButtonElement>('forget').addEventListener(
   'click',
   () =>
-    void busy(element('forget'), async () => {
+    void busy(vaultButtons(), async () => {
       await command({ v: 1, type: 'FORGET_KEY' });
       input('api-key').value = '';
       await load();

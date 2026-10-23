@@ -1343,6 +1343,96 @@ describe('background settings and asynchronous revocation', () => {
   });
 });
 
+describe('vault status for trusted pages', () => {
+  /** GET_STATE's vault status, checked never to carry the key that is held. */
+  async function vaultStatus() {
+    const response = await context.sendTrusted({ v: 1, type: 'GET_STATE' });
+    if (!response.ok) throw new Error(response.error);
+    for (const key of [context.session.values.vaultKey, context.local.values.vaultKey])
+      if (typeof key === 'string') expect(JSON.stringify(response)).not.toContain(key);
+    return response.vaultStatus;
+  }
+  const newDestination = (): Settings => ({
+    ...(context.local.values.settings as Settings),
+    endpoint: 'https://127.0.0.1:27224',
+    folder: 'Other Test Vault',
+  });
+
+  it('reports none, paused or syncing by the same flag that gates sync, never the key', async () => {
+    expect(await vaultStatus()).toEqual({ state: 'syncing', remembered: false });
+    context.local.values.syncPaused = true;
+    expect(await vaultStatus()).toEqual({ state: 'paused', remembered: false });
+    // Sync treats an absent flag as not paused, so the status does too.
+    delete context.local.values.syncPaused;
+    expect(await vaultStatus()).toEqual({ state: 'syncing', remembered: false });
+    delete context.session.values.vaultKey;
+    expect(await vaultStatus()).toEqual({ state: 'none', remembered: false });
+  });
+
+  it('says whether a held key outlives a restart', async () => {
+    const settings = { ...(context.local.values.settings as Settings), rememberKey: true };
+    expect((await context.sendTrusted({ v: 1, type: 'SAVE_SETTINGS', settings })).ok).toBe(true);
+    expect(context.session.values.vaultKey).toBeUndefined();
+    expect(context.local.values.vaultKey).toBe(fixtureKey);
+    expect(await vaultStatus()).toEqual({ state: 'syncing', remembered: true });
+  });
+
+  it('names a failed test while paused, and forgets it once a test passes', async () => {
+    context.local.values.syncPaused = true;
+    vi.mocked(context.vault.probe).mockResolvedValueOnce({
+      ok: false,
+      message: 'Synthetic vault access denied',
+    });
+    expect(await context.sendTrusted({ v: 1, type: 'PROBE_VAULT' })).toEqual({
+      ok: false,
+      error: 'Synthetic vault access denied',
+    });
+    expect(await vaultStatus()).toEqual({
+      state: 'paused',
+      remembered: false,
+      error: 'Synthetic vault access denied',
+    });
+    expect((await context.sendTrusted({ v: 1, type: 'PROBE_VAULT' })).ok).toBe(true);
+    expect(await vaultStatus()).toEqual({ state: 'syncing', remembered: false });
+    expect(context.session.values.vaultTestError).toBeUndefined();
+  });
+
+  it('drops a failed test when a new destination or key pauses sync', async () => {
+    context.local.values.syncPaused = true;
+    vi.mocked(context.vault.probe).mockResolvedValueOnce({
+      ok: false,
+      message: 'Synthetic vault access denied',
+    });
+    expect((await context.sendTrusted({ v: 1, type: 'PROBE_VAULT' })).ok).toBe(false);
+    const saved = await context.sendTrusted({
+      v: 1,
+      type: 'SAVE_SETTINGS',
+      settings: newDestination(),
+      apiKey: 'synthetic-new-endpoint-key',
+    });
+    expect(saved.ok).toBe(true);
+    expect(await vaultStatus()).toEqual({ state: 'paused', remembered: false });
+  });
+
+  it('does not name a stale test failure against settings saved while it ran', async () => {
+    const probe = deferred<{ ok: boolean; message: string }>();
+    vi.mocked(context.vault.probe).mockReturnValueOnce(probe.promise);
+    const testing = context.sendTrusted({ v: 1, type: 'PROBE_VAULT' });
+    await vi.waitFor(() => expect(context.vault.probe).toHaveBeenCalled());
+    const saved = await context.sendTrusted({
+      v: 1,
+      type: 'SAVE_SETTINGS',
+      settings: newDestination(),
+      apiKey: 'synthetic-new-endpoint-key',
+    });
+    expect(saved.ok).toBe(true);
+    probe.resolve({ ok: false, message: 'The obsolete endpoint refused its key' });
+    expect((await testing).ok).toBe(false);
+    expect(await vaultStatus()).toEqual({ state: 'paused', remembered: false });
+    expect(context.session.values.vaultTestError).toBeUndefined();
+  });
+});
+
 describe('trusted transcript import boundary', () => {
   it('rejects page imports before parsing or retaining transcript data', async () => {
     expect((await context.send(transcriptImport())).ok).toBe(false);
