@@ -342,6 +342,19 @@ describe('content interaction lifecycle (mocked browser boundary)', () => {
     expect(messages('CAPTURE')).toHaveLength(0);
   });
 
+  it('never begins a circle while a field inside a shadow root has focus', async () => {
+    const host = document.createElement('search-box');
+    document.body.append(host);
+    const inner = document.createElement('input');
+    host.attachShadow({ mode: 'open' }).append(inner);
+    inner.focus();
+    expect(document.activeElement).toBe(host);
+    beginCircle();
+    await traceCircle();
+    expect(messages('ARM')).toHaveLength(0);
+    expect(messages('CAPTURE')).toHaveLength(0);
+  });
+
   it('consumes repeat keys and trailing circles until the held modifier is released', async () => {
     beginCircle();
     await traceCircle();
@@ -656,33 +669,46 @@ describe('one-click grabs (mocked browser boundary)', () => {
     expect(messages('CAPTURE')).toHaveLength(1);
   });
 
-  it('grabs the whole page with Shift+Z even when text is selected', async () => {
-    selectPassage();
-    const preventDefault = vi.fn();
-    dispatch('keydown', { key: 'Z', code: 'KeyZ', shiftKey: true, preventDefault });
-    await flush();
-    expect(preventDefault).toHaveBeenCalled();
-    expect(messages('READ_PAGE')).toHaveLength(1);
-    expect(messages('ARM')).toEqual([
-      expect.objectContaining({
-        candidate: expect.objectContaining({ kind: 'link', wholePage: true }),
-      }),
-    ]);
-    expect(messages('CAPTURE')).toHaveLength(1);
-  });
+  it.each(['Z', 'z'])(
+    'grabs the whole page with Shift+%s even when text is selected',
+    async (key) => {
+      selectPassage();
+      const preventDefault = vi.fn();
+      dispatch('keydown', { key, code: 'KeyZ', shiftKey: true, preventDefault });
+      await flush();
+      expect(preventDefault).toHaveBeenCalled();
+      expect(messages('READ_PAGE')).toHaveLength(1);
+      expect(messages('ARM')).toEqual([
+        expect.objectContaining({
+          candidate: expect.objectContaining({ kind: 'link', wholePage: true }),
+        }),
+      ]);
+      expect(messages('CAPTURE')).toHaveLength(1);
+    },
+  );
 
   it.each([
     ['repeats while held', { repeat: true }, true],
     ['is pressed in a text field', { field: true }, false],
+    ['is pressed in a field inside a shadow root', { shadow: true }, false],
     ['is part of an input method composition', { isComposing: true }, false],
     ['comes with Ctrl', { ctrlKey: true }, false],
     ['comes with Command', { metaKey: true }, false],
   ] as const)('Shift+Z grabs nothing when it %s', async (_, fields, prevented) => {
-    const { field, ...rest } = { field: false, ...fields };
+    const { field, shadow, ...rest } = { field: false, shadow: false, ...fields };
     const input = document.createElement('textarea');
     if (field) {
       document.body.append(input);
       input.focus();
+    }
+    // A web component's field reaches the page as its host element.
+    const host = document.createElement('search-box');
+    const inner = document.createElement('input');
+    if (shadow) {
+      document.body.append(host);
+      const root = host.attachShadow({ mode: 'open' });
+      root.append(inner);
+      inner.focus();
     }
     const preventDefault = vi.fn();
     dispatch('keydown', {
@@ -691,6 +717,9 @@ describe('one-click grabs (mocked browser boundary)', () => {
       shiftKey: true,
       preventDefault,
       ...(field ? { target: input } : {}),
+      ...(shadow
+        ? { target: host, composedPath: () => [inner, inner.parentNode, host, document] }
+        : {}),
       ...rest,
     });
     await flush();

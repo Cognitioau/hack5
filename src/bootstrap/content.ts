@@ -355,7 +355,7 @@ function activate(): () => void {
     view.setState(
       'saving',
       'Taking hold…',
-      'Preparing a durable local capture. Keep the modifier held and shake, or press Escape to cancel.',
+      'Preparing a durable local capture. Hold Ctrl and shake, or press Escape to cancel.',
     );
     const response = await request({
       v: 1,
@@ -670,6 +670,13 @@ function activate(): () => void {
   });
   view.host.dataset.zombieHandOwner = owner;
 
+  /** Typing in a field, including one in an open shadow root, whose events reach the page as its host. */
+  const typing = (event: Event): boolean => {
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    return isEditable(event.target instanceof Element ? event.target : null) || isEditable(focused);
+  };
+
   // A modifier hold owns exactly one lasso. Its release never cancels a
   // completed circle that is already crossing the asynchronous message boundary.
   const endInput = (invalidatePending = false): void => {
@@ -732,8 +739,7 @@ function activate(): () => void {
       event.altKey ||
       event.metaKey ||
       event.buttons !== 0 ||
-      isEditable(event.target instanceof Element ? event.target : null) ||
-      isEditable(document.activeElement)
+      typing(event)
     ) {
       endInput();
       return;
@@ -1011,7 +1017,7 @@ function activate(): () => void {
   document.addEventListener(
     'focusin',
     (event) => {
-      if (isEditable(event.target instanceof Element ? event.target : null)) invalidateTarget();
+      if (typing(event)) invalidateTarget();
     },
     { signal: listeners.signal },
   );
@@ -1038,9 +1044,7 @@ function activate(): () => void {
         void release();
         return;
       }
-      const editable =
-        isEditable(event.target instanceof Element ? event.target : null) ||
-        isEditable(document.activeElement);
+      const editable = typing(event);
       if (
         event.altKey &&
         event.shiftKey &&

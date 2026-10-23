@@ -470,6 +470,20 @@ test('Shift+Z grabs the whole page over a selection, and types a Z in a field', 
     expect(await state(fixture)).toHaveLength(0);
     await field.evaluate((node) => (node as HTMLElement).blur());
 
+    // A web component's field reaches the page as its host element.
+    await article.evaluate(() => {
+      const host = document.createElement('search-box');
+      host.attachShadow({ mode: 'open' }).append(document.createElement('input'));
+      document.querySelector('main')?.append(host);
+    });
+    const inner = article.locator('search-box input');
+    await inner.focus();
+    await article.keyboard.press('Shift+KeyZ');
+    await expect(inner).toHaveValue('Z');
+    await article.waitForTimeout(1_000);
+    expect(await state(fixture)).toHaveLength(0);
+    await inner.evaluate((node) => (node as HTMLElement).blur());
+
     const selected = await dragSelect(article, '#dog');
     expect(selected.length).toBeGreaterThan(10);
     await article.keyboard.press('Shift+KeyZ');
