@@ -43,4 +43,5 @@ The Download button points at `https://github.com/Cognitioau/hack5/releases/late
 
 - Textures: [Poly Haven](https://polyhaven.com) `forest_ground_04`, `forrest_ground_01` and `rock_boulder_dry`, CC0.
 - [three.js](https://threejs.org) (MIT) and [postprocessing](https://github.com/pmndrs/postprocessing) (Zlib).
-- Type: IM Fell English (the Fell Types, revived by Igino Marini), Spectral and IBM Plex Mono, all SIL Open Font License, served by Google Fonts.
+- Type: Big Shoulders Display, Geist and Geist Mono for the page, and IM Fell English (the Fell Types, revived by Igino Marini) for the headstone and the letter, all SIL Open Font License, served by Google Fonts.
+- The zombie-brain mark (`public/favicon.svg`) is drawn for this site.
