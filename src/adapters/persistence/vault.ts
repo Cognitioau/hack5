@@ -173,8 +173,87 @@ function quoteEvidence(value: string): string {
   return `${fence}text\n${value}\n${fence}`;
 }
 
-function notePath(config: NormalizedConfig, id: string): string {
+// Left out of a note's file name: controls, unpaired surrogates (which no URL can carry) and the
+// invisible format characters, tag characters included, which can hide text or reorder a name.
+// Explicit ranges, not \p{Cf}, so the name never moves with Chrome's Unicode version.
+const invisibleInName =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes.
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ud800-\udfff\ufeff\ufff9-\ufffb\u{110bd}\u{110cd}\u{13430}-\u{1343f}\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}\u{e0000}-\u{e007f}]/gu;
+const separatorInName = /[|:]/g;
+// Characters Obsidian refuses in a name or that break a [[link]], and the code marks that the wiki
+// kit's hook refuses in a page that cites the name.
+const unsafeInName = /[\\/*?"<>#^[\]`~]/g;
+const nameLength = 60;
+// File systems cap a name at 255 bytes; 60 four-byte characters, the id and `.md` would pass it.
+const nameBytes = 150;
+
+function nameText(value: string): string {
+  const clean = value
+    // Line breaks and tabs are controls too: they become spaces before the rest are removed.
+    .replace(/\s+/g, ' ')
+    .replace(invisibleInName, '')
+    .replace(separatorInName, ' - ')
+    .replace(unsafeInName, ' ')
+    // Two percent signs open an Obsidian comment.
+    .replace(/%{2,}/g, '%')
+    .replace(/\s+/g, ' ')
+    // A leading dot hides a file, and a trailing dot or space is dropped on some systems.
+    .replace(/^[\s.]+|[\s.]+$/g, '');
+  const characters = Array.from(clean);
+  let [kept, bytes] = [0, 0];
+  for (const character of characters) {
+    const point = character.codePointAt(0) ?? 0;
+    bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+    if (kept === nameLength || bytes > nameBytes) break;
+    kept++;
+  }
+  if (kept === characters.length) return clean;
+  // Cut by character, never inside a surrogate pair, and at a word where one is near.
+  const cut = characters.slice(0, kept).join('');
+  const space = cut.lastIndexOf(' ');
+  return `${(space >= cut.length / 2 ? cut.slice(0, space) : cut).replace(/[\s.]+$/, '')}…`;
+}
+
+function momentName(seconds: number): string {
+  const total = Math.floor(seconds);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const [hours, minutes] = [Math.floor(total / 3600), Math.floor((total % 3600) / 60)];
+  return hours ? `${hours}h${pad(minutes)}m${pad(total % 60)}s` : `${minutes}m${pad(total % 60)}s`;
+}
+
+/**
+ * A note's file name, which Obsidian shows in its file list and graph: a passage's opening words,
+ * an image's alt text, a video's title and moment, or else the page title, then the start of the
+ * id so names stay unique. Recovery recomputes it from saved metadata, so it must never change.
+ */
+export function noteName(capture: Pick<CaptureRecord, 'id' | 'candidate'>): string {
+  const { candidate } = capture;
+  const title = nameText(candidate.title);
+  const label =
+    (candidate.kind === 'text' && !candidate.wholePage ? nameText(candidate.text) : '') ||
+    (candidate.kind === 'image' ? nameText(candidate.image?.alt ?? '') : '') ||
+    (candidate.video && title ? `${title} at ${momentName(candidate.video.seconds)}` : '') ||
+    title ||
+    'Grab';
+  return `${label} (${capture.id.slice(0, 8)})`;
+}
+
+/** Notes saved before readable names are named by id alone; recovery still looks there. */
+function legacyNotePath(config: NormalizedConfig, id: string): string {
   return `${config.folder}/captures/${id}.md`;
+}
+
+function namedNotePath(
+  config: NormalizedConfig,
+  capture: Pick<CaptureRecord, 'id' | 'candidate'>,
+): string {
+  return `${config.folder}/captures/${noteName(capture)}.md`;
+}
+
+/** A note saved under its id keeps that name, so archiving it never writes a second note. */
+function notePath(config: NormalizedConfig, record: CaptureRecord): string {
+  const legacy = legacyNotePath(config, record.id);
+  return record.vault?.notePath === legacy ? legacy : namedNotePath(config, record);
 }
 
 function metadataPath(config: NormalizedConfig, id: string): string {
@@ -826,7 +905,7 @@ export function createVaultClient(
         );
         hasRemoteEvidence = true;
       }
-      const note = notePath(resolved, prepared.record.id);
+      const note = notePath(resolved, prepared.record);
       try {
         await createFile(note, prepared.note, 'text/markdown; charset=utf-8', signal);
       } catch (error) {
@@ -846,7 +925,7 @@ export function createVaultClient(
         status: 'saved-vault',
         metadataEtag: etag,
         vault: {
-          notePath: notePath(resolved, prepared.record.id),
+          notePath: note,
           metadataPath: metadataPath(resolved, prepared.record.id),
           metadataEtag: etag,
         },
@@ -926,24 +1005,38 @@ export function createVaultClient(
           canonicalJson(metadata);
           // A skipped or absent listing entry is not evidence of deletion. Reconcile only a
           // directly observed inconsistency tied to validated application-owned metadata.
-          const observeUnavailable = (reason: 'missing' | 'conflict', message: string) => {
-            unavailable.push({
-              id,
-              operationId: metadata.capture.operationId,
-              contentRevision: metadata.capture.contentRevision,
-              lifecycleRevision: metadata.lifecycle.revision,
-              notePath: notePath(resolved, id),
-              metadataPath: metadataPath(resolved, id),
-              reason,
-              message,
-            });
+          const named = namedNotePath(resolved, metadata.capture);
+          const legacy = legacyNotePath(resolved, id);
+          let found = named;
+          const observeUnavailable = (
+            reason: 'missing' | 'conflict',
+            message: string,
+            paths = [found],
+          ) => {
+            for (const path of paths)
+              unavailable.push({
+                id,
+                operationId: metadata.capture.operationId,
+                contentRevision: metadata.capture.contentRevision,
+                lifecycleRevision: metadata.lifecycle.revision,
+                notePath: path,
+                metadataPath: metadataPath(resolved, id),
+                reason,
+                message,
+              });
             skipped++;
           };
-          const note = await readForImport(notePath(resolved, id));
+          let note = await readForImport(named);
           if (!note) {
+            found = legacy;
+            note = await readForImport(legacy);
+          }
+          if (!note) {
+            // Either name may be the one it was saved under; each observation names the path read.
             observeUnavailable(
               'missing',
               'The saved vault note is missing. The cached capture was retained for manual reconciliation.',
+              [named, legacy],
             );
             continue;
           }
@@ -996,7 +1089,7 @@ export function createVaultClient(
             persistence: 'saved-vault',
             indexState: 'pending',
             vault: {
-              notePath: notePath(resolved, id),
+              notePath: found,
               metadataPath: metadataPath(resolved, id),
               metadataEtag: metadataReply.etag,
             },

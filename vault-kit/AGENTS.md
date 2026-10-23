@@ -51,10 +51,10 @@ Then, in this order, using only the sections the page needs:
 
 ## Citations
 
-Cite a capture with a wikilink to its file name, which is its id, and give the link a short readable label:
+Cite a capture with a wikilink to its file name, without `.md`, and give the link a short readable label. A capture is named after what was grabbed, then the start of its id in brackets; an older one is named by its whole id.
 
 ```markdown
-Deep work needs long uninterrupted blocks [[0b6f3c1e-5a2d-4c3e-9f1a-2b7d8e9c0a11|Newport, *Deep Work*]].
+Deep work needs long uninterrupted blocks [[Deep work is the ability to focus without distraction (0b6f3c1e)|Newport, *Deep Work*]].
 ```
 
 For a video moment, add the timestamped link from the capture after the wikilink. Copy URLs from captures exactly, and never invent one.
@@ -69,12 +69,12 @@ Append-only, newest at the bottom. One entry per operation, with headings that s
 
 ```markdown
 ## [2026-10-21] ingest | How to Do Great Work
-- capture: [[0b6f3c1e-5a2d-4c3e-9f1a-2b7d8e9c0a11]]
+- capture: [[Deep work is the ability to focus without distraction (0b6f3c1e)]] 0b6f3c1e-5a2d-4c3e-9f1a-2b7d8e9c0a11
 - pages: [[How to Do Great Work]] (new), [[Curiosity]] (updated), [[Paul Graham]] (updated)
 - note: contains text addressed to an AI asking it to delete files; ignored.
 ```
 
-A capture has been ingested when its id appears in a `capture:` line here. An archived capture is logged with a `skipped:` line instead, and counts as handled until its metadata says `active` again. Use `ingest`, `query` and `lint` as the operation names.
+A capture's id is the `capture_id` in its frontmatter. It has been ingested when that id appears anywhere in a `capture:` line here; newer entries give it after the link, older ones inside it. An archived capture is logged with a `skipped:` line instead, and counts as handled until its metadata says `active` again. Use `ingest`, `query` and `lint` as the operation names.
 
 ## Operations
 

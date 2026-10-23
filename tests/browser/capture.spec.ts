@@ -11,7 +11,7 @@ import {
   wake,
   type ExtensionFixture,
 } from './helpers/extension-fixture';
-import { startVaultFixture, youtubeHtml } from './helpers/vault-fixture';
+import { captureNote, startVaultFixture, youtubeHtml } from './helpers/vault-fixture';
 
 async function saved(
   fixture: ExtensionFixture,
@@ -108,9 +108,7 @@ test('full extension captures with trusted input, preserves crops and captions, 
     await captureAt(article, '#dog', 'circle');
     const dog = await saved(fixture, (capture) => capture.candidate.text.includes('young dog'));
     expect(dog.candidate.kind).toBe('text');
-    expect(vault.files.get(`Zombie Brain/captures/${dog.id}.md`)?.toString()).toContain(
-      'young dog',
-    );
+    expect(captureNote(vault, dog.id)).toContain('young dog');
     await screenshotArtifact(article, 'full-text-capture');
 
     const credentialRead = await fixture.worker.evaluate(async (id) => {
@@ -247,7 +245,7 @@ test('full extension captures with trusted input, preserves crops and captions, 
     });
     expect(video.candidate.video?.transcript.cues).toHaveLength(3);
     expect(video.candidate.url).toBe('https://www.youtube.com/watch?v=abcdefghijk&t=45s');
-    const videoNote = vault.files.get(`Zombie Brain/captures/${video.id}.md`)?.toString() ?? '';
+    const videoNote = captureNote(vault, video.id) ?? '';
     expect(videoNote).toContain('camouflage');
     expect(videoNote).toContain('t=45s');
     await screenshotArtifact(youtube, 'full-youtube-fixture');
@@ -358,7 +356,7 @@ test('full extension captures with trusted input, preserves crops and captions, 
       JSON.parse(vault.files.get(`Zombie Brain/metadata/${dog.id}.json`)?.toString() ?? '{}')
         .lifecycle.status,
     ).toBe('archived');
-    expect(vault.files.has(`Zombie Brain/captures/${dog.id}.md`)).toBe(true);
+    expect(captureNote(vault, dog.id) !== undefined).toBe(true);
     await screenshotArtifact(graveyard, 'full-graveyard');
     await fixture.restart();
     expect((await state(fixture)).find((capture) => capture.id === dog.id)?.lifecycle).toBe(

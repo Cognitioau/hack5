@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { createVaultClient } from '../../src/adapters/persistence/vault';
+import { createVaultClient, noteName } from '../../src/adapters/persistence/vault';
 import type { CaptureRecord, VaultConfig } from '../../src/core/contracts/index';
 
 // This is a contract emulator, not evidence of compatibility with a live Obsidian plugin.
@@ -206,7 +206,7 @@ const VERSION_1_NOTE = [
 ].join('\n');
 
 function notePath(record: CaptureRecord): string {
-  return `${folder}/captures/${record.id}.md`;
+  return `${folder}/captures/${noteName(record)}.md`;
 }
 function metadataPath(record: CaptureRecord): string {
   return `${folder}/metadata/${record.id}.json`;
@@ -308,6 +308,124 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     expect(
       vault.requests.filter((request) => request.path === '/' && request.method === 'GET'),
     ).toHaveLength(1);
+  });
+
+  it('names a note after what was grabbed, then the start of its id, in characters any vault keeps', () => {
+    const id = '0b6f3c1e-5a2d-4c3e-9f1a-2b7d8e9c0a11';
+    const named = (candidate: Partial<CaptureRecord['candidate']>) =>
+      noteName({
+        id,
+        candidate: {
+          kind: 'text',
+          title: 'Spaced repetition | Wikipedia',
+          url: 'https://example.com/a',
+          text: '',
+          ...candidate,
+        } as CaptureRecord['candidate'],
+      });
+    // A passage by its opening words; a whole page, link or file by its title.
+    expect(named({ text: 'The testing effect shows that\n\trecall strengthens memory.' })).toBe(
+      'The testing effect shows that recall strengthens memory (0b6f3c1e)',
+    );
+    expect(named({ text: 'The article.', wholePage: true })).toBe(
+      'Spaced repetition - Wikipedia (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', text: 'a link' })).toBe(
+      'Spaced repetition - Wikipedia (0b6f3c1e)',
+    );
+    // A picture by its alt text, or its page; a video moment by its title and time.
+    const image = (alt: string) => ({ url: 'https://example.com/a.png', alt });
+    expect(named({ kind: 'image', image: image('An octopus on coral') } as never)).toBe(
+      'An octopus on coral (0b6f3c1e)',
+    );
+    expect(named({ kind: 'image', image: image('') } as never)).toBe(
+      'Spaced repetition - Wikipedia (0b6f3c1e)',
+    );
+    expect(named({ kind: 'youtube', title: 'A talk', video: { seconds: 3725.9 } } as never)).toBe(
+      'A talk at 1h02m05s (0b6f3c1e)',
+    );
+    expect(named({ kind: 'youtube', title: 'A talk', video: { seconds: 65 } } as never)).toBe(
+      'A talk at 1m05s (0b6f3c1e)',
+    );
+    // Nothing that ends a path, hides the file, reorders the name or breaks a [[link]].
+    expect(named({ kind: 'link', title: 'a/b\\c:d*e?f"g<h>i|j#k^l[m]n' })).toBe(
+      'a b c - d e f g h i - j k l m n (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', title: '../../.obsidian/app' })).toBe('obsidian app (0b6f3c1e)');
+    expect(named({ kind: 'link', title: '..cod\u202Egnp.exe\u200B\u0007' })).toBe(
+      'codgnp.exe (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', title: 'Party \uD83D time' })).toBe('Party time (0b6f3c1e)');
+    expect(named({ kind: 'link', title: 'Tag\u{E0049}\u{E0047}\u{E004E} text' })).toBe(
+      'Tag text (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', title: 'x\u0601\u{1D173}y' })).toBe('xy (0b6f3c1e)');
+    // Nothing the wiki kit's hook refuses where a page cites the name.
+    expect(named({ kind: 'link', title: 'Use `==` for 100%% a%\u200B%b' })).toBe(
+      'Use == for 100% a%b (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', title: 'Fence ~~~ then words' })).toBe(
+      'Fence then words (0b6f3c1e)',
+    );
+    expect(named({ kind: 'link', title: '#^[]', text: ' ' })).toBe('Grab (0b6f3c1e)');
+    expect(named({ text: '\u200B', title: '|' })).toBe('- (0b6f3c1e)');
+    // Long names stop at a word near 60 characters, and never inside a character.
+    expect(named({ text: 'word '.repeat(30) })).toBe(
+      `${Array(12).fill('word').join(' ')}… (0b6f3c1e)`,
+    );
+    const emoji = named({ text: `${'a'.repeat(59)}😀😀😀` });
+    expect(emoji).toBe(`${'a'.repeat(59)}😀… (0b6f3c1e)`);
+    expect(() => encodeURIComponent(emoji)).not.toThrow();
+    // Four-byte characters stop sooner, so the file name stays inside a file system's 255 bytes.
+    const wide = named({ text: '😀'.repeat(50) });
+    expect(wide).toBe(`${'😀'.repeat(37)}… (0b6f3c1e)`);
+    expect(new TextEncoder().encode(`${wide}.md`).byteLength).toBeLessThan(255);
+  });
+
+  it('keeps and recovers a note saved under its id before notes had readable names', async () => {
+    const client = createVaultClient(vault.config());
+    const record = capture();
+    expect((await client.ensureCapture(record)).status).toBe('saved-vault');
+    // As main at a14f85a saved it: the same bytes, named by the id alone.
+    const legacy = `${folder}/captures/${record.id}.md`;
+    vault.files.set(legacy, vault.files.get(notePath(record)) ?? new Uint8Array());
+    vault.files.delete(notePath(record));
+    const imported = await createVaultClient(vault.config()).importCaptures();
+    expect(imported.unavailable).toBeUndefined();
+    expect(imported.records.map((entry) => entry.vault?.notePath)).toEqual([legacy]);
+    // Saving it again, as archiving and retrying do, keeps the one note it has.
+    const again = await client.ensureCapture({ ...record, vault: imported.records[0]?.vault });
+    expect(again).toMatchObject({ status: 'saved-vault', vault: { notePath: legacy } });
+    const notes = () => [...vault.files.keys()].filter((path) => path.includes('/captures/'));
+    expect(notes()).toEqual([legacy]);
+    // With neither name there, both are reported, so whichever was saved is quarantined.
+    vault.files.delete(legacy);
+    const gone = await createVaultClient(vault.config()).importCaptures();
+    expect(gone.skipped).toBe(1);
+    expect(gone.unavailable?.map((entry) => [entry.notePath, entry.reason])).toEqual([
+      [notePath(record), 'missing'],
+      [legacy, 'missing'],
+    ]);
+    // A title holding an unpaired surrogate, which no URL can carry, still saves.
+    const unpaired = capture({
+      candidate: {
+        kind: 'link',
+        title: 'Party \uD83D time',
+        url: 'https://example.com/a',
+        text: '',
+      },
+    });
+    expect(await client.ensureCapture(unpaired)).toMatchObject({
+      status: 'saved-vault',
+      vault: { notePath: `${folder}/captures/Party time (${unpaired.id.slice(0, 8)}).md` },
+    });
+    // A new capture, or one saved under its readable name, is written under that name.
+    const fresh = capture();
+    expect(await client.ensureCapture(fresh)).toMatchObject({
+      vault: {
+        notePath: `${folder}/captures/A useful observation about local-first software (${fresh.id.slice(0, 8)}).md`,
+      },
+    });
   });
 
   it('serializes hostile title fields and places raw source markup inside an unbreakable text fence', async () => {
@@ -799,7 +917,8 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
         }),
       ]),
     );
-    expect(imported.unavailable).toHaveLength(2);
+    // The missing note is reported under each name it could have been saved under.
+    expect(imported.unavailable).toHaveLength(3);
     expect(vault.requests.slice(before).every((request) => request.method === 'GET')).toBe(true);
   });
 
@@ -878,7 +997,9 @@ describe('scoped Obsidian vault adapter (HTTP contract emulator)', () => {
     const imported = await importing.importCaptures();
     expect(imported.records).toEqual([]);
     expect(imported.skipped).toBe(2);
+    // Once under each name the note could have been saved under.
     expect(imported.unavailable?.map(({ id, reason }) => ({ id, reason }))).toEqual([
+      { id: missing.id, reason: 'missing' },
       { id: missing.id, reason: 'missing' },
     ]);
   });

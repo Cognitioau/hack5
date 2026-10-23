@@ -10,7 +10,7 @@ import {
   wake,
   type ExtensionFixture,
 } from './helpers/extension-fixture';
-import { startVaultFixture, type VaultFixture } from './helpers/vault-fixture';
+import { captureNote, startVaultFixture, type VaultFixture } from './helpers/vault-fixture';
 
 const notConnected =
   'Not connected. Paste the API key from Obsidian → Settings → Local REST API, then save.';
@@ -224,9 +224,7 @@ test('pasting a key and pressing Save alone connects the vault and syncs the gra
       })
       .toEqual(['saved-vault']);
     const [capture] = await state(fixture);
-    expect(vault.files.get(`Zombie Brain/captures/${capture?.id}.md`)?.toString()).toContain(
-      'young dog',
-    );
+    expect(captureNote(vault, capture?.id)).toContain('young dog');
     await expect(options.locator('#vault-state')).toHaveText(connected(vault), {
       timeout: 15_000,
     });
@@ -592,7 +590,7 @@ test('with Chrome’s access to the vault turned off the status says so, and Sav
       .poll(async () => (await state(fixture)).map((c) => c.persistence), { timeout: 20_000 })
       .toEqual(['saved-vault', 'saved-vault']);
     for (const capture of await state(fixture))
-      expect(vault.files.has(`Zombie Brain/captures/${capture.id}.md`)).toBe(true);
+      expect(captureNote(vault, capture.id) !== undefined).toBe(true);
     await expect(options.locator('#vault-state')).toHaveText(connected(via), {
       timeout: 15_000,
     });
