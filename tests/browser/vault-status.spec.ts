@@ -823,6 +823,8 @@ test('at phone width a standing error never covers the control focus reaches, an
     expect(await options.evaluate(() => scrollY)).toBe(press.scrolled);
     await options.mouse.up();
     await expect(field).toBeFocused();
+    // The keyboard takes over again after the press: focus it reaches is cleared once more.
+    expect((await focusUnderToast(options)).covered).toEqual([]);
 
     // A text box taller than the space above the toast keeps its top in view.
     await field.evaluate((box) => {
