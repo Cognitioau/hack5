@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Zombie Brain · circle a thought, bury it in Obsidian</title>
+    <meta
+      name="description"
+      content="Zombie Brain is a Chrome extension that grabs passages, images and video moments into your Obsidian vault, and lets related notes rise again when you need them. Built for Hackyard Yard #5: Haunted."
+    />
+    <meta name="theme-color" content="#050607" />
+    <meta property="og:title" content="Zombie Brain" />
+    <meta
+      property="og:description"
+      content="Circle a thought. Bury it in Obsidian. It comes back. A Chrome extension for Hackyard Yard #5: Haunted."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://zombiebrain.si/" />
+    <meta property="og:image" content="https://zombiebrain.si/og.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- IM Fell English is for the scene: it is carved into the headstone and inked on the letter. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Geist:wght@300;400;500&family=Geist+Mono:wght@400;500;600&family=IM+Fell+English:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="zb-mark" viewBox="-1 -2 66 66">
+        <g fill="currentColor">
+          <path
+            d="M14 31C6 32 1 26 4 20C0 15 3 8 9 8C9 2 17-1 22 3C25-1 31-1 32 2C34-1 40-1 42 3C47-1 55 2 55 8C61 8 64 15 60 20C63 26 58 32 50 31C47 34 40 33 38 31C35 33 29 33 26 31C23 33 17 34 14 31Z"
+          />
+          <path
+            d="M16 30L20 26L22 30L26 25.5L28.5 29.5L32 25L35.5 29.5L38 25.5L42 30L44 26L48 30C50 35 50 37 49.6 39C52.5 37.5 54.5 40 53 43.5C52 46 50 46.5 48.6 46L46 53C43 58.5 38 61 32 61C26 61 21 58.5 18 53L15.4 46C14 46.5 12 46 11 43.5C9.5 40 11.5 37.5 14.4 39C14 37 14 35 16 30Z"
+          />
+          <path d="M23 29C23 33 24.5 35 24.5 37C24.5 39 22 39 22 37C22 35 22.5 33 22 29Z" />
+        </g>
+        <g fill="none" stroke="var(--mark-ink, #050607)" stroke-linecap="round" stroke-linejoin="round">
+          <path stroke-width="2.2" d="M15 30.5L20 26L22 30L26 25.5L28.5 29.5L32 25L35.5 29.5L38 25.5L42 30L44 26L49 30.5" />
+          <path stroke-width="1.9" d="M32 3C30 6 33.5 9 31.5 12C29.5 15 33.5 18 31.5 21C30.5 23 32 25 32 25" />
+          <path
+            stroke-width="1.5"
+            d="M8 13C10 10.5 13 14 15 11.5C17 9 20 12 22 9.5M5 20C8 18 10 21.5 13 19C15.5 17 18 20.5 21 18C23 16.5 25 18 26 16M10 26C12 23.5 15 27 17.5 24.5C19.5 22.5 22 25 24 23M17 5.5C19 8 22 5.5 24.5 8C26 9.5 25 12 27.5 13M56 13C54 10.5 51 14 49 11.5C47 9 44 12 42 9.5M59 20C56 18 54 21.5 51 19C48.5 17 46 20.5 43 18C41 16.5 39 18 38 16M54 26C52 23.5 49 27 46.5 24.5C44.5 22.5 42 25 40 23M47 5.5C45 8 42 5.5 39.5 8C38 9.5 39 12 36.5 13"
+          />
+          <path stroke-width="1.4" d="M41 45L47.5 41M42.5 41.5L44.5 45M45 40L47 43.5" />
+        </g>
+        <g fill="var(--mark-ink, #050607)">
+          <path d="M18.5 35.5L28.5 38.5C28.5 42 26 44 23 43.5C20 43 18.5 40 18.5 35.5Z" />
+          <path d="M45.5 34.5L35 38C34.5 42.5 37.5 45 40.5 44.6C44 44 46 40 45.5 34.5Z" />
+          <path d="M32 43L30 47.5L34.2 47Z" />
+          <path d="M22.5 50.5C26 49 38 49 41.5 50.5C41 54 37 56.5 32 56.5C27 56.5 23 54 22.5 50.5Z" />
+        </g>
+        <g fill="currentColor">
+          <circle cx="40.2" cy="40" r="1.9" />
+          <path d="M24.5 50.4L26 53.6L27.5 50.1ZM29 50L30.5 54.4L32 49.9ZM33.5 49.9L35 54.2L36.5 50ZM38 50.1L39.5 53.4L40.4 50.4Z" />
+        </g>
+      </symbol>
+      <symbol id="zb-down" viewBox="0 0 16 16">
+        <path d="M8 2v9.5M3.75 7.5 8 11.75l4.25-4.25M2.5 14h11" />
+      </symbol>
+    </svg>
+
+    <div class="stage" aria-hidden="true">
+      <div class="poster"></div>
+      <canvas id="scene"></canvas>
+    </div>
+
+    <header class="nav">
+      <a class="wordmark" href="/" aria-label="Zombie Brain, home">
+        <svg class="mark" aria-hidden="true"><use href="#zb-mark" /></svg>
+        <span class="wordmark-text">Zombie <b>Brain</b></span>
+      </a>
+      <nav aria-label="Primary">
+        <a class="nav-link" href="https://hackyard.tech/yards/yard-5" target="_blank" rel="noopener">
+          Hackyard #5<span class="arrow" aria-hidden="true">↗</span>
+        </a>
+        <button class="nav-link" type="button" data-open-install>Install</button>
+        <a class="btn btn-acid" data-download href="#" download>
+          <span>Download</span>
+          <svg class="btn-icon" aria-hidden="true"><use href="#zb-down" /></svg>
+        </a>
+      </nav>
+    </header>
+
+    <main class="hero">
+      <p class="kicker">
+        <span class="pulse" aria-hidden="true"></span><span class="kicker-ext">Chrome extension<span class="sep" aria-hidden="true">/</span></span>Hackyard
+        Yard #5<span class="sep" aria-hidden="true">/</span><em>Haunted</em>
+      </p>
+      <h1>
+        <span>Circle a thought.</span>
+        <span>Bury it in Obsidian.</span>
+        <span class="rises">It comes back.</span>
+      </h1>
+      <p class="lede">
+        Hold Shift and draw a loop round any passage. Zombie Brain drags it, with its source, into your Obsidian
+        vault. Later, when a page comes close in meaning to something you buried, the related note rises as a ghost. It
+        runs locally, with no AI key.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-acid btn-lg" data-download href="#" download>
+          <span>Download for Chrome</span>
+          <svg class="btn-icon" aria-hidden="true"><use href="#zb-down" /></svg>
+        </a>
+        <button class="btn btn-ghost btn-lg" type="button" data-open-install>How to install</button>
+      </div>
+    </main>
+
+    <button class="motion-toggle" type="button" data-motion-toggle>
+      <span class="motion-icon" aria-hidden="true"></span>
+      <span class="motion-label">Pause</span>
+    </button>
+
+    <dialog class="install" aria-labelledby="install-title">
+      <div class="install-inner">
+        <header class="install-head">
+          <p class="kicker"><span class="pulse" aria-hidden="true"></span>Developer build · Chrome 120+</p>
+          <h2 id="install-title">Raise it in Chrome</h2>
+          <button class="close" type="button" data-close-install aria-label="Close install steps">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9m0-9l-9 9" /></svg>
+          </button>
+        </header>
+        <ol class="steps">
+          <li>
+            <h3>Dig it up</h3>
+            <p>
+              <a data-download href="#" download>Download the zip</a> and unzip it. Chrome loads the folder, not the
+              zip.
+            </p>
+          </li>
+          <li>
+            <h3>Load it unpacked</h3>
+            <p>
+              Open <code>chrome://extensions</code>, switch on <strong>Developer mode</strong>, choose
+              <strong>Load unpacked</strong> and pick the unzipped folder, the one holding <code>manifest.json</code>.
+            </p>
+          </li>
+          <li>
+            <h3>Open the vault</h3>
+            <p>
+              In Obsidian, enable the community plugin
+              <a href="https://github.com/coddingtonbear/obsidian-local-rest-api" target="_blank" rel="noopener"
+                >Local REST API</a
+              >
+              and copy its API key. Trust its HTTPS certificate as its README describes, or, for a local demo, turn on
+              its HTTP listener and the extension's loopback HTTP option.
+            </p>
+          </li>
+          <li>
+            <h3>Connect the grave</h3>
+            <p>
+              Open the extension's <strong>Settings</strong>. Enter the plugin's loopback endpoint (for example
+              <code>https://127.0.0.1:27124</code>), a folder for captures and the key, then <strong>Save</strong>.
+              Saving tests the vault and says whether sync is on.
+            </p>
+          </li>
+          <li>
+            <h3>Feed it</h3>
+            <p>
+              Pin the extension, click it and choose <strong>Turn on everywhere</strong>. Then hold
+              <kbd>Shift</kbd> or <kbd>Ctrl</kbd> and circle a passage, or select text and click the hand.
+              <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> grabs what's under the pointer; <kbd>Esc</kbd> cancels.
+            </p>
+          </li>
+        </ol>
+        <footer class="install-foot">
+          <p>
+            Captures go straight to your vault. Search and related-note recall run on a model bundled in the
+            extension, so nothing leaves your machine for an AI service.
+          </p>
+          <p class="links">
+            <a href="https://github.com/Cognitioau/hack5" target="_blank" rel="noopener">Source on GitHub ↗</a>
+            <a href="https://github.com/Cognitioau/hack5#readme" target="_blank" rel="noopener">Full README ↗</a>
+          </p>
+        </footer>
+      </div>
+    </dialog>
+
+    <noscript><p class="noscript">The graveyard needs JavaScript. The download is on GitHub: github.com/Cognitioau/hack5/releases.</p></noscript>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
