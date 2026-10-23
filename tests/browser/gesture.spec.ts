@@ -77,7 +77,7 @@ test('modifier lasso ignores ordinary browsing and captures the highlighted pass
       passageUrl: `${article.url()}#:~:text=A%20young%20dog%20runs,a%20bright%20tennis%20ball.`,
     });
     expect(await article.locator('#dog').textContent()).toBe(capture?.candidate.text);
-    expect(vault.files.get(`Zombie Hand/captures/${capture?.id}.md`)?.toString()).toContain(
+    expect(vault.files.get(`Zombie Brain/captures/${capture?.id}.md`)?.toString()).toContain(
       article.url(),
     );
     await article.waitForTimeout(1_800);

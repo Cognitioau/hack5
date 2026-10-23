@@ -20,6 +20,7 @@ test-results/
 
 # Browser and private runtime artifacts
 zombie-hand-gaze-diagnostics-*.json
+zombie-brain-gaze-diagnostics-*.json
 browser-profile/
 browser-profiles/
 test-vault/

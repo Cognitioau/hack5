@@ -183,7 +183,7 @@ function invalidateCaptureView() {
   }
 }
 async function currentDocument(sender: chrome.runtime.MessageSender, pageUrl?: string) {
-  if (handActivation.getMode() === 'paused') throw new Error('Zombie Hand is paused everywhere');
+  if (handActivation.getMode() === 'paused') throw new Error('Zombie Brain is paused everywhere');
   if (
     sender.id !== chrome.runtime.id ||
     !sender.tab?.id ||
@@ -691,7 +691,7 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       if (tab?.id === undefined) return { ok: false, error: 'There is no page to grab from.' };
       if (handActivation.getMode() === 'paused')
-        return { ok: false, error: 'Zombie Hand is paused everywhere. Turn it on to grab.' };
+        return { ok: false, error: 'Zombie Brain is paused everywhere. Turn it on to grab.' };
       await handActivation.wake(tab.id, true);
       const reply = (await chrome.tabs
         .sendMessage(tab.id, { v: 1, type: 'GRAB', kind: message.kind }, { frameId: 0 })
@@ -700,7 +700,7 @@ async function trustedRequest(raw: unknown): Promise<AppResponse> {
         return {
           ok: false,
           error:
-            'Zombie Hand cannot reach this page. Browser pages, the Web Store and excluded sites are off limits.',
+            'Zombie Brain cannot reach this page. Browser pages, the Web Store and excluded sites are off limits.',
         };
       // The page's copy of the script reports in its own words; they stay plain text.
       return reply.ok === false && typeof reply.error === 'string'

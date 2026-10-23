@@ -248,6 +248,10 @@ describe('explicit session diagnostics export and offline evaluation', () => {
     ).toThrow('captured.features');
     expect(() => parseDiagnostics(null)).toThrow();
     expect(GAZE_DIAGNOSTICS_SCHEMA).toBe(parsed.schema);
+    // Files saved before the product was named Zombie Brain carry this schema, and still read.
+    expect(parseDiagnostics({ ...file, schema: 'zombie-hand.gaze-diagnostics' }).schema).toBe(
+      'zombie-hand.gaze-diagnostics',
+    );
   });
 
   it('re-evaluates every variant, reproduces the live capture, and sweeps settling offline', () => {

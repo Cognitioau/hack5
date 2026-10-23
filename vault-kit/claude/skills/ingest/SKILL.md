@@ -1,6 +1,6 @@
 ---
 name: ingest
-description: Compile Zombie Hand captures that are not in wiki/log.md yet into the graveyard wiki. Use when the person asks to ingest, compile, file or process their captures or graves.
+description: Compile Zombie Brain captures that are not in wiki/log.md yet into the graveyard wiki. Use when the person asks to ingest, compile, file or process their captures or graves.
 argument-hint: "[how many, default 15]"
 allowed-tools: Read(./**) Edit(./wiki/**)
 ---

@@ -51,7 +51,7 @@ for (const profile of ['full', 'core']) {
   );
   const built = resolve(root, profile === 'core' ? 'dist-core' : 'dist');
   const staging = await mkdtemp(resolve(tmpdir(), 'hack5-package-'));
-  const name = `zombie-hand-${pkg.version}-${profile}.zip`;
+  const name = `zombie-brain-${pkg.version}-${profile}.zip`;
   const archive = resolve(output, name);
   try {
     // The only archive inputs are validated regular build files and public provenance.

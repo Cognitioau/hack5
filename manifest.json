@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Zombie Hand",
+  "name": "Zombie Brain",
   "description": "Deliberately capture a thought, bury it in Obsidian, and recall it locally.",
   "version": "0.2.0",
   "minimum_chrome_version": "120",
@@ -11,7 +11,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Zombie Hand: grab this page or your selection",
+    "default_title": "Zombie Brain: grab this page or your selection",
     "default_popup": "popup.html"
   },
   "options_page": "options.html",

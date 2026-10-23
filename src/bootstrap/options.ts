@@ -295,7 +295,7 @@ element('global-enable').addEventListener('click', () => {
     });
     await load();
     notice(
-      'Zombie Hand is on across your browser. Hold Shift or Ctrl and circle a passage.',
+      'Zombie Brain is on across your browser. Hold Shift or Ctrl and circle a passage.',
       'success',
     );
   }).then(renderActivation);
@@ -305,7 +305,7 @@ element('global-pause').addEventListener('click', () => {
     await command({ v: 1, type: 'SET_ACTIVATION', enabled: false });
     await load();
     notice(
-      'Zombie Hand is paused everywhere. Your saved captures remain in the graveyard.',
+      'Zombie Brain is paused everywhere. Your saved captures remain in the graveyard.',
       'success',
     );
   }).then(renderActivation);

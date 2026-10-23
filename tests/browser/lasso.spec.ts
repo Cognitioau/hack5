@@ -319,7 +319,7 @@ test('a lasso takes what its loop goes round: steps by their starts, a heading w
       context: { heading: "What to do if it won't stop" },
       passageUrl: `${url}#:~:text=Open%20the%20Activity%20Monitor,effect%20for%20every%20account.`,
     });
-    const note = vault.files.get(`Zombie Hand/captures/${byStarts?.id}.md`)?.toString() ?? '';
+    const note = vault.files.get(`Zombie Brain/captures/${byStarts?.id}.md`)?.toString() ?? '';
     for (const step of steps) expect(note).toContain(step);
 
     // Wider than any loop the lasso closed before: the heading and every step.

@@ -37,7 +37,7 @@ export function createCaptureStore(
       request.onerror = () =>
         reject(request.error ?? new Error('Cannot open local capture storage'));
       request.onblocked = () =>
-        reject(new Error('Close other Zombie Hand pages to upgrade storage'));
+        reject(new Error('Close other Zombie Brain pages to upgrade storage'));
     }));
   async function mutate<T>(
     fn: (
