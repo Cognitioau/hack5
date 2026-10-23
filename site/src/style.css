@@ -588,6 +588,9 @@ button {
 
 .steps li::before {
   content: counter(step, decimal-leading-zero);
+  /* The number is for the eye: a screen reader already announces the item's place in the list, and the two
+     disagree once an optional step is skipped. Browsers without alt text for content keep the line above. */
+  content: counter(step, decimal-leading-zero) / '';
   position: absolute;
   left: 0;
   top: -3px;
@@ -612,6 +615,47 @@ button {
 
 .steps li:last-child::after {
   display: none;
+}
+
+/* An optional step takes no number: a dashed ring marks it instead. */
+.steps li.step-optional {
+  counter-increment: none;
+}
+
+.steps li.step-optional::before {
+  content: '';
+  left: 6px;
+  top: 2px;
+  width: 13px;
+  height: 13px;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(108, 255, 47, 0.75);
+  border-radius: 50%;
+  text-shadow: none;
+}
+
+.steps li.step-optional::after {
+  top: 24px;
+}
+
+/* On a narrow phone the pill wraps under the title, flush with it. */
+.steps li.step-optional h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  color: var(--fog-dim);
+}
+
+.steps .tag {
+  padding: 2px 7px;
+  border: 1px solid var(--fog-faint);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.14em;
+  color: var(--fog-dim);
 }
 
 .steps h3 {
