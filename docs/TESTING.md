@@ -36,7 +36,7 @@ Background regressions hold image/arming operations open while switching tabs or
 The gaze lab's **Download session diagnostics** file (contents in [PRIVACY](PRIVACY.md)) can be re-evaluated offline with the lab's own TypeScript, bundled in memory:
 
 ```sh
-node scripts/gaze-eval.mjs ~/Downloads/zombie-hand-gaze-diagnostics-*.json
+node scripts/gaze-eval.mjs ~/Downloads/zombie-*-gaze-diagnostics-*.json
 ```
 
 For each file it prints, per model variant, leave-one-target-out error on the nine calibration targets and error on the five checks, an approximate pre-tuning reference, how steady and how far moved the live captures were, and settling-time, window-length and steadiness-range sweeps replayed from the recorded frames. `--json` prints the raw report. Keep these files out of Git; `.gitignore` excludes the default file name.

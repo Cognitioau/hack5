@@ -1,6 +1,6 @@
 # Third-party software and model notices
 
-Zombie Hand project code is licensed GPL-3.0-only; see LICENSE. Preserve upstream license/copyright notices when distributing a build. The public source and reproducible build instructions accompany the extension; its archive is not a substitute for corresponding source.
+Zombie Brain project code is licensed GPL-3.0-only; see LICENSE. Preserve upstream license/copyright notices when distributing a build. The public source and reproducible build instructions accompany the extension; its archive is not a substitute for corresponding source.
 
 ## Distributed runtime
 

@@ -123,7 +123,7 @@ function render(results?: SearchResult[]) {
         'p',
         results
           ? 'Try a different phrase. Search includes active, vault-confirmed captures.'
-          : 'Open a page, click the Zombie Hand toolbar button, and capture your first thought.',
+          : 'Open a page, click the Zombie Brain toolbar button, and capture your first thought.',
       ),
     );
     target.append(empty);
@@ -198,7 +198,7 @@ element<HTMLButtonElement>('export').addEventListener('click', () => {
     );
     const link = make('a');
     link.href = url;
-    link.download = 'zombie-hand-captures.json';
+    link.download = 'zombie-brain-captures.json';
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notice(

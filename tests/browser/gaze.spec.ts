@@ -262,7 +262,7 @@ test('synthetic eyes: settled capture, smoothing, movement guard, export and off
     await expect(page.locator('#gaze-dot')).toBeVisible();
 
     const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
-    expect(download.suggestedFilename()).toMatch(/^zombie-hand-gaze-diagnostics-.*\.json$/);
+    expect(download.suggestedFilename()).toMatch(/^zombie-brain-gaze-diagnostics-.*\.json$/);
     const file = resolve(directory, 'diagnostics.json');
     await download.saveAs(file);
     const text = await readFile(file, 'utf8');

@@ -99,7 +99,7 @@ function activate(): () => void {
       if (!connected()) dispose();
       return {
         ok: false,
-        error: 'The extension connection was interrupted. Reopen Zombie Hand to reconnect.',
+        error: 'The extension connection was interrupted. Reopen Zombie Brain to reconnect.',
       };
     }
   };

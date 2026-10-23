@@ -14,7 +14,7 @@ import { startVaultFixture, type VaultFixture } from './helpers/vault-fixture';
 const notConnected =
   'Not connected. Paste the API key from Obsidian → Settings → Local REST API, then save.';
 const connected = (vault: { origin: string }) =>
-  `Connected to ${vault.origin}. Grabs save to the “Zombie Hand” folder.`;
+  `Connected to ${vault.origin}. Grabs save to the “Zombie Brain” folder.`;
 const notRemembered =
   'This key is kept only until Chrome closes or the extension reloads. Tick “Remember the key on this browser profile” and save to keep it.';
 const startsWith = (text: string) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
@@ -44,7 +44,7 @@ async function scrollTo(page: Page, top: number): Promise<void> {
 }
 
 /**
- * Sets Zombie Hand's site access as a person does in chrome://extensions, through the call
+ * Sets Zombie Brain's site access as a person does in chrome://extensions, through the call
  * that page makes. The test copy's loopback grant is a required permission, which
  * chrome.permissions.remove refuses.
  */
@@ -124,7 +124,7 @@ test('pasting a key and pressing Save alone connects the vault and syncs the gra
       })
       .toEqual(['saved-vault']);
     const [capture] = await state(fixture);
-    expect(vault.files.get(`Zombie Hand/captures/${capture?.id}.md`)?.toString()).toContain(
+    expect(vault.files.get(`Zombie Brain/captures/${capture?.id}.md`)?.toString()).toContain(
       'young dog',
     );
     await expect(options.locator('#vault-state')).toHaveText(connected(vault), {
@@ -490,7 +490,7 @@ test('with Chrome’s access to the vault turned off the status says so, and Sav
       .poll(async () => (await state(fixture)).map((c) => c.persistence), { timeout: 20_000 })
       .toEqual(['saved-vault', 'saved-vault']);
     for (const capture of await state(fixture))
-      expect(vault.files.has(`Zombie Hand/captures/${capture.id}.md`)).toBe(true);
+      expect(vault.files.has(`Zombie Brain/captures/${capture.id}.md`)).toBe(true);
     await expect(options.locator('#vault-state')).toHaveText(connected(via), {
       timeout: 15_000,
     });
@@ -589,7 +589,7 @@ test('the graveyard’s export notice is a success, and goes after its time', as
     const toast = graveyard.locator('#message');
     const download = graveyard.waitForEvent('download');
     await graveyard.locator('#export').click();
-    expect((await download).suggestedFilename()).toBe('zombie-hand-captures.json');
+    expect((await download).suggestedFilename()).toBe('zombie-brain-captures.json');
     await expect(toast).toHaveText(/^Exported original records and attachment bytes\./);
     await expect(toast).toHaveClass(/\bsuccess\b/);
     await expect(toast).toBeHidden({ timeout: 8_000 });

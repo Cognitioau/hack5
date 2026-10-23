@@ -1,14 +1,14 @@
 # The graveyard wiki
 
-This folder is the graveyard: Zombie Hand buries what you grab on the web. A coding agent (Claude Code, or any agent that reads `AGENTS.md`) turns those graves into a wiki you can browse in Obsidian and ask questions of. The pattern follows Andrej Karpathy's "LLM Wiki": the raw sources are never changed, the agent keeps a linked wiki on top of them, and this file is the schema both sides follow.
+This folder is the graveyard: Zombie Brain buries what you grab on the web. A coding agent (Claude Code, or any agent that reads `AGENTS.md`) turns those graves into a wiki you can browse in Obsidian and ask questions of. The pattern follows Andrej Karpathy's "LLM Wiki": the raw sources are never changed, the agent keeps a linked wiki on top of them, and this file is the schema both sides follow.
 
 ## Layers
 
 | Folder | Who writes it | What it holds |
 | :- | :- | :- |
-| `captures/` | Zombie Hand only | One note per grab: a passage, a whole page, an image, a PDF or a video moment. |
-| `metadata/` | Zombie Hand only | One JSON file per capture: its lifecycle (`active` or `archived`) and evidence hashes. |
-| `attachments/` | Zombie Hand only | Saved images, screenshots and PDFs. |
+| `captures/` | Zombie Brain only | One note per grab: a passage, a whole page, an image, a PDF or a video moment. |
+| `metadata/` | Zombie Brain only | One JSON file per capture: its lifecycle (`active` or `archived`) and evidence hashes. |
+| `attachments/` | Zombie Brain only | Saved images, screenshots and PDFs. |
 | `wiki/` | The agent only | Pages compiled from the captures, plus `index.md` and `log.md`. |
 
 ## Rules that always hold

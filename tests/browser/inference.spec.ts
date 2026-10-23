@@ -43,7 +43,7 @@ test('packaged WASM embeds offline and recovers after a cold browser restart', a
       resolve(extension, 'manifest.json'),
       JSON.stringify({
         manifest_version: 3,
-        name: 'Zombie Hand inference verification',
+        name: 'Zombie Brain inference verification',
         version: '0.0.1',
         minimum_chrome_version: '120',
         background: { service_worker: 'background.js', type: 'module' },

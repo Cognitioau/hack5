@@ -181,7 +181,7 @@ export class HandView {
     this.dock.dataset.state = 'idle';
     this.dock.dataset.quiet = 'false';
     this.dock.setAttribute('role', 'region');
-    this.dock.setAttribute('aria-label', 'Zombie Hand');
+    this.dock.setAttribute('aria-label', 'Zombie Brain');
     // The hand sits at the right end of the bar, so it never moves when the
     // status beside it grows or goes quiet.
     const bar = node('div', 'bar');
@@ -208,7 +208,7 @@ export class HandView {
       ? button(
           'button primary connect',
           'Connect vault',
-          'Open Zombie Hand settings to connect your Obsidian vault',
+          'Open Zombie Brain settings to connect your Obsidian vault',
           actions.settings,
         )
       : null;
