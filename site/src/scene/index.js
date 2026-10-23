@@ -18,7 +18,7 @@ import { createLightning } from './lightning.js';
 import { createRain } from './rain.js';
 import { createSky, MOON_DIR } from './sky.js';
 import { CYCLE, createTimeline, HOLE } from './timeline.js';
-import { createWorld } from './world.js';
+import { createWorld, heightAt } from './world.js';
 
 const FOG = new THREE.Color(0.034, 0.042, 0.058);
 
@@ -66,7 +66,7 @@ async function loadFont(family) {
   return `${family}, Georgia, 'Times New Roman', serif`;
 }
 
-export async function startScene(canvas, { startAt = 0, paused: initiallyPaused = false, onReady } = {}) {
+export async function startScene(canvas, { startAt = 0, paused: initiallyPaused = false, openBand, onReady } = {}) {
   const quality = pickQuality();
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -152,6 +152,10 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
 
   const cameraBase = new THREE.Vector3();
   const lookBase = new THREE.Vector3();
+  // The hand plays out around this point, halfway between its raised fist and the letter.
+  const action = new THREE.Vector3(HOLE.x + 0.05, heightAt(HOLE.x, HOLE.y) + 0.14, HOLE.y + 0.03);
+  const projected = new THREE.Vector3();
+  let paused = false;
   function resize() {
     const w = canvas.clientWidth || window.innerWidth;
     const h = canvas.clientHeight || window.innerHeight;
@@ -163,12 +167,28 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
     cameraBase.set(0.46 + portrait * 0.05, 0.36 + portrait * 0.25, 1.3 + portrait * 0.75);
     // Landscape keeps the hand right of the hero copy; portrait centres it above the copy.
     lookBase.set(-0.3 + portrait * 0.36, 0.3 - portrait * 0.36, -0.1);
-    camera.updateProjectionMatrix();
+    camera.clearViewOffset();
+    // On a portrait screen the copy fills the bottom of the frame, so slide the picture until the
+    // hand sits in the open band between the nav and the copy.
+    const band = openBand?.();
+    if (aspect < 0.9 && band && band.bottom > band.top) {
+      camera.position.copy(cameraBase);
+      camera.lookAt(lookBase);
+      camera.updateMatrixWorld();
+      projected.copy(action).project(camera);
+      const y = ((1 - projected.y) / 2) * h;
+      const shift = THREE.MathUtils.clamp(y - (band.top + band.bottom) / 2, -0.3 * h, 0.3 * h);
+      camera.setViewOffset(w, h, 0, shift, w, h);
+    }
     renderer.setSize(w, h, false);
     composer.setSize(w, h, false);
+    // A resize clears the canvas, so a paused scene has to draw its frame again.
+    if (paused) composer.render(0);
   }
   resize();
   window.addEventListener('resize', resize);
+  // The copy reflows once its web fonts arrive, which moves the open band.
+  document.fonts?.ready.then(resize);
 
   const pointer = new THREE.Vector2();
   const pointerSmooth = new THREE.Vector2();
@@ -213,13 +233,13 @@ export async function startScene(canvas, { startAt = 0, paused: initiallyPaused 
   while (time < startAt - 1e-6) step(Math.min(1 / 60, startAt - time));
 
   let previous = 0;
-  let paused = false;
-  // If the machine can't hold ~40 fps, render fewer pixels rather than stutter.
+  // If the machine can't hold ~30 fps, render fewer pixels rather than stutter. The bar sits just
+  // under 30 so a screen capped at 30 Hz (battery saver) is not mistaken for a slow GPU.
   let slowFrames = 0;
   let sampled = 0;
   function adapt(rawDt) {
     sampled++;
-    if (rawDt > 1 / 40) slowFrames++;
+    if (rawDt > 1 / 28) slowFrames++;
     if (sampled < 90) return;
     const pixelRatio = renderer.getPixelRatio();
     if (slowFrames > 45 && pixelRatio > 0.8) {

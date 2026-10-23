@@ -329,6 +329,10 @@ button {
   border-color: var(--bone-dim);
 }
 
+.motion-toggle[hidden] {
+  display: none;
+}
+
 .motion-toggle {
   position: fixed;
   right: var(--gutter);
@@ -358,7 +362,7 @@ button {
   border-right: 2px solid currentColor;
 }
 
-.motion-toggle[aria-pressed='true'] .motion-icon {
+.motion-toggle.is-paused .motion-icon {
   border: 0;
   border-left: 9px solid currentColor;
   border-top: 5px solid transparent;
@@ -651,6 +655,76 @@ kbd {
   }
   .nav nav {
     gap: 14px;
+  }
+}
+
+/* Phones in Safari lose a third of the height to toolbars, so the hero tightens to leave the hand room above it. */
+@media (orientation: portrait) and (max-width: 720px) and (max-height: 760px) {
+  .kicker {
+    margin-bottom: 10px;
+  }
+  .hero h1 {
+    font-size: 1.9rem;
+  }
+  .lede {
+    margin-top: 12px;
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+  .hero-actions {
+    gap: 12px 18px;
+    margin-top: 18px;
+  }
+  .download-lg {
+    padding: 11px 16px 11px 20px;
+    font-size: 0.95rem;
+  }
+  .text-button {
+    font-size: 0.95rem;
+  }
+}
+
+@media (orientation: portrait) and (max-height: 600px) {
+  .lede {
+    display: none;
+  }
+}
+
+/* The hero has its own install link, so the narrowest screens drop the nav's. */
+@media (max-width: 380px) {
+  .nav nav > [data-open-install] {
+    display: none;
+  }
+}
+
+/* Landscape phones: too short for the full hero, so tighten it and leave the explanation to the install sheet. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .nav {
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-bottom: 8px;
+  }
+  .hero {
+    bottom: max(14px, env(safe-area-inset-bottom));
+  }
+  .kicker {
+    margin-bottom: 8px;
+  }
+  .hero h1 {
+    font-size: clamp(1.5rem, 7.5vh, 2.3rem);
+  }
+  .lede {
+    display: none;
+  }
+  .hero-actions {
+    margin-top: 14px;
+  }
+  .download-lg {
+    padding: 10px 18px 10px 22px;
+    font-size: 1rem;
+  }
+  .motion-toggle {
+    top: auto;
+    bottom: max(14px, env(safe-area-inset-bottom));
   }
 }
 

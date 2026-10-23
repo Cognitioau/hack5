@@ -17,7 +17,7 @@ const stage = document.querySelector('.stage');
 const canvas = document.querySelector('#scene');
 const toggle = document.querySelector('[data-motion-toggle]');
 const params = new URLSearchParams(location.search);
-const freezeAt = params.has('t') ? Number(params.get('t')) : null;
+const freezeAt = params.has('t') ? Math.min(Math.max(Number(params.get('t')) || 0, 0), 64) : null;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function webglAvailable() {
@@ -29,20 +29,26 @@ function webglAvailable() {
 }
 
 function setPausedUi(paused) {
-  toggle.setAttribute('aria-pressed', String(paused));
+  toggle.classList.toggle('is-paused', paused);
   toggle.querySelector('.motion-label').textContent = paused ? 'Play' : 'Pause';
 }
+
+const nav = document.querySelector('.nav');
+const hero = document.querySelector('.hero');
+// The strip between the nav and the hero copy, where the hand should play on a portrait screen.
+const openBand = () => ({ top: nav.offsetTop + nav.offsetHeight, bottom: hero.offsetTop });
 
 if (!webglAvailable()) {
   stage.classList.add('no-webgl');
   toggle.hidden = true;
 } else {
-  const { startScene } = await import('./scene/index.js');
   try {
+    const { startScene } = await import('./scene/index.js');
     const scene = await startScene(canvas, {
       // Reduced motion opens on the moment the hand has the letter, standing still.
       startAt: freezeAt ?? (reducedMotion ? 7.6 : 0),
       paused: freezeAt !== null || reducedMotion,
+      openBand,
       onReady: () => {
         stage.classList.add('ready');
         window.__sceneReady = true;
