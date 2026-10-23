@@ -1397,6 +1397,48 @@ describe('vault status for trusted pages', () => {
     expect(context.session.values.vaultTestError).toBeUndefined();
   });
 
+  it('names a failed test while sync is on, until a test passes', async () => {
+    vi.mocked(context.vault.probe).mockResolvedValueOnce({
+      ok: false,
+      message: 'Synthetic vault unreachable',
+    });
+    expect((await context.sendTrusted({ v: 1, type: 'PROBE_VAULT' })).ok).toBe(false);
+    expect(await vaultStatus()).toEqual({
+      state: 'syncing',
+      remembered: false,
+      error: 'Synthetic vault unreachable',
+    });
+    expect((await context.sendTrusted({ v: 1, type: 'PROBE_VAULT' })).ok).toBe(true);
+    expect(await vaultStatus()).toEqual({ state: 'syncing', remembered: false });
+  });
+
+  it('reports paused, with access off, when Chrome cannot reach the endpoint', async () => {
+    context.contains.mockImplementation(async () => false);
+    expect(await vaultStatus()).toEqual({ state: 'paused', remembered: false, access: false });
+    expect(context.contains).toHaveBeenCalledWith({ origins: ['https://127.0.0.1/*'] });
+    context.contains.mockImplementation(async () => true);
+    expect(await vaultStatus()).toEqual({ state: 'syncing', remembered: false });
+  });
+
+  it.each(
+    [true, false].flatMap((key) =>
+      [true, false].flatMap((access) => [true, false].map((paused) => ({ key, access, paused }))),
+    ),
+  )(
+    'says syncing exactly when a drain reaches the vault (key $key, access $access, paused $paused)',
+    async ({ key, access, paused }) => {
+      if (!key) delete context.session.values.vaultKey;
+      context.contains.mockImplementation(async () => access);
+      context.local.values.syncPaused = paused;
+      await seed(record({ persistence: 'failed' }));
+      expect((await context.sendTrusted({ v: 1, type: 'RETRY' })).ok).toBe(true);
+      const reached = vi.mocked(context.vault.ensureCapture).mock.calls.length > 0;
+      // Both outcomes occur across the cases, so the comparison below cannot pass vacuously.
+      expect(reached).toBe(key && access && !paused);
+      expect((await vaultStatus())?.state === 'syncing').toBe(reached);
+    },
+  );
+
   it('drops a failed test when a new destination or key pauses sync', async () => {
     context.local.values.syncPaused = true;
     vi.mocked(context.vault.probe).mockResolvedValueOnce({

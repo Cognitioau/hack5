@@ -377,15 +377,19 @@ export const trustedMessageSchema = z.discriminatedUnion('type', [
 export type ContentMessage = z.infer<typeof contentMessageSchema>;
 export type TrustedMessage = z.infer<typeof trustedMessageSchema>;
 /**
- * What a trusted page may show of the vault connection. It never carries the key.
- * none: no key can be read. paused: a key is held but sync waits for a passing
- * vault test. syncing: a key is held and sync is not paused.
+ * What a trusted page may show of the vault connection, read from the same checks
+ * that gate sync. It never carries the key. none: no key can be read. paused: a key
+ * is held but nothing syncs, because sync waits for a passing vault test or Chrome's
+ * access to the endpoint is off. syncing: a key is held, access is on and sync is
+ * not paused.
  */
 export type VaultStatus = {
   state: 'none' | 'paused' | 'syncing';
   /** A held key outlives a browser restart and an extension reload. */
   remembered: boolean;
-  /** Paused only: why the last vault test of these settings failed, in the extension's words. */
+  /** Paused only, and only when it is so: Chrome's access to the endpoint is off. */
+  access?: false;
+  /** Why the last vault test of these settings failed, in the extension's words. */
   error?: string;
 };
 export type AppResponse =

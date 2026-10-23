@@ -331,6 +331,11 @@ input[type="checkbox"] {
   background: #202b1c;
   color: var(--lime);
 }
+/* While a toast shows, the page's end scrolls clear of it: room for its height
+   (measured by notice()) and twice its offset from the window's edge. */
+main:has(> .notice:not([hidden])) {
+  padding-bottom: calc(var(--notice-room, 0px) + 48px);
+}
 .vault-status {
   display: flex;
   gap: 12px;
@@ -357,10 +362,12 @@ input[type="checkbox"] {
 .vault-status[data-state="syncing"]::before {
   background: var(--lime);
 }
-.vault-status[data-state="paused"] {
+.vault-status[data-state="paused"],
+.vault-status[data-state="failing"] {
   border-color: #7e6547;
 }
-.vault-status[data-state="paused"]::before {
+.vault-status[data-state="paused"]::before,
+.vault-status[data-state="failing"]::before {
   background: var(--orange);
 }
 .vault-status p {
@@ -553,6 +560,9 @@ footer {
     right: 16px;
     bottom: 16px;
     width: calc(100vw - 32px);
+  }
+  main:has(> .notice:not([hidden])) {
+    padding-bottom: calc(var(--notice-room, 0px) + 32px);
   }
   .compact .actions,
   .compact .hint {

@@ -62,15 +62,19 @@ function serializeConfiguration<T>(write: () => Promise<T>): Promise<T> {
   return operation;
 }
 
+/** Set while a changed destination or key waits for a passing vault test. Absent means not paused. */
+const syncPaused = async () => (await chrome.storage.local.get('syncPaused')).syncPaused === true;
+/** Whether Chrome lets the extension reach the endpoint. Without it nothing syncs. */
+const endpointAccess = (endpoint: string) =>
+  chrome.permissions.contains({ origins: [originPattern(endpoint)] });
+
 async function vault(ignorePause = false): Promise<VaultRepository | undefined> {
   if (changingSettings || committingProbe) return undefined;
   const controller = networkController;
-  if (!ignorePause && (await chrome.storage.local.get('syncPaused')).syncPaused === true)
-    return undefined;
+  if (!ignorePause && (await syncPaused())) return undefined;
   const config = await readVaultConfig();
   if (!config) return undefined;
-  if (!(await chrome.permissions.contains({ origins: [originPattern(config.endpoint)] })))
-    return undefined;
+  if (!(await endpointAccess(config.endpoint))) return undefined;
   if (controller.signal.aborted) return undefined;
   const identity = JSON.stringify(config);
   if (vaultCache?.identity !== identity) {
@@ -87,14 +91,19 @@ async function vault(ignorePause = false): Promise<VaultRepository | undefined> 
 }
 /** Why the last vault test failed. Session storage: trusted contexts only, cleared on restart. */
 const VAULT_TEST_ERROR = 'vaultTestError';
-/** The vault connection as the pages show it, paused by the same flag that gates sync. Never the key. */
+/**
+ * The vault connection as the pages show it, from the checks that gate sync in vault():
+ * outside a settings change, it says syncing only when a drain would reach the vault. Never the key.
+ */
 async function vaultStatus(rememberKey: boolean): Promise<VaultStatus> {
-  if (!(await readVaultConfig())) return { state: 'none', remembered: false };
-  if ((await chrome.storage.local.get('syncPaused')).syncPaused !== true)
-    return { state: 'syncing', remembered: rememberKey };
+  const config = await readVaultConfig();
+  if (!config) return { state: 'none', remembered: false };
+  // Whatever the last test said, nothing syncs without access; saving settings asks for it again.
+  if (!(await endpointAccess(config.endpoint)))
+    return { state: 'paused', remembered: rememberKey, access: false };
   const error: unknown = (await chrome.storage.session.get(VAULT_TEST_ERROR))[VAULT_TEST_ERROR];
   return {
-    state: 'paused',
+    state: (await syncPaused()) ? 'paused' : 'syncing',
     remembered: rememberKey,
     ...(typeof error === 'string' && error ? { error: error.slice(0, 300) } : {}),
   };

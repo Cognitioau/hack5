@@ -15,6 +15,14 @@ const vaultButtons = () => [
 ];
 let testing = false;
 let vaultRefresh: ReturnType<typeof setTimeout> | undefined;
+/** The waiting count at the last read, and how many reads in a row since have found it unchanged. */
+let lastWaiting: number | undefined;
+let unchangedReads = 0;
+/** A Save, a Test or coming back to the tab follows the queue afresh. */
+function followQueue(): void {
+  lastWaiting = undefined;
+  unchangedReads = 0;
+}
 /** The vault connection beside Save, as the background reports it. Plain text only. */
 function renderVault(state: State): void {
   const status = state.vaultStatus ?? { state: 'none', remembered: false };
@@ -30,21 +38,29 @@ function renderVault(state: State): void {
     box.dataset.state = 'testing';
     line.textContent = 'Testing the vault…';
   } else if (status.state === 'syncing') {
-    box.dataset.state = 'syncing';
-    line.textContent = `Connected to ${saved.endpoint}. Grabs save to the “${saved.folder}” folder.${
-      waiting ? ` ${waiting} capture${waiting === 1 ? '' : 's'} waiting to sync.` : ''
-    }`;
-    // The background drains the queue after a passing test; follow the count down
-    // while the page is in view (coming back into view reads it again).
-    if (waiting && document.visibilityState === 'visible')
+    const queue = waiting ? ` ${waiting} capture${waiting === 1 ? '' : 's'} waiting to sync.` : '';
+    // Sync is on, but a failed test says the vault may not be taking grabs: a warning.
+    box.dataset.state = status.error ? 'failing' : 'syncing';
+    line.textContent = status.error
+      ? `Sync is on for ${saved.endpoint}, but the last vault test failed: ${status.error}${queue}`
+      : `Connected to ${saved.endpoint}. Grabs save to the “${saved.folder}” folder.${queue}`;
+    // The background drains the queue after a passing test; follow the count down while
+    // the page is in view. Each read lists every capture, so three reads in a row that find
+    // the count unchanged (a grab that cannot sync) stop it until a Save, a Test or a return.
+    unchangedReads = waiting === lastWaiting ? unchangedReads + 1 : 0;
+    lastWaiting = waiting;
+    if (waiting && unchangedReads < 3 && document.visibilityState === 'visible')
       vaultRefresh = setTimeout(() => void refreshVault(), 3000);
   } else if (status.state === 'paused') {
     box.dataset.state = 'paused';
-    line.textContent = `The key is saved, but grabs are not syncing yet.${
-      status.error
-        ? ` The last vault test failed: ${status.error}`
-        : ' Test the vault to start syncing.'
-    }`;
+    line.textContent =
+      status.access === false
+        ? `The key is saved, but grabs can’t sync: Chrome’s access to ${saved.endpoint} is off. Press Save settings to grant it.`
+        : `The key is saved, but grabs are not syncing yet.${
+            status.error
+              ? ` The last vault test failed: ${status.error}`
+              : ' Test the vault to start syncing.'
+          }`;
   } else {
     box.dataset.state = 'none';
     line.textContent =
@@ -170,6 +186,7 @@ async function testVault(opening: string): Promise<void> {
     notice(response.message ?? 'Vault connected', 'success');
   } finally {
     testing = false;
+    followQueue();
     await refreshVault();
     revealVault();
   }
@@ -178,6 +195,7 @@ element<HTMLFormElement>('settings-form').addEventListener('submit', (event) => 
   event.preventDefault();
   void busy(vaultButtons(), async () => {
     await saveSettings();
+    followQueue();
     const state = await load();
     // A changed vault or key, or one never tested, leaves sync paused: one press connects.
     if (state.vaultStatus?.state === 'paused')
@@ -199,7 +217,10 @@ element<HTMLButtonElement>('connect').addEventListener('click', () => {
 });
 document.addEventListener('visibilitychange', () => {
   // Grabs made in other tabs change what is waiting to sync.
-  if (document.visibilityState === 'visible' && !testing) void refreshVault();
+  if (document.visibilityState === 'visible' && !testing) {
+    followQueue();
+    void refreshVault();
+  }
 });
 element<HTMLButtonElement>('forget').addEventListener(
   'click',
